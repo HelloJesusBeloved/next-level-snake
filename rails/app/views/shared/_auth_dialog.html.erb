@@ -1,0 +1,56 @@
+<%# Sign-in / create-account dialog. Markup only: public/app.js (game page) and
+    public/profile.js (profile page) bring it to life. Ids must stay in sync with
+    both scripts, and with src/components/auth-dialog.tsx. %>
+<dialog class="dialog" id="auth-dialog" aria-labelledby="auth-title">
+  <div class="dialog__inner">
+    <div class="dialog__head">
+      <h2 class="dialog__title" id="auth-title">Your name on the board</h2>
+      <button class="dialog__close" id="auth-close" type="button" aria-label="Close">✕</button>
+    </div>
+
+    <div class="auth-tabs" role="tablist" aria-label="Login or create account">
+      <button class="auth-tab" id="auth-tab-login" role="tab" aria-selected="true" type="button">Sign in</button>
+      <button class="auth-tab" id="auth-tab-create" role="tab" aria-selected="false" type="button">Create account</button>
+    </div>
+
+    <form class="auth-form" id="form-login" autocomplete="off">
+      <label class="auth-field">
+        <span>Username</span>
+        <input name="username" type="text" autocomplete="username" required minlength="2" maxlength="30">
+      </label>
+      <label class="auth-field">
+        <span>Password</span>
+        <input name="password" type="password" autocomplete="current-password" required minlength="8">
+      </label>
+      <p class="auth-error" id="auth-error-login" aria-live="polite"></p>
+      <button class="btn btn--primary" type="submit">Sign in</button>
+    </form>
+
+    <form class="auth-form" id="form-create" autocomplete="off" hidden>
+      <label class="auth-field">
+        <span>Username</span>
+        <input name="username" type="text" autocomplete="username" required minlength="2" maxlength="30">
+      </label>
+      <label class="auth-field">
+        <span>Password</span>
+        <input name="password" type="password" autocomplete="new-password" required minlength="8">
+      </label>
+      <label class="auth-field">
+        <span>Confirm password</span>
+        <input name="confirm-password" type="password" autocomplete="new-password" required minlength="8">
+      </label>
+      <div class="auth-warning" role="note">
+        <p>
+          An email is not required to make an account. However, this means that
+          you will not be able to reset your password if you forget it. Please
+          store your password in a safe place. I would highly recomend using a
+          password manager, just in general. I use
+          <a href="https://proton.me/pass" target="_blank" rel="noreferrer">Proton Pass</a>
+          and really like and recomend it.
+        </p>
+      </div>
+      <p class="auth-error" id="auth-error-create" aria-live="polite"></p>
+      <button class="btn btn--primary" type="submit">Create account</button>
+    </form>
+  </div>
+</dialog>

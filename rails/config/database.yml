@@ -1,0 +1,21 @@
+# PostgreSQL. DATABASE_URL (when set) always wins — see config/env_loader.rb.
+default: &default
+  adapter: postgresql
+  encoding: unicode
+  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  host: <%= ENV.fetch("DATABASE_HOST", "localhost") %>
+  port: <%= ENV.fetch("DATABASE_PORT") { 5432 } %>
+  username: <%= ENV.fetch("DATABASE_USER", "snake") %>
+  password: <%= ENV.fetch("DATABASE_PASSWORD", "") %>
+
+development:
+  <<: *default
+  database: <%= ENV.fetch("DATABASE_NAME", "snake_development") %>
+
+test:
+  <<: *default
+  database: snake_test
+
+production:
+  <<: *default
+  database: <%= ENV.fetch("DATABASE_NAME", "snake_production") %>

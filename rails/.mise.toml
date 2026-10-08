@@ -1,0 +1,15 @@
+# mise pins the toolchain for every developer and for install.sh.
+# https://github.com/jdx/mise
+[tools]
+ruby = "3.3.6"
+
+[env]
+RUBY_CONFIGURE_OPTS = "--disable-install-doc"
+
+[tasks.dev]
+description = "Run the Rails server in development"
+run = "bin/rails server"
+
+[tasks.setup]
+description = "Install gems, sync shared assets, prepare the database"
+run = "bin/setup"

@@ -1,0 +1,52 @@
+<% content_for :title, "Profile — Next Level Snake" %>
+
+<div class="page-texture" aria-hidden="true"></div>
+<div class="page-scrim" aria-hidden="true"></div>
+
+<div class="spine" aria-hidden="true">
+  <span>Next Level Snake <b>/</b> Player Profile</span>
+</div>
+
+<header class="masthead">
+  <a class="masthead__brand" href="/" aria-label="Next Level Snake — back to the game">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="brand__text">
+      <span class="brand__eyebrow">Next Level</span>
+      <span class="wordmark">Snake</span>
+    </span>
+  </a>
+  <nav class="masthead__meta" aria-label="Main navigation">
+    <a class="btn btn--small btn--nav" href="/">Play</a>
+    <a class="btn btn--small btn--nav" href="/#leaderboard">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M6 2h12v2h4v4a5 5 0 0 1-5 5h-.5A6 6 0 0 1 13 15.9V18h3v4H8v-4h3v-2.1A6 6 0 0 1 7.5 13H7a5 5 0 0 1-5-5V4h4V2Zm-2 4v1a3 3 0 0 0 3 3V6H4Zm16 0h-3v4a3 3 0 0 0 3-3V6Z" /></svg>
+      Leaderboard
+    </a>
+    <a class="btn btn--small btn--nav" href="/profile" aria-current="<%= @username.blank? ? "page" : "false" %>">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" shapeRendering="crispEdges" aria-hidden="true"><path d="M2 8h20v3H2Zm1 3h6v5H3v-5Zm13 0h6v5h-6v-5Z" /></svg>
+      Profile
+    </a>
+    <span class="auth-area" id="auth-out">
+      <button class="btn btn--small" id="btn-open-login" type="button">Sign in</button>
+      <button class="btn btn--small btn--primary" id="btn-open-create" type="button">Create account</button>
+    </span>
+    <span class="auth-area" id="auth-in" hidden>
+      <span class="chip" id="auth-user"></span>
+      <button class="btn btn--small btn--signout" id="btn-logout" type="button">Sign out</button>
+    </span>
+  </nav>
+</header>
+
+<%# public/profile.js loads GET /api/profile and draws everything in here. %>
+<main class="pf" id="profile-root" <% if @username.present? %>data-username="<%= @username %>"<% end %> aria-live="polite"></main>
+
+<footer class="footer">
+  <span>Next Level Snake — wall-wrap arcade</span>
+  <span>Ruby on Rails <%= Rails.version %> · PostgreSQL · Puma · Podman/Docker</span>
+  <span>Your games, your log</span>
+</footer>
+
+<%= render "shared/auth_dialog" %>
+
+<% content_for :scripts do %>
+  <script src="/profile.js"></script>
+<% end %>

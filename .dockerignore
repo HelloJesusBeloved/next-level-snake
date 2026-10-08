@@ -1,0 +1,22 @@
+# Only the Rails app and shared static assets enter the image. Podman also
+# reads this file when no .containerignore is present.
+**
+!Dockerfile
+!rails/
+!rails/**
+!public/
+!public/**
+
+# Never include runtime files, credentials, or locally copied duplicate assets.
+rails/.env
+rails/.env.*
+rails/.bundle
+rails/vendor
+rails/log
+rails/tmp
+rails/storage
+rails/config/master.key
+rails/public
+
+# All images in public/ are explicitly included by !public/** above. Images
+# are optional: COPY public/ still succeeds when public/img/ does not exist.

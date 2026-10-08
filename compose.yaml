@@ -1,0 +1,68 @@
+# Native commands, from the repository root:
+#   podman compose up --build -d
+#   docker compose up --build -d   # optional alternative; same configuration
+# No helper script or CONTAINER_ENGINE variable is needed.
+#
+# Fedora/SELinux: application files are copied INTO the image, not bind-mounted
+# from your home directory. Database storage uses a private :Z-labeled named
+# volume. SELinux stays enforcing; do not use privileged or label=disable.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: next-level-snake:local
+    restart: unless-stopped
+    networks:
+      - snakenet
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${PORT:-3000}:3000"
+    environment:
+      RAILS_ENV: production
+      RAILS_LOG_LEVEL: ${RAILS_LOG_LEVEL:-info}
+      PORT: 3000
+      SECRET_KEY_BASE: ${SECRET_KEY_BASE:?Set SECRET_KEY_BASE in .env with openssl rand -hex 64}
+      DATABASE_HOST: db
+      DATABASE_PORT: 5432
+      DATABASE_USER: ${DATABASE_USER:-snake}
+      DATABASE_PASSWORD: ${DATABASE_PASSWORD:-snake}
+      DATABASE_NAME: ${DATABASE_NAME:-snake_production}
+      RAILS_FORCE_SSL: ${RAILS_FORCE_SSL:-false}
+      RAILS_MAX_THREADS: ${RAILS_MAX_THREADS:-5}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-0}
+    depends_on:
+      db:
+        condition: service_healthy
+    # The entrypoint ALSO waits for Postgres; it does not rely solely on the
+    # compose provider supporting health-based dependency ordering.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
+  db:
+    image: docker.io/library/postgres:16-alpine
+    restart: unless-stopped
+    networks:
+      - snakenet
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-snake}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-snake}
+      POSTGRES_DB: ${DATABASE_NAME:-snake_production}
+    volumes:
+      # Private SELinux relabeling for this database container. Docker on
+      # non-SELinux hosts also accepts this suffix, so no override is required.
+      - pgdata:/var/lib/postgresql/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+networks:
+  snakenet:
+
+volumes:
+  pgdata:

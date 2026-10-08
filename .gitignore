@@ -1,0 +1,17 @@
+.DS_Store
+/node_modules
+/.next
+/out
+/build
+*.tsbuildinfo
+next-env.d.ts
+# Local env for the preview (DATABASE_URL) and for the container (SECRET_KEY_BASE,
+# DATABASE_PASSWORD, …). Never commit secrets; create it from .env.example.
+.env
+.env.local
+.env.*.local
+!.env.example
+npm-debug.log*
+/test-results/
+/playwright-report/
+/test-artifacts/

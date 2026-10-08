@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Container entrypoint: wait for PostgreSQL, prepare the database, run Puma.
+set -euo pipefail
+cd /app
+
+host="${DATABASE_HOST:-localhost}"
+port="${DATABASE_PORT:-5432}"
+
+echo "==> Waiting for PostgreSQL at $host:$port"
+for i in $(seq 1 60); do
+  if pg_isready -h "$host" -p "$port" -t 1 >/dev/null 2>&1; then
+    break
+  fi
+  if [ "$i" = "60" ]; then
+    echo "! PostgreSQL did not come up in time" >&2
+    exit 1
+  fi
+  sleep 1
+done
+
+echo "==> Checking gems"
+bundle check >/dev/null 2>&1 || bundle install --quiet
+
+echo "==> Preparing the database"
+bin/rails db:prepare
+
+echo "==> Starting $*"
+exec "$@"

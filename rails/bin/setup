@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# One-shot local setup: gems, shared assets, database.
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+
+echo "== Installing gems"
+bundle install
+
+echo "== Syncing shared assets"
+bin/sync-assets
+
+echo "== Preparing the database"
+bin/rails db:prepare
+
+echo
+echo "Done. Start the server with:  bin/rails server"

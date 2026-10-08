@@ -1,0 +1,18 @@
+source "https://rubygems.org"
+
+ruby ">= 3.2.0"
+
+# Canonical app stack: Rails 8 + PostgreSQL + Puma. No asset pipeline and no
+# JavaScript bundler — the game is plain JS/CSS served from public/.
+gem "rails", "~> 8.0"
+gem "pg", "~> 1.5"
+gem "puma", ">= 6.4"
+
+# Password hashing for username-only accounts (has_secure_password)
+gem "bcrypt", "~> 3.1"
+
+gem "tzinfo-data", platforms: %i[windows jruby]
+
+group :development, :test do
+  gem "debug", platforms: %i[mri windows], require: false
+end

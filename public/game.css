@@ -1,0 +1,340 @@
+/* Next Level Snake cabinet — shared by Rails and the browser preview. */
+
+:root {
+  --frame-pad: 22px;
+  --frame-radius: 30px;
+  --field-radius: 8px;
+  --green: #2ce05e;
+  --red: #ff3b30;
+  --field: #050505;
+  --bezel-hi: #9aa1a9;
+  --bezel-mid: #79808a;
+  --bezel-lo: #666d76;
+  --bezel-texture: 0.3;
+  --bezel-radius: var(--frame-radius);
+  /* Cabinet chrome lives OUTSIDE the padding box, so adding a border or a
+     marquee never changes the size of the playfield. */
+  --bezel-border: 0px;
+  --cabinet-top: 0px;
+  --cabinet-bottom: 0px;
+}
+
+.snake-root { width: 100%; }
+
+.snake-frame {
+  position: relative;
+  width: 100%;
+  /* border + reduced padding = the same content box, so the field never moves.
+     Cabinet spacing is applied by .screen as padding (see styles.css): a margin
+     here would collapse out of .screen and misalign the overlay panels. */
+  padding: calc(var(--frame-pad) - var(--bezel-border));
+  border: var(--bezel-border) solid transparent;
+  border-radius: var(--bezel-radius);
+  background:
+    linear-gradient(158deg, rgba(255, 255, 255, 0.24), rgba(255, 255, 255, 0) 42%),
+    linear-gradient(180deg, var(--bezel-hi) 0%, var(--bezel-mid) 55%, var(--bezel-lo) 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.55),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.3),
+    0 34px 70px -30px rgba(0, 0, 0, 0.9),
+    0 2px 0 rgba(255, 255, 255, 0.05);
+}
+
+.snake-frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background-image: url('img/metal.jpg');
+  background-size: cover;
+  background-position: center;
+  opacity: var(--bezel-texture);
+  mix-blend-mode: overlay;
+  pointer-events: none;
+}
+
+.snake-field {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 24 / 18;
+  background: var(--field);
+  border-radius: var(--field-radius);
+  overflow: hidden;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    inset 0 3px 34px rgba(0, 0, 0, 0.95);
+}
+
+.snake-field::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 3px),
+    radial-gradient(125% 105% at 50% 50%, transparent 52%, rgba(0, 0, 0, 0.6) 100%);
+}
+
+/* No scanlines, grain, or internal outlines on the Classic snake. */
+html[data-theme='classic'] .snake-field::after { background: none; }
+
+.snake-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: pan-y;
+  outline: none;
+}
+
+.terminal-cursor {
+  display: none;
+  position: absolute;
+  top: 14px;
+  left: 18px;
+  z-index: 6;
+  color: #31f084;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: clamp(22px, 3vw, 30px);
+  font-weight: 500;
+  line-height: 1;
+  text-shadow: 0 0 14px rgba(49, 240, 132, 0.5);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* Visible only in Terminal, before/after a run or while it is paused. */
+html[data-theme='terminal'] .snake-root:not(.is-active) .terminal-cursor {
+  display: block;
+  animation: terminal-cursor-blink 1.2s step-end infinite;
+}
+
+@keyframes terminal-cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+/* Gesture capture applies to the whole site, but only during active play.
+   A fixed body also prevents iOS overscroll. app.js preserves/restores the
+   scroll offset when these classes change on start/pause/resume/end. */
+html.is-playing {
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+body.is-playing {
+  position: fixed;
+  top: var(--play-scroll-top, 0px);
+  left: 0;
+  right: 0;
+  padding-right: var(--play-scrollbar-gap, 0px);
+  overflow: hidden;
+  overscroll-behavior: none;
+  touch-action: none;
+}
+
+body.is-playing .snake-root,
+body.is-playing .snake-canvas { touch-action: none; }
+
+/* ---------- Arcade theme: a cartoony cabinet around the same playfield ----------
+   The marquee sits in --cabinet-top and the control deck in --cabinet-bottom,
+   both outside the frame's padding box. The field keeps its exact size, so
+   gameplay is identical to every other theme. */
+
+.cabinet { display: none; pointer-events: none; }
+
+html[data-theme='arcade'] {
+  --bezel-border: 5px;
+  --cabinet-top: 76px;
+  --cabinet-bottom: 96px;
+  --bezel-texture: 0;
+  --bezel-radius: 26px;
+  --bezel-hi: #ff5f72;
+  --bezel-mid: #d21f3d;
+  --bezel-lo: #8b1029;
+}
+
+html[data-theme='arcade'] .snake-frame {
+  border-color: #22080f;
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.34),
+    inset 0 -7px 0 rgba(0, 0, 0, 0.26),
+    0 30px 60px -26px rgba(0, 0, 0, 0.88);
+}
+
+/* candy-striped side art */
+html[data-theme='arcade'] .snake-frame::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: repeating-linear-gradient(
+    115deg,
+    rgba(255, 214, 64, 0.17) 0 14px,
+    rgba(255, 214, 64, 0) 14px 36px
+  );
+}
+
+html[data-theme='arcade'] .cabinet { display: block; }
+
+html[data-theme='arcade'] .cabinet__marquee {
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  bottom: calc(100% + 8px);
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  border: 5px solid #0a1f5c;
+  border-radius: 20px 20px 12px 12px;
+  background: linear-gradient(180deg, #5b9bff, #2563e8 58%, #1747b8);
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.55),
+    0 0 34px rgba(70, 140, 255, 0.42);
+  animation: marquee-glow 3.2s ease-in-out infinite;
+}
+
+.cabinet__marquee-text {
+  font-family: 'Space Grotesk', 'Helvetica Neue', sans-serif;
+  font-weight: 700;
+  font-size: clamp(12px, 1.9vw, 20px);
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #ffe98a;
+  text-shadow: 0 2px 0 #0a1f5c;
+  white-space: nowrap;
+}
+
+.cabinet__bulb {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  border: 2px solid #22080f;
+  background: #fff7d4;
+  box-shadow: 0 0 12px rgba(255, 240, 180, 0.9);
+  animation: bulb-blink 1.1s steps(1, end) infinite;
+}
+
+.cabinet__bulb:last-of-type { animation-delay: 0.55s; }
+
+html[data-theme='arcade'] .cabinet__deck {
+  position: absolute;
+  left: -2%;
+  right: -2%;
+  top: calc(100% + 10px);
+  height: 78px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 0 24px;
+  border: 5px solid #0a1f5c;
+  border-radius: 14px 14px 28px 28px;
+  background: linear-gradient(180deg, #3f86ff, #1d4fc4 55%, #163c96);
+  box-shadow:
+    inset 0 3px 0 rgba(255, 255, 255, 0.35),
+    0 20px 36px -22px rgba(0, 0, 0, 0.92);
+}
+
+.cabinet__stick { position: relative; width: 28px; height: 54px; flex: none; }
+
+.cabinet__stick::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 9px;
+  height: 34px;
+  margin-left: -4.5px;
+  border-radius: 5px;
+  background: linear-gradient(180deg, #ccd2da, #7c848e);
+}
+
+.cabinet__stick i {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  width: 28px;
+  height: 28px;
+  margin-left: -14px;
+  border-radius: 50%;
+  border: 3px solid #22080f;
+  background: radial-gradient(circle at 32% 28%, #ff929e, #d81f3c 58%, #8b1029);
+  transform-origin: 50% 100%;
+  animation: stick-wobble 2.8s ease-in-out infinite;
+}
+
+.cabinet__buttons { display: flex; gap: 12px; }
+
+.cabinet__buttons i {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: 4px solid #22080f;
+  box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.3), 0 3px 0 rgba(0, 0, 0, 0.38);
+}
+
+.cabinet__buttons i:nth-child(1) { background: #ff3b4e; }
+.cabinet__buttons i:nth-child(2) { background: #ffd23f; }
+.cabinet__buttons i:nth-child(3) { background: #8fc1ff; }
+.cabinet__buttons i:nth-child(4) { background: #ff3b4e; }
+
+.cabinet__coin {
+  width: 46px;
+  height: 16px;
+  border-radius: 8px;
+  border: 3px solid #22080f;
+  background: linear-gradient(180deg, #9ba4ae, #5b646e);
+  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.38);
+  flex: none;
+}
+
+@keyframes marquee-glow {
+  0%, 100% {
+    box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.55), 0 0 24px rgba(70, 140, 255, 0.3);
+  }
+  50% {
+    box-shadow: inset 0 3px 0 rgba(255, 255, 255, 0.55), 0 0 52px rgba(90, 160, 255, 0.55);
+  }
+}
+
+@keyframes bulb-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.22; }
+}
+
+@keyframes stick-wobble {
+  0%, 100% { transform: rotate(-8deg); }
+  50% { transform: rotate(8deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme='terminal'] .snake-root:not(.is-active) .terminal-cursor { animation: none; }
+  html[data-theme='arcade'] .cabinet__marquee,
+  html[data-theme='arcade'] .cabinet__bulb,
+  html[data-theme='arcade'] .cabinet__stick i { animation: none; }
+}
+
+@media (max-width: 720px) {
+  :root {
+    --frame-pad: 12px;
+    --frame-radius: 20px;
+    --field-radius: 6px;
+  }
+  html[data-theme='arcade'] {
+    --bezel-border: 4px;
+    --cabinet-top: 54px;
+    --cabinet-bottom: 70px;
+  }
+  html[data-theme='arcade'] .cabinet__marquee { height: 44px; gap: 8px; }
+  html[data-theme='arcade'] .cabinet__deck { height: 58px; padding: 0 14px; gap: 10px; }
+  .cabinet__stick { width: 22px; height: 42px; }
+  .cabinet__stick i { width: 22px; height: 22px; margin-left: -11px; }
+  .cabinet__stick::before { height: 26px; }
+  .cabinet__buttons { gap: 8px; }
+  .cabinet__buttons i { width: 24px; height: 24px; border-width: 3px; }
+  .cabinet__coin { display: none; }
+}

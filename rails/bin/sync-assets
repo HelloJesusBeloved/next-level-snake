@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Bare-metal asset synchronization. The container copies public/ directly.
+# Images are optional; missing public/img/ must never prevent startup.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+src="$repo_root/public"
+dst="$repo_root/rails/public"
+
+for required in game.js app.js profile.js game.css styles.css violet-mist.svg; do
+  if [ ! -f "$src/$required" ]; then
+    echo "error: required shared asset is missing: $src/$required" >&2
+    exit 1
+  fi
+done
+
+mkdir -p "$dst"
+cp -R "$src/." "$dst/"
+echo "Synced shared assets -> rails/public (photographic images optional)"
