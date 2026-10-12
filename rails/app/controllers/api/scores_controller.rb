@@ -3,7 +3,7 @@ module Api
     # The signed-in player's own best run per modifier combination
     # (empty for guests).
     def index
-      render json: { best: best_map(current_user) }
+      render json: { best: best_map(current_user), xp: xp_payload(current_user) }
     end
 
     # Only signed-in runs are stored. A guest gets a refusal, never a row.
@@ -17,7 +17,8 @@ module Api
       record.end_state = Score.sanitize_end_state(params[:end_state])
 
       if record.save
-        render json: { ok: true, best: best_map(current_user) }, status: :created
+        render json: { ok: true, best: best_map(current_user), xp: xp_payload(current_user) },
+               status: :created
       else
         render json: { ok: false, error: record.errors.full_messages.first,
                        errors: record.errors.full_messages },
@@ -41,6 +42,12 @@ module Api
 
     def optional_int(value)
       value.present? ? value.to_i : nil
+    end
+
+    def xp_payload(user)
+      return nil unless user
+
+      Score.level_progress(Score.xp_total(user))
     end
 
     def best_map(user)

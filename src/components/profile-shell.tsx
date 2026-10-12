@@ -1,10 +1,29 @@
 import AuthDialog from "@/components/auth-dialog";
 import ProfileRuntime from "@/components/profile-runtime";
 
+const SKINS = [
+  { id: "arcade", name: "Arcade" },
+  { id: "classic", name: "Classic" },
+  { id: "vintage", name: "Vintage" },
+  { id: "terminal", name: "Terminal" },
+  { id: "paper", name: "Paper" },
+  { id: "violet", name: "Violet" },
+  { id: "sunsetfire", name: "Royal Sunset" },
+] as const;
+
+function GithubIcon() {
+  return (
+    <svg className="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true">
+      <path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.28-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.69.83.57A12.01 12.01 0 0 0 24 12c0-6.63-5.37-12-12-12Z" />
+    </svg>
+  );
+}
+
 // The profile page is a shell. public/profile.js reads GET /api/profile (or
 // /api/profile?username=NAME for other players) and draws the stats, charts,
 // activity heatmap, favorite mode/theme, level, rank and game log into
-// #profile-root. `username` is present only when viewing another player.
+// #profile-root. The cabinet-skin panel is outside that root so it always
+// controls the global theme, including on the sign-in gate.
 export default function ProfileShell({ username }: { username?: string }) {
   const viewingOther = Boolean(username);
   const eyebrow = viewingOther ? `Player Profile — ${username}` : "Player Profile";
@@ -41,6 +60,15 @@ export default function ProfileShell({ username }: { username?: string }) {
             <svg className="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" shapeRendering="crispEdges" aria-hidden="true"><path d="M2 8h20v3H2Zm1 3h6v5H3v-5Zm13 0h6v5h-6v-5Z" /></svg>
             Profile
           </a>
+          <a
+            className="btn btn--small btn--nav"
+            href="https://github.com/HelloJesusBeloved/next-level-snake"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <GithubIcon />
+            Open Source
+          </a>
           <span className="auth-area" id="auth-out">
             <button className="btn btn--small" id="btn-open-login" type="button">Sign in</button>
             <button className="btn btn--small btn--primary" id="btn-open-create" type="button">Create account</button>
@@ -52,18 +80,49 @@ export default function ProfileShell({ username }: { username?: string }) {
         </nav>
       </header>
 
-      <main
-        className="pf"
-        id="profile-root"
-        data-username={viewingOther ? username : undefined}
-        aria-live="polite"
-      />
+      <main className="pf-layout is-gated">
+        <aside className="pf-side" aria-label="Cabinet skin" hidden>
+          <div className="card" id="pf-skin-card">
+            <div className="card__head">
+              <h2 className="card__title">Cabinet skin</h2>
+              <span className="setting__value" id="pf-skin-value">Arcade</span>
+            </div>
+            <div className="segmented" id="pf-skin-theme" role="group" aria-label="Cabinet skin">
+              {SKINS.map((skin) => (
+                <button key={skin.id} type="button" data-theme={skin.id} aria-pressed={skin.id === "arcade"}>
+                  <span className="swatch" data-swatch={skin.id}><i aria-hidden="true" />{skin.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </aside>
+
+        <div
+          className="pf"
+          id="profile-root"
+          data-username={viewingOther ? username : undefined}
+          aria-live="polite"
+        />
+      </main>
+
+      <p className="sr-only">{eyebrow}</p>
 
       <footer className="footer">
         <span>Next Level Snake — wall-wrap arcade</span>
         <span>Ruby on Rails 8 · PostgreSQL · Puma · Podman/Docker</span>
         <span>Your games, your log</span>
       </footer>
+
+      <dialog className="board-lightbox" id="board-lightbox" aria-labelledby="board-lightbox-title">
+        <div className="board-lightbox__inner">
+          <div className="board-lightbox__head">
+            <h2 id="board-lightbox-title">Ending position</h2>
+            <button className="dialog__close" id="board-lightbox-close" type="button" aria-label="Close enlarged board">✕</button>
+          </div>
+          <div className="board-lightbox__frame" id="board-lightbox-frame" />
+          <p className="board-lightbox__cap" id="board-lightbox-cap" />
+        </div>
+      </dialog>
 
       <AuthDialog />
       <ProfileRuntime />

@@ -12,7 +12,6 @@
 
   var TOKEN_KEY = 'snake.token.v1';
   var STORE_KEY = 'snake.settings.v1';
-  var VIEW_THEME_KEY = 'snake.profileviewtheme.v1';
 
   var LEVELS = [
     { id: 1, label: 'Chill', ms: 165 },
@@ -284,6 +283,7 @@
       if (out.status === 401) { showGate(); return; }
       if (!out.ok) { showError(out.json.error || 'Could not load the profile.'); return; }
       applyProfile(out.json);
+      setSkinVisible(true);
       buildShell();
       renderAll();
     }).catch(function () {
@@ -305,10 +305,15 @@
         '<div class="pf-id">' +
           '<p class="pf-eyebrow">' + esc(eyebrow) + '</p>' +
           '<h1 class="pf-name" id="pf-name">' + esc(state.username) + '</h1>' +
-          '<div class="pf-level">' +
-            '<span class="pf-level__num">Level ' + lvl.level + '</span>' +
-            '<div class="pf-level__bar" aria-hidden="true"><i style="width:' + Math.round(lvl.pct * 100) + '%"></i></div>' +
-            '<span class="pf-level__xp">' + comma(lvl.into) + ' / ' + comma(lvl.span) + ' XP</span>' +
+          '<div class="xp-meter pf-level">' +
+            '<div class="xp-meter__top">' +
+              '<span class="xp-meter__level pf-level__num">Level ' + lvl.level + '</span>' +
+              '<span class="xp-meter__xp pf-level__xp">' + comma(xp) + ' XP</span>' +
+            '</div>' +
+            '<div class="xp-meter__bar pf-level__bar" role="progressbar" aria-valuemin="0" aria-valuemax="' + lvl.span + '" aria-valuenow="' + lvl.into + '" aria-label="Progress to level ' + (lvl.level + 1) + '">' +
+              '<i style="width:' + Math.max(lvl.into ? 3 : 0, Math.round(lvl.pct * 100)) + '%"></i>' +
+            '</div>' +
+            '<span class="xp-meter__next">' + comma(lvl.into) + ' / ' + comma(lvl.span) + ' XP · ' + comma(lvl.to_next) + ' to level ' + (lvl.level + 1) + '</span>' +
           '</div>' +
           '<p class="pf-meta">Rank #' + comma(state.rank) + ' \u00b7 ' + plural(state.games.length, 'game', 'games') + ' in log</p>' +
         '</div>' +
@@ -444,14 +449,8 @@
       html += '<p class="pf-sub">Only ' + esc(state.username) + ' can change their favorite.</p>';
     }
 
-    // A small side section to change the theme you're VIEWING the profile in.
-    html += '<div class="pf-viewtheme"><span class="pf-viewtheme__label">View profile in</span><div class="pf-viewtheme__swatches">' +
-      THEMES.map(function (t) {
-        return '<button type="button" data-view-theme="' + t.id + '" aria-label="View in ' + esc(t.name) + '">' +
-          '<span class="swatch swatch--lg" data-swatch="' + t.id + '"><i aria-hidden="true"></i></span></button>';
-      }).join('') + '</div></div>';
-
     host.innerHTML = html;
+    syncSkinPanel();
   }
 
   function heatLevel(count) {
@@ -678,8 +677,12 @@
       actions = '<button type="button" class="btn btn--small" data-remove="' + g.id + '" aria-label="Remove the ' + g.score +
         '-point game from ' + esc(fmtDay(g.created_at)) + '">Remove</button>';
     }
+    var hasBoard = es && es.snake && es.snake.length;
+    var board = hasBoard
+      ? '<button type="button" class="log__board log__board--btn" data-enlarge="' + g.id + '" title="Enlarge ending position" aria-label="Enlarge the ending position of the ' + g.score + '-point game">' + boardSvg(es) + '</button>'
+      : '<div class="log__board">' + boardSvg(es) + '</div>';
     return '<li class="log__item' + (isQuit(g) ? ' is-quit' : '') + '" data-id="' + g.id + '">' +
-      '<div class="log__board">' + boardSvg(es) + '</div>' +
+      board +
       '<div class="log__main"><span class="log__score">' + g.score + '</span>' +
       '<span class="log__mode">' + esc(modeLabel(g)) + '</span><span class="log__meta">' + esc(meta) + '</span></div>' +
       '<div class="log__actions">' + actions + '</div></li>';
@@ -765,28 +768,86 @@
     }).catch(function () { toast('Could not reach the server.', true); });
   }
 
-  // "Play in this theme": makes the favorite the theme the game opens in, and
-  // applies it to this profile view right now.
+  function readSettings() {
+    try { return JSON.parse(window.localStorage.getItem(STORE_KEY) || '{}') || {}; }
+    catch (err) { return {}; }
+  }
+
+  function currentTheme() {
+    var fromDom = document.documentElement.getAttribute('data-theme');
+    if (THEMES.some(function (t) { return t.id === fromDom; })) return fromDom;
+    var saved = readSettings().theme;
+    return THEMES.some(function (t) { return t.id === saved; }) ? saved : 'arcade';
+  }
+
+  // Cabinet skin controls the global theme (the same localStorage key the game
+  // page reads), not a profile-only view.
+  function applyGlobalTheme(id) {
+    if (!THEMES.some(function (t) { return t.id === id; })) return;
+    document.documentElement.setAttribute('data-theme', id);
+    var settings = readSettings();
+    settings.theme = id;
+    try { window.localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (err) { /* storage blocked */ }
+    syncSkinPanel();
+  }
+
+  function syncSkinPanel() {
+    var id = currentTheme();
+    var group = document.getElementById('pf-skin-theme');
+    if (group) {
+      var buttons = group.querySelectorAll('[data-theme]');
+      for (var i = 0; i < buttons.length; i++) {
+        buttons[i].setAttribute('aria-pressed', String(buttons[i].getAttribute('data-theme') === id));
+      }
+    }
+    var label = document.getElementById('pf-skin-value');
+    if (label) label.textContent = themeName(id);
+  }
+
+  function bindSkinPanel() {
+    var group = document.getElementById('pf-skin-theme');
+    if (!group || group.__nlsBound) return;
+    group.__nlsBound = true;
+    group.addEventListener('click', function (e) {
+      var btn = e.target.closest ? e.target.closest('[data-theme]') : null;
+      if (!btn) return;
+      applyGlobalTheme(btn.getAttribute('data-theme'));
+    });
+    syncSkinPanel();
+  }
+
+  // "Play in this theme": makes the favorite the global cabinet skin.
   function applyFavorite() {
     var id = state.favorite;
     if (!id) return;
-    try {
-      var settings = JSON.parse(window.localStorage.getItem(STORE_KEY) || '{}');
-      settings.theme = id;
-      window.localStorage.setItem(STORE_KEY, JSON.stringify(settings));
-    } catch (err) { /* storage blocked */ }
-    document.documentElement.setAttribute('data-theme', id);
+    applyGlobalTheme(id);
     state.themeNote = 'The game will open in ' + themeName(id) + '.';
     renderTheme();
   }
 
-  // The "view profile in" side section: changes the theme you're viewing the
-  // profile in, persisted for the profile page only.
-  function applyViewTheme(id) {
-    if (!THEMES.some(function (t) { return t.id === id; })) return;
-    document.documentElement.setAttribute('data-theme', id);
-    try { window.localStorage.setItem(VIEW_THEME_KEY, id); } catch (err) { /* ignore */ }
-    renderTheme();
+  function openBoard(game) {
+    var dlg = document.getElementById('board-lightbox');
+    var frame = document.getElementById('board-lightbox-frame');
+    var cap = document.getElementById('board-lightbox-cap');
+    if (!dlg || !frame || !game || !game.end_state) return;
+    frame.innerHTML = boardSvg(game.end_state);
+    if (cap) {
+      var length = game.end_state.snake ? game.end_state.snake.length : 0;
+      cap.textContent = game.score + ' points · ' + modeLabel(game) + ' · length ' + length +
+        (game.end_state.cause === 'crash' ? ' · crashed' : ' · quit');
+    }
+    if (typeof dlg.showModal === 'function') {
+      if (!dlg.open) dlg.showModal();
+    } else {
+      dlg.setAttribute('open', '');
+    }
+  }
+
+  function closeBoard() {
+    var dlg = document.getElementById('board-lightbox');
+    if (!dlg) return;
+    if (typeof dlg.close === 'function' && dlg.open) dlg.close();
+    else dlg.removeAttribute('open');
   }
 
   function toast(message, isError) {
@@ -798,7 +859,17 @@
     state.toastTimer = window.setTimeout(function () { el.className = 'pf-toast'; }, 3600);
   }
 
+  // The cabinet skin panel only appears next to a loaded profile. On the
+  // sign-in gate, the error screen and while loading, it stays hidden.
+  function setSkinVisible(on) {
+    var side = document.querySelector('.pf-side');
+    var layout = document.querySelector('.pf-layout');
+    if (side) side.hidden = !on;
+    if (layout) layout.classList.toggle('is-gated', !on);
+  }
+
   function showGate() {
+    setSkinVisible(false);
     state.username = null;
     state.isYou = true;
     root.innerHTML =
@@ -817,6 +888,7 @@
   }
 
   function showError(message) {
+    setSkinVisible(false);
     root.innerHTML =
       '<section class="card pf-gate"><h1 class="pf-gate__title">Something went wrong</h1>' +
       '<p class="pf-note">' + esc(message) + '</p>' +
@@ -831,8 +903,12 @@
     if (el) return saveFavorite(el.getAttribute('data-fav-theme'));
     if (t.closest('#pf-theme-clear')) return saveFavorite(null);
     if (t.closest('#pf-theme-apply')) return applyFavorite();
-    el = t.closest('[data-view-theme]');
-    if (el) return applyViewTheme(el.getAttribute('data-view-theme'));
+    el = t.closest('[data-enlarge]');
+    if (el) {
+      var enlarged = state.games.filter(function (g) { return String(g.id) === el.getAttribute('data-enlarge'); })[0];
+      if (enlarged) openBoard(enlarged);
+      return;
+    }
     el = t.closest('[data-remove-yes]');
     if (el) return deleteGame(Number(el.getAttribute('data-remove-yes')));
     if (t.closest('[data-remove-no]')) { state.confirmId = null; return renderLog(); }
@@ -916,16 +992,12 @@
     root = document.getElementById('profile-root');
     if (!root) return;
 
-    // Restore a saved profile-view theme before first render.
-    var saved;
-    try { saved = window.localStorage.getItem(VIEW_THEME_KEY); } catch (err) { saved = null; }
-    if (saved && THEMES.some(function (t) { return t.id === saved; })) {
-      document.documentElement.setAttribute('data-theme', saved);
-    }
-
     // Re-bind the header auth controls (they live outside #profile-root and are
-    // also re-rendered by React).
+    // also re-rendered by React). The cabinet skin panel uses the same global
+    // theme as the game page.
     bindHeaderAuth();
+    bindSkinPanel();
+    setSkinVisible(false);
 
     var isOther = Boolean(root.getAttribute('data-username'));
     root.innerHTML = '<p class="pf-loading">Loading ' + (isOther ? 'the profile' : 'your profile') + '\u2026</p>';
@@ -971,6 +1043,10 @@
       node.__nlsBound = true;
       node.addEventListener(type, fn);
     }
+    once(document.getElementById('board-lightbox-close'), 'click', function () { closeBoard(); });
+    once(document.getElementById('board-lightbox'), 'click', function (e) {
+      if (e.target && e.target.id === 'board-lightbox') closeBoard();
+    });
     once(document.getElementById('btn-open-login'), 'click', function () { openAuthDialog('login'); });
     once(document.getElementById('btn-open-create'), 'click', function () { openAuthDialog('create'); });
     once(document.getElementById('auth-close'), 'click', function () { if (dialog && dialog.open) dialog.close(); });

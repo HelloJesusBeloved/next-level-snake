@@ -4,6 +4,13 @@ export const metadata: Metadata = {
   title: "Next Level Snake — Wall-Wrap Arcade",
   description:
     "Next Level Snake: one long green body, wrapping walls, red food. Preset or custom speed and growth, seven themes, accounts and public leaderboards. Ships as a Ruby on Rails app in one Docker container.",
+  icons: {
+    icon: [
+      { url: "/favicon-32.png", sizes: "32x32", type: "image/png" },
+      { url: "/favicon.png", sizes: "192x192", type: "image/png" },
+    ],
+    apple: [{ url: "/apple-touch-icon.png", sizes: "180x180", type: "image/png" }],
+  },
 };
 
 export const viewport: Viewport = {

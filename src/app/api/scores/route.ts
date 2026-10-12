@@ -14,6 +14,7 @@ import {
   MIN_SPEED_ID,
   comboKeyFrom,
 } from "@/lib/levels";
+import { levelFromXp } from "@/lib/xp";
 
 export const dynamic = "force-dynamic";
 
@@ -53,6 +54,32 @@ async function bestFor(userId: number): Promise<Record<string, number>> {
   return best;
 }
 
+// Completed preset runs only. Custom sliders and quits earn no XP, matching
+// public/profile.js. Returned as a progress object so the game page can draw
+// the bar without loading the whole game log.
+async function xpFor(userId: number) {
+  const result = await db.execute(sql`
+    SELECT CAST(COALESCE(SUM(
+      ROUND(score * CASE speed_level
+        WHEN 1 THEN 0.6
+        WHEN 2 THEN 0.8
+        WHEN 3 THEN 1.0
+        WHEN 4 THEN 1.3
+        WHEN 5 THEN 1.6
+        WHEN 6 THEN 2.0
+        ELSE 1.0
+      END)
+    ), 0) AS int) AS xp
+    FROM scores
+    WHERE user_id = ${userId}
+      AND speed_custom IS NULL
+      AND growth_custom IS NULL
+      AND (end_state IS NULL OR COALESCE(end_state->>'cause', '') <> 'quit')
+  `);
+  const row = (result.rows?.[0] ?? {}) as { xp?: number | string };
+  return levelFromXp(Number(row.xp) || 0);
+}
+
 function toNumberOrNull(value: unknown): number | null {
   if (value == null) return null;
   const n = typeof value === "number" ? value : Number(value);
@@ -63,7 +90,10 @@ export async function GET() {
   try {
     const user = await getAuthUser();
     return NextResponse.json(
-      { best: user ? await bestFor(user.id) : {} },
+      {
+        best: user ? await bestFor(user.id) : {},
+        xp: user ? await xpFor(user.id) : null,
+      },
       { headers: NO_STORE },
     );
   } catch {
@@ -124,7 +154,7 @@ export async function POST(request: NextRequest) {
       endState: sanitizeEndState(body.end_state),
     });
     return NextResponse.json(
-      { ok: true, best: await bestFor(user.id) },
+      { ok: true, best: await bestFor(user.id), xp: await xpFor(user.id) },
       { status: 201, headers: NO_STORE },
     );
   } catch {

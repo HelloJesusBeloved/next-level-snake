@@ -143,6 +143,33 @@ class Score < ApplicationRecord
     }
   end
 
+  # XP counts completed preset runs only: custom sliders and quits earn none.
+  # Weights match public/profile.js and src/lib/xp.ts.
+  XP_WEIGHT = { 1 => 0.6, 2 => 0.8, 3 => 1.0, 4 => 1.3, 5 => 1.6, 6 => 2.0 }.freeze
+
+  def self.xp_total(user)
+    rows = where(user_id: user.id, speed_custom: nil, growth_custom: nil)
+           .where("end_state IS NULL OR COALESCE(end_state->>'cause', '') <> 'quit'")
+           .pluck(:score, :speed_level)
+    rows.sum do |score, speed_level|
+      weight = BigDecimal(XP_WEIGHT.fetch(speed_level, 1.0).to_s)
+      (BigDecimal(score) * weight).round(0, :half_up).to_i
+    end
+  end
+
+  # Level L needs 100*(L-1)^2 cumulative XP (the same curve as src/lib/xp.ts).
+  # Keys are camelCase because public/app.js reads them directly.
+  def self.level_progress(xp)
+    xp = [xp.to_i, 0].max
+    level = Math.sqrt(xp / 100.0).floor + 1
+    base = 100 * (level - 1)**2
+    nxt = 100 * level**2
+    span = nxt - base
+    into = xp - base
+    { xp: xp, level: level, into: into, span: span, toNext: nxt - xp,
+      pct: span.zero? ? 0 : into.fdiv(span) }
+  end
+
   def self.combo_key(speed_level, speed_custom, growth, growth_custom)
     s = speed_custom.present? ? "c#{speed_custom}" : speed_level.to_s
     g = growth_custom.present? ? "c#{growth_custom}" : growth.to_s

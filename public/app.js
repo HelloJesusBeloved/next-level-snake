@@ -457,7 +457,7 @@
     // value is 'all', a preset id ('3'), 'c' (any custom value) or 'cNN' (exactly NN).
     var board = {
       which: 'standard',
-      filters: { standard: { speed: 'all', growth: 'all' }, custom: { speed: 'all', growth: 'all' } },
+      filters: { standard: { speed: '3', growth: '1' }, custom: { speed: 'all', growth: 'all' } },
       seq: 0,
       last: null,
       timer: 0
@@ -625,7 +625,9 @@
     var resetBtn = $('filter-reset');
     if (resetBtn) {
       resetBtn.addEventListener('click', function () {
-        board.filters[board.which] = { speed: 'all', growth: 'all' };
+        board.filters[board.which] = board.which === 'standard'
+          ? { speed: '3', growth: '1' }
+          : { speed: 'all', growth: 'all' };
         renderFilters();
         loadBoard();
       });
@@ -701,6 +703,7 @@
         .then(function (out) {
           if (out.ok) {
             comboBest = out.json.best || comboBest;
+            applyXpPayload(out.json);
             saveNoteShow('Saved to the leaderboard as ' + authUser + '.', false);
             refreshReadouts();
             pendingHighlight = true; // renderBoard will flash + scroll to this row
@@ -737,12 +740,64 @@
       window.setTimeout(function () { againBtn.disabled = false; }, Math.ceil(wait) + 20);
     }
 
+    function levelFromXp(xp) {
+      xp = Math.max(0, Math.round(Number(xp) || 0));
+      var level = Math.floor(Math.sqrt(xp / 100)) + 1;
+      var base = 100 * (level - 1) * (level - 1);
+      var next = 100 * level * level;
+      var span = Math.max(1, next - base);
+      var into = xp - base;
+      return { xp: xp, level: level, into: into, span: span, toNext: next - xp, pct: into / span };
+    }
+
+    function renderXp(progress) {
+      var meter = $('xp-meter');
+      if (!meter) return;
+      var levelEl = $('xp-level');
+      var textEl = $('xp-text');
+      var fill = $('xp-fill');
+      var bar = $('xp-bar');
+      var nextEl = $('xp-next');
+      var signin = $('xp-signin');
+      var signedIn = !!progress;
+      if (signin) signin.hidden = signedIn;
+      if (textEl) textEl.hidden = !signedIn;
+      if (!signedIn) {
+        if (levelEl) levelEl.textContent = 'Level —';
+        if (nextEl) nextEl.textContent = '';
+        if (fill) fill.style.width = '0%';
+        if (bar) {
+          bar.setAttribute('aria-valuenow', '0');
+          bar.setAttribute('aria-valuemax', '100');
+          bar.setAttribute('aria-label', 'Sign in to track XP');
+        }
+        return;
+      }
+      var pct = Math.max(progress.into ? 3 : 0, Math.round(progress.pct * 100));
+      if (levelEl) levelEl.textContent = 'Level ' + progress.level;
+      if (textEl) textEl.textContent = progress.into + ' / ' + progress.span + ' XP';
+      if (nextEl) nextEl.textContent = progress.toNext + ' XP to level ' + (progress.level + 1);
+      if (fill) fill.style.width = pct + '%';
+      if (bar) {
+        bar.setAttribute('aria-valuenow', String(progress.into));
+        bar.setAttribute('aria-valuemax', String(progress.span));
+        bar.setAttribute('aria-label', 'Progress to level ' + (progress.level + 1));
+      }
+    }
+
+    function applyXpPayload(json) {
+      if (!json || json.xp == null) { renderXp(null); return; }
+      var progress = json.xp.level != null ? json.xp : levelFromXp(json.xp);
+      renderXp(progress);
+    }
+
     var scoresSeq = 0;
     function loadScores() {
       var seq = ++scoresSeq;
       api('/api/scores').then(readJson).then(function (out) {
         if (seq !== scoresSeq || !out.ok) return;
         comboBest = out.json.best || {};
+        applyXpPayload(out.json);
         refreshReadouts();
       }).catch(function () { /* offline: keep what we have */ });
     }
@@ -978,6 +1033,7 @@
       });
     }
 
+    bindClick('xp-signin', function () { openAuthDialog('login'); });
     bindClick('btn-open-login', function () { openAuthDialog('login'); });
     bindClick('btn-open-create', function () { openAuthDialog('create'); });
     bindClick('btn-final-signin', function () { openAuthDialog('login'); });
@@ -993,6 +1049,7 @@
           setToken(null);
           if (saveNote) saveNote.hidden = true;
           renderAuth();
+          renderXp(null);
           loadBoard();
         });
     });

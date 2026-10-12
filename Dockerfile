@@ -26,6 +26,11 @@ RUN bundle install
 
 FROM base AS app
 COPY --from=gems /usr/local/bundle /usr/local/bundle
+# Pin the runtime bundle to the exact lockfile the gems stage resolved. The
+# repo intentionally has no committed rails/Gemfile.lock, so without this the
+# entrypoint re-resolves at container start and can drift off the gems baked
+# into /usr/local/bundle (e.g. net-imap), forcing a re-download on boot.
+COPY --from=gems /app/Gemfile.lock /app/Gemfile.lock
 COPY rails/ /app/
 
 # Copy the WHOLE existing public directory. Never require public/img/ as a
@@ -42,7 +47,7 @@ RUN test -f /app/public/game.js \
     && chmod +x /app/bin/* \
     && groupadd --system rails \
     && useradd --system --gid rails --home /app rails \
-    && chown -R rails:rails /app
+    && chown -R rails:rails /app /usr/local/bundle
 
 USER rails
 EXPOSE 3000

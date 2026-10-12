@@ -35,6 +35,15 @@ export default function Home() {
             <svg className="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" shapeRendering="crispEdges" aria-hidden="true"><path d="M2 8h20v3H2Zm1 3h6v5H3v-5Zm13 0h6v5h-6v-5Z" /></svg>
             Profile
           </a>
+          <a
+            className="btn btn--small btn--nav"
+            href="https://github.com/HelloJesusBeloved/next-level-snake"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <svg className="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.28-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.69.83.57A12.01 12.01 0 0 0 24 12c0-6.63-5.37-12-12-12Z" /></svg>
+            Open Source
+          </a>
           <span className="auth-area" id="auth-out">
             <button className="btn btn--small" id="btn-open-login" type="button">Sign in</button>
             <button className="btn btn--small btn--primary" id="btn-open-create" type="button">Create account</button>
@@ -189,8 +198,7 @@ export default function Home() {
         </section>
 
         <aside className="rail">
-          <div className="score-stack">
-            <div className="card card--score" id="scoreboard">
+          <div className="card card--score" id="scoreboard">
             <div className="card__head">
               <h2 className="card__title">Scoreboard</h2>
               <span className="mode-chip" data-live-mode>Normal · ×1</span>
@@ -206,42 +214,29 @@ export default function Home() {
               </div>
             </div>
             <p className="stat-line" id="mode-stats">No runs in this mode yet</p>
+            <div className="xp-meter" id="xp-meter">
+              <div className="xp-meter__top">
+                <span className="xp-meter__level" id="xp-level">Level —</span>
+                <span className="xp-meter__xp" id="xp-text" hidden>0 / 100 XP</span>
+                <button className="xp-meter__signin" id="xp-signin" type="button">Sign in to earn XP</button>
+              </div>
+              <div
+                className="xp-meter__bar"
+                id="xp-bar"
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={0}
+                aria-label="Progress to the next level"
+              >
+                <i id="xp-fill" />
+              </div>
+              <span className="xp-meter__next" id="xp-next" />
+            </div>
             <h3 className="mini-title">Recent runs <span>this device</span></h3>
             <ol className="runs" id="recent-runs" aria-label="Recent runs">
               <li className="runs__empty">Play a run and it shows up here.</li>
             </ol>
-          </div>
-
-            <div className="card" id="controls-card">
-            <div className="card__head">
-              <h2 className="card__title">Controls</h2>
-            </div>
-            <div className="keys">
-              <div className="keys__row">
-                <span>Steer</span>
-                <span>
-                  <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> · <kbd>↑</kbd>
-                  <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd>
-                </span>
-              </div>
-              <div className="keys__row">
-                <span>Start</span>
-                <span>
-                  <kbd>Space</kbd> <kbd>Enter</kbd>
-                </span>
-              </div>
-              <div className="keys__row">
-                <span>Pause</span>
-                <span>
-                  <kbd>P</kbd> <kbd>Esc</kbd>
-                </span>
-              </div>
-              <div className="keys__row">
-                <span>Touch</span>
-                <span>Swipe</span>
-              </div>
-            </div>
-          </div>
           </div>
 
           <div className="card" id="settings-card">
@@ -361,6 +356,37 @@ export default function Home() {
             </div>
 
           </div>
+
+          <div className="card" id="controls-card">
+            <div className="card__head">
+              <h2 className="card__title">Controls</h2>
+            </div>
+            <div className="keys">
+              <div className="keys__row">
+                <span>Steer</span>
+                <span>
+                  <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> · <kbd>↑</kbd>
+                  <kbd>↓</kbd> <kbd>←</kbd> <kbd>→</kbd>
+                </span>
+              </div>
+              <div className="keys__row">
+                <span>Start</span>
+                <span>
+                  <kbd>Space</kbd> <kbd>Enter</kbd>
+                </span>
+              </div>
+              <div className="keys__row">
+                <span>Pause</span>
+                <span>
+                  <kbd>P</kbd> <kbd>Esc</kbd>
+                </span>
+              </div>
+              <div className="keys__row">
+                <span>Touch</span>
+                <span>Swipe</span>
+              </div>
+            </div>
+          </div>
         </aside>
       </main>
 
@@ -441,7 +467,7 @@ export default function Home() {
               <div>
                 <h3>Bring it up</h3>
                 <p>Builds the image and starts PostgreSQL with persistent, SELinux-labeled storage.</p>
-                <pre className="code"><code>{`git clone https://github.com/your-org/snake.git
+                <pre className="code"><code>{`git clone https://github.com/HelloJesusBeloved/next-level-snake.git
 cd snake
 cp .env.example .env
 # Set SECRET_KEY_BASE in .env to this generated value:
