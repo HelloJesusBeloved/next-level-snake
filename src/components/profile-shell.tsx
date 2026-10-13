@@ -2,12 +2,12 @@ import AuthDialog from "@/components/auth-dialog";
 import ProfileRuntime from "@/components/profile-runtime";
 
 const SKINS = [
-  { id: "arcade", name: "Arcade" },
   { id: "classic", name: "Classic" },
+  { id: "arcade", name: "Arcade" },
   { id: "vintage", name: "Vintage" },
   { id: "terminal", name: "Terminal" },
   { id: "paper", name: "Paper" },
-  { id: "violet", name: "Violet" },
+  { id: "violet", name: "Midnight Violet" },
   { id: "sunsetfire", name: "Royal Sunset" },
 ] as const;
 
@@ -81,15 +81,15 @@ export default function ProfileShell({ username }: { username?: string }) {
       </header>
 
       <main className="pf-layout is-gated">
-        <aside className="pf-side" aria-label="Cabinet skin" hidden>
+        <aside className="pf-side" aria-label="Theme" hidden>
           <div className="card" id="pf-skin-card">
             <div className="card__head">
-              <h2 className="card__title">Cabinet skin</h2>
-              <span className="setting__value" id="pf-skin-value">Arcade</span>
+              <h2 className="card__title">Theme</h2>
+              <span className="setting__value" id="pf-skin-value">Classic</span>
             </div>
-            <div className="segmented" id="pf-skin-theme" role="group" aria-label="Cabinet skin">
+            <div className="segmented" id="pf-skin-theme" role="group" aria-label="Theme">
               {SKINS.map((skin) => (
-                <button key={skin.id} type="button" data-theme={skin.id} aria-pressed={skin.id === "arcade"}>
+                <button key={skin.id} type="button" data-theme={skin.id} aria-pressed={skin.id === "classic"}>
                   <span className="swatch" data-swatch={skin.id}><i aria-hidden="true" />{skin.name}</span>
                 </button>
               ))}

@@ -66,11 +66,6 @@
     var cabinet = el('div', 'cabinet');
     cabinet.setAttribute('aria-hidden', 'true');
     cabinet.innerHTML =
-      '<div class="cabinet__marquee">' +
-        '<i class="cabinet__bulb"></i>' +
-        '<span class="cabinet__marquee-text">Next Level Snake</span>' +
-        '<i class="cabinet__bulb"></i>' +
-      '</div>' +
       '<div class="cabinet__deck">' +
         '<span class="cabinet__stick"><i></i></span>' +
         '<span class="cabinet__buttons"><i></i><i></i><i></i><i></i></span>' +

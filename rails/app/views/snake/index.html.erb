@@ -49,9 +49,8 @@
       <h1 class="stage__title">Beautiful.<br>Modern.<br><em>Snake.</em></h1>
       <p class="stage__sub">
         One long green body, a red box of food, and walls that wrap instead of
-        ending the run. Preset or fully custom speed and growth, seven cabinet
-        skins, per-combination records — and signed-in players fighting over the
-        hall.
+        ending the run. Preset or fully custom speed and growth, seven themes,
+        per-combination records — and signed-in players fighting over the hall.
       </p>
     </div>
 
@@ -181,8 +180,26 @@
       <div class="xp-meter" id="xp-meter">
         <div class="xp-meter__top">
           <span class="xp-meter__level" id="xp-level">Level —</span>
-          <span class="xp-meter__xp" id="xp-text" hidden>0 / 100 XP</span>
-          <button class="xp-meter__signin" id="xp-signin" type="button">Sign in to earn XP</button>
+          <div class="xp-meter__info-wrap">
+            <span class="xp-meter__xp" id="xp-text" hidden>0 / 100 XP</span>
+            <button class="xp-meter__signin" id="xp-signin" type="button">Sign in to earn XP</button>
+            <button type="button" class="xp-info-btn" aria-label="How XP is calculated" tabindex="0">
+              <span class="xp-info-icon" aria-hidden="true">i</span>
+              <span class="xp-popover" role="tooltip">
+                <strong>How XP is calculated</strong>
+                <p>XP is earned from completed runs on preset speeds:</p>
+                <ul class="xp-popover__list">
+                  <li><span>Chill (165ms)</span><b>×0.6</b></li>
+                  <li><span>Easy (130ms)</span><b>×0.8</b></li>
+                  <li><span>Normal (105ms)</span><b>×1.0</b></li>
+                  <li><span>Fast (80ms)</span><b>×1.3</b></li>
+                  <li><span>Insane (60ms)</span><b>×1.6</b></li>
+                  <li><span>Ludicrous (42ms)</span><b>×2.0</b></li>
+                </ul>
+                <p class="xp-popover__note">XP = Score × Speed multiplier. Quits and custom sliders earn 0 XP. Level L requires 100 × (L−1)² cumulative XP.</p>
+              </span>
+            </button>
+          </div>
         </div>
         <div class="xp-meter__bar" id="xp-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Progress to the next level">
           <i id="xp-fill"></i>
@@ -203,15 +220,15 @@
 
       <div class="setting">
         <div class="setting__head">
-          <h3>Cabinet skin</h3>
-          <span class="setting__value" id="theme-value">Arcade</span>
+          <h3>Theme</h3>
+          <span class="setting__value" id="theme-value">Classic</span>
         </div>
-        <div class="segmented" id="settings-theme" role="group" aria-label="Cabinet skin">
-          <button type="button" data-theme="arcade" aria-pressed="true">
-            <span class="swatch" data-swatch="arcade"><i aria-hidden="true"></i>Arcade</span>
-          </button>
-          <button type="button" data-theme="classic" aria-pressed="false">
+        <div class="segmented" id="settings-theme" role="group" aria-label="Theme">
+          <button type="button" data-theme="classic" aria-pressed="true">
             <span class="swatch" data-swatch="classic"><i aria-hidden="true"></i>Classic</span>
+          </button>
+          <button type="button" data-theme="arcade" aria-pressed="false">
+            <span class="swatch" data-swatch="arcade"><i aria-hidden="true"></i>Arcade</span>
           </button>
           <button type="button" data-theme="vintage" aria-pressed="false">
             <span class="swatch" data-swatch="vintage"><i aria-hidden="true"></i>Vintage</span>
@@ -223,7 +240,7 @@
             <span class="swatch" data-swatch="paper"><i aria-hidden="true"></i>Paper</span>
           </button>
           <button type="button" data-theme="violet" aria-pressed="false">
-            <span class="swatch" data-swatch="violet"><i aria-hidden="true"></i>Violet</span>
+            <span class="swatch" data-swatch="violet"><i aria-hidden="true"></i>Midnight Violet</span>
           </button>
           <button type="button" data-theme="sunsetfire" aria-pressed="false">
             <span class="swatch" data-swatch="sunsetfire"><i aria-hidden="true"></i>Royal Sunset</span>
@@ -231,7 +248,7 @@
         </div>
         <p class="setting__hint">
           Arcade wraps the screen in an animated cabinet. Classic and Vintage use
-          square blocks — Classic's merge into one smooth body. Violet sits on
+          square blocks — Classic's merge into one smooth body. Midnight Violet sits on
           still mist; Terminal rains code behind the page, never inside the box.
         </p>
       </div>

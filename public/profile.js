@@ -22,12 +22,12 @@
     { id: 6, label: 'Ludicrous', ms: 42 }
   ];
   var THEMES = [
-    { id: 'arcade', name: 'Arcade' },
     { id: 'classic', name: 'Classic' },
+    { id: 'arcade', name: 'Arcade' },
     { id: 'vintage', name: 'Vintage' },
     { id: 'terminal', name: 'Terminal' },
     { id: 'paper', name: 'Paper' },
-    { id: 'violet', name: 'Violet' },
+    { id: 'violet', name: 'Midnight Violet' },
     { id: 'sunsetfire', name: 'Royal Sunset' }
   ];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -298,6 +298,7 @@
     var xp = totalXp(state.games);
     var lvl = levelFromXp(xp);
     var favName = state.favorite ? themeName(state.favorite) : null;
+    var s = summarize(state.games);
 
     root.innerHTML =
       '<section class="card pf-hero" id="pf-hero">' +
@@ -305,17 +306,44 @@
         '<div class="pf-id">' +
           '<p class="pf-eyebrow">' + esc(eyebrow) + '</p>' +
           '<h1 class="pf-name" id="pf-name">' + esc(state.username) + '</h1>' +
+          '<div class="pf-hero-metrics">' +
+            '<div class="pf-rank-badge">' +
+              '<span class="pf-rank-badge__label">Overall Rank</span>' +
+              '<span class="pf-rank-badge__val">#' + comma(state.rank) + '</span>' +
+            '</div>' +
+            '<div class="pf-stat-badge">' +
+              '<span class="pf-stat-badge__label">Total Games</span>' +
+              '<span class="pf-stat-badge__val">' + comma(s.total) + '</span>' +
+            '</div>' +
+          '</div>' +
           '<div class="xp-meter pf-level">' +
             '<div class="xp-meter__top">' +
               '<span class="xp-meter__level pf-level__num">Level ' + lvl.level + '</span>' +
-              '<span class="xp-meter__xp pf-level__xp">' + comma(xp) + ' XP</span>' +
+              '<div class="xp-meter__info-wrap">' +
+                '<span class="xp-meter__xp pf-level__xp">' + comma(xp) + ' XP</span>' +
+                '<button type="button" class="xp-info-btn" aria-label="How XP is calculated" tabindex="0">' +
+                  '<span class="xp-info-icon" aria-hidden="true">i</span>' +
+                  '<span class="xp-popover" role="tooltip">' +
+                    '<strong>How XP is calculated</strong>' +
+                    '<p>Earn XP on completed runs with preset speeds:</p>' +
+                    '<ul class="xp-popover__list">' +
+                      '<li><span>Chill (165ms)</span><b>\u00d70.6</b></li>' +
+                      '<li><span>Easy (130ms)</span><b>\u00d70.8</b></li>' +
+                      '<li><span>Normal (105ms)</span><b>\u00d71.0</b></li>' +
+                      '<li><span>Fast (80ms)</span><b>\u00d71.3</b></li>' +
+                      '<li><span>Insane (60ms)</span><b>\u00d71.6</b></li>' +
+                      '<li><span>Ludicrous (42ms)</span><b>\u00d72.0</b></li>' +
+                    '</ul>' +
+                    '<p class="xp-popover__note">XP = Score \u00d7 Speed multiplier. Quits and custom sliders earn 0 XP. Level L requires 100 \u00d7 (L\u22121)\u00b2 cumulative XP.</p>' +
+                  '</span>' +
+                '</button>' +
+              '</div>' +
             '</div>' +
             '<div class="xp-meter__bar pf-level__bar" role="progressbar" aria-valuemin="0" aria-valuemax="' + lvl.span + '" aria-valuenow="' + lvl.into + '" aria-label="Progress to level ' + (lvl.level + 1) + '">' +
               '<i style="width:' + Math.max(lvl.into ? 3 : 0, Math.round(lvl.pct * 100)) + '%"></i>' +
             '</div>' +
-            '<span class="xp-meter__next">' + comma(lvl.into) + ' / ' + comma(lvl.span) + ' XP · ' + comma(lvl.to_next) + ' to level ' + (lvl.level + 1) + '</span>' +
+            '<span class="xp-meter__next">' + comma(lvl.into) + ' / ' + comma(lvl.span) + ' XP \u00b7 ' + comma(lvl.to_next) + ' to level ' + (lvl.level + 1) + '</span>' +
           '</div>' +
-          '<p class="pf-meta">Rank #' + comma(state.rank) + ' \u00b7 ' + plural(state.games.length, 'game', 'games') + ' in log</p>' +
         '</div>' +
         '<div class="pf-fav">' +
           '<span class="pf-fav__label">Favorite theme</span>' +
@@ -379,8 +407,7 @@
       ? last10.reduce(function (sum, g) { return sum + g.score; }, 0) / last10.length
       : 0;
     $('pf-tiles').innerHTML =
-      tile('games', 'Games played', comma(s.completed), s.last30 + ' in the last 30 days') +
-      tile('total', 'Total games played', comma(s.total), 'every run in the log') +
+      tile('games', 'Games completed', comma(s.completed), s.last30 + ' in the last 30 days') +
       tile('best', 'Best score', s.best, s.bestGame ? esc(modeLabel(s.bestGame)) : 'No games yet') +
       tile('avg', 'Average score', s.completed ? num(s.avg) : '\u2014', last10.length ? 'last ' + last10.length + ': ' + num(last10avg) : 'play a game') +
       tile('food', 'Food eaten', comma(s.food), 'pieces across runs') +
@@ -425,27 +452,34 @@
       }).join('') + '</tbody></table></div>';
   }
 
-  // Favorite theme (owner can edit) + a small "view theme" side control.
+  // Favorite theme section in profile: matches the Theme panel styling with swatches.
   function renderTheme() {
     var host = $('pf-theme');
     if (!host) return;
     var editable = state.isYou;
     var html = '<h2 class="card__title">Favorite theme</h2>';
-    html += state.favorite
-      ? '<p class="pf-fav-mode"><b>' + esc(themeName(state.favorite)) + '</b><span>their favorite</span></p>'
-      : '<p class="pf-empty">No favorite theme picked.</p>';
 
     if (editable) {
-      html += '<div class="pf-themes">' + THEMES.map(function (t) {
-        return '<button type="button" data-fav-theme="' + t.id + '" aria-pressed="' + (state.favorite === t.id) + '">' +
-          '<span class="swatch" data-swatch="' + t.id + '"><i aria-hidden="true"></i>' + esc(t.name) + '</span></button>';
-      }).join('') + '</div>' +
-      '<div class="pf-theme-actions">' +
-        '<button type="button" class="btn btn--small" id="pf-theme-apply"' + (state.favorite ? '' : ' disabled') + '>Play in this theme</button>' +
-        '<button type="button" class="btn btn--small" id="pf-theme-clear"' + (state.favorite ? '' : ' disabled') + '>Clear favorite</button>' +
-      '</div>' +
-      '<p class="pf-theme-status" id="pf-theme-status" role="status">' + esc(state.themeNote) + '</p>';
+      html += '<div class="segmented pf-fav-segmented" role="group" aria-label="Favorite theme">' +
+        THEMES.map(function (t) {
+          var isFav = state.favorite === t.id;
+          return '<button type="button" data-fav-theme="' + t.id + '" aria-pressed="' + isFav + '">' +
+            '<span class="swatch" data-swatch="' + t.id + '"><i aria-hidden="true"></i>' + esc(t.name) + '</span></button>';
+        }).join('') + '</div>' +
+        '<div class="pf-theme-actions">' +
+          (state.favorite ? '<button type="button" class="btn btn--small" id="pf-theme-clear">Clear favorite</button>' : '') +
+        '</div>' +
+        '<p class="pf-theme-status" id="pf-theme-status" role="status">' + esc(state.themeNote) + '</p>';
     } else {
+      html += state.favorite
+        ? '<p class="pf-fav-mode"><b>' + esc(themeName(state.favorite)) + '</b><span>their favorite</span></p>' +
+          '<div class="segmented pf-fav-segmented" role="group">' +
+            THEMES.map(function (t) {
+              var isFav = state.favorite === t.id;
+              return '<button type="button" disabled aria-pressed="' + isFav + '">' +
+                '<span class="swatch" data-swatch="' + t.id + '"><i aria-hidden="true"></i>' + esc(t.name) + '</span></button>';
+            }).join('') + '</div>'
+        : '<p class="pf-empty">No favorite theme picked.</p>';
       html += '<p class="pf-sub">Only ' + esc(state.username) + ' can change their favorite.</p>';
     }
 
@@ -777,7 +811,7 @@
     var fromDom = document.documentElement.getAttribute('data-theme');
     if (THEMES.some(function (t) { return t.id === fromDom; })) return fromDom;
     var saved = readSettings().theme;
-    return THEMES.some(function (t) { return t.id === saved; }) ? saved : 'arcade';
+    return THEMES.some(function (t) { return t.id === saved; }) ? saved : 'classic';
   }
 
   // Cabinet skin controls the global theme (the same localStorage key the game
@@ -947,12 +981,43 @@
     }
   }
 
+  // Put the cursor in the username box of whichever form is showing (deferred so
+  // it runs after showModal, which would otherwise focus the close button).
+  function focusAuthField(mode) {
+    var form = mode === 'create' ? formCreate : formLogin;
+    var input = form && form.elements ? form.elements.username : null;
+    if (!input) return;
+    window.setTimeout(function () { input.focus(); }, 0);
+  }
+
   function setAuthMode(mode) {
     var login = mode !== 'create';
     if (formLogin) formLogin.hidden = !login;
     if (formCreate) formCreate.hidden = login;
     if (tabLogin) tabLogin.setAttribute('aria-selected', String(login));
     if (tabCreate) tabCreate.setAttribute('aria-selected', String(!login));
+    focusAuthField(mode);
+  }
+
+  // "i" buttons open the XP explanation on tap (touch) or hover (mouse). A tap on
+  // the explanation itself is ignored; a tap anywhere else closes it.
+  function bindXpInfo() {
+    if (document.__nlsXpInfoBound) return;
+    document.__nlsXpInfoBound = true;
+    document.addEventListener('click', function (e) {
+      var target = e.target;
+      if (target && target.closest && target.closest('.xp-popover')) return;
+      var btn = target && target.closest ? target.closest('.xp-info-btn') : null;
+      var open = document.querySelectorAll('.xp-info-btn.is-open');
+      for (var i = 0; i < open.length; i++) {
+        if (open[i] !== btn) { open[i].classList.remove('is-open'); open[i].setAttribute('aria-expanded', 'false'); }
+      }
+      if (btn) {
+        var on = !btn.classList.contains('is-open');
+        btn.classList.toggle('is-open', on);
+        btn.setAttribute('aria-expanded', String(on));
+      }
+    });
   }
 
   function openAuthDialog(mode) {
@@ -997,6 +1062,7 @@
     // theme as the game page.
     bindHeaderAuth();
     bindSkinPanel();
+    bindXpInfo();
     setSkinVisible(false);
 
     var isOther = Boolean(root.getAttribute('data-username'));

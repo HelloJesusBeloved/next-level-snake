@@ -2,6 +2,7 @@
 
 import Script from "next/script";
 import { useState } from "react";
+import { PUBLIC_ASSET_VERSION } from "@/lib/public-assets";
 
 /**
  * The shared vanilla game mutates its canvas, score tables, and theme DOM.
@@ -16,14 +17,14 @@ export default function GameRuntime() {
     <>
       <Script
         id="snake-engine"
-        src="/game.js"
+        src={`/game.js?v=${PUBLIC_ASSET_VERSION}`}
         strategy="afterInteractive"
         onReady={() => setEngineReady(true)}
       />
       {engineReady && (
         <Script
           id="snake-controls"
-          src="/app.js"
+          src={`/app.js?v=${PUBLIC_ASSET_VERSION}`}
           strategy="afterInteractive"
         />
       )}

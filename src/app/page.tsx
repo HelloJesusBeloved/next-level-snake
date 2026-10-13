@@ -69,7 +69,7 @@ export default function Home() {
             <p className="stage__sub">
               One long green body, a red box of food, and walls that wrap instead
               of ending the run. Preset or fully custom speed and growth, seven
-              cabinet skins, per-combination records — and signed-in players
+              themes, per-combination records — and signed-in players
               fighting over the hall.
             </p>
           </div>
@@ -217,8 +217,26 @@ export default function Home() {
             <div className="xp-meter" id="xp-meter">
               <div className="xp-meter__top">
                 <span className="xp-meter__level" id="xp-level">Level —</span>
-                <span className="xp-meter__xp" id="xp-text" hidden>0 / 100 XP</span>
-                <button className="xp-meter__signin" id="xp-signin" type="button">Sign in to earn XP</button>
+                <div className="xp-meter__info-wrap">
+                  <span className="xp-meter__xp" id="xp-text" hidden>0 / 100 XP</span>
+                  <button className="xp-meter__signin" id="xp-signin" type="button">Sign in to earn XP</button>
+                  <button type="button" className="xp-info-btn" aria-label="How XP is calculated" tabIndex={0}>
+                    <span className="xp-info-icon" aria-hidden="true">i</span>
+                    <span className="xp-popover" role="tooltip">
+                      <strong>How XP is calculated</strong>
+                      <p>XP is earned from completed runs on preset speeds:</p>
+                      <ul className="xp-popover__list">
+                        <li><span>Chill (165ms)</span><b>×0.6</b></li>
+                        <li><span>Easy (130ms)</span><b>×0.8</b></li>
+                        <li><span>Normal (105ms)</span><b>×1.0</b></li>
+                        <li><span>Fast (80ms)</span><b>×1.3</b></li>
+                        <li><span>Insane (60ms)</span><b>×1.6</b></li>
+                        <li><span>Ludicrous (42ms)</span><b>×2.0</b></li>
+                      </ul>
+                      <p className="xp-popover__note">XP = Score × Speed multiplier. Quits and custom sliders earn 0 XP. Level L requires 100 × (L−1)² cumulative XP.</p>
+                    </span>
+                  </button>
+                </div>
               </div>
               <div
                 className="xp-meter__bar"
@@ -249,15 +267,15 @@ export default function Home() {
 
             <div className="setting">
               <div className="setting__head">
-                <h3>Cabinet skin</h3>
-                <span className="setting__value" id="theme-value">Arcade</span>
+                <h3>Theme</h3>
+                <span className="setting__value" id="theme-value">Classic</span>
               </div>
-              <div className="segmented" id="settings-theme" role="group" aria-label="Cabinet skin">
-                <button type="button" data-theme="arcade" aria-pressed="true">
-                  <span className="swatch" data-swatch="arcade"><i aria-hidden="true" />Arcade</span>
-                </button>
-                <button type="button" data-theme="classic" aria-pressed="false">
+              <div className="segmented" id="settings-theme" role="group" aria-label="Theme">
+                <button type="button" data-theme="classic" aria-pressed="true">
                   <span className="swatch" data-swatch="classic"><i aria-hidden="true" />Classic</span>
+                </button>
+                <button type="button" data-theme="arcade" aria-pressed="false">
+                  <span className="swatch" data-swatch="arcade"><i aria-hidden="true" />Arcade</span>
                 </button>
                 <button type="button" data-theme="vintage" aria-pressed="false">
                   <span className="swatch" data-swatch="vintage"><i aria-hidden="true" />Vintage</span>
@@ -269,7 +287,7 @@ export default function Home() {
                   <span className="swatch" data-swatch="paper"><i aria-hidden="true" />Paper</span>
                 </button>
                 <button type="button" data-theme="violet" aria-pressed="false">
-                  <span className="swatch" data-swatch="violet"><i aria-hidden="true" />Violet</span>
+                  <span className="swatch" data-swatch="violet"><i aria-hidden="true" />Midnight Violet</span>
                 </button>
                 <button type="button" data-theme="sunsetfire" aria-pressed="false">
                   <span className="swatch" data-swatch="sunsetfire"><i aria-hidden="true" />Royal Sunset</span>
@@ -278,7 +296,7 @@ export default function Home() {
               <p className="setting__hint">
                 Arcade wraps the screen in an animated cabinet. Classic and
                 Vintage use square blocks — Classic&apos;s merge into one smooth
-                body. Violet sits on still mist; Terminal rains code behind the
+                body. Midnight Violet sits on still mist; Terminal rains code behind the
                 page, never inside the box.
               </p>
             </div>

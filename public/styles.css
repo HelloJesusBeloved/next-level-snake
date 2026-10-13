@@ -193,11 +193,18 @@ pre { font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monos
   gap: clamp(24px, 3.4vw, 52px);
   align-items: start;
   padding: clamp(28px, 4vw, 58px) clamp(20px, 4vw, 56px) clamp(40px, 6vw, 80px) 54px;
+  overflow-anchor: none;
 }
 
 /* The data rail is bolted to the left of the cabinet. */
 .rail { order: 1; }
-.stage { order: 2; }
+/* Nudge the three side sections right by half the column gap so they sit
+   centred between the spine rule and the stage content (the "B" in
+   "Beautiful."). A transform moves only the rail itself — the grid, the
+   title and the game box keep their exact HEAD positions. */
+.rail { transform: translateX(calc(clamp(24px, 3.4vw, 52px) / 2)); }
+@media (max-width: 1100px) { .rail { transform: none; } }
+.stage { order: 2; overflow-anchor: none; }
 
 .stage__head { max-width: 720px; margin-bottom: 26px; }
 
@@ -242,6 +249,9 @@ pre { font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monos
 .screen {
   position: relative;
   padding: var(--cabinet-top, 0px) 0 var(--cabinet-bottom, 0px);
+  /* Arcade adds cabinet padding below the frame; never let that height change
+     auto-scroll the page when the theme switches. */
+  overflow-anchor: none;
 }
 
 .overlay {
@@ -1026,7 +1036,7 @@ html[data-theme='violet'] body { background-color: #12081f; }
   border: 1px solid var(--line);
   flex: none;
 }
-.swatch[data-swatch='arcade'] i { background: linear-gradient(135deg, #050505 0 48%, #2ce05e 52% 100%); }
+.swatch[data-swatch='arcade'] i { background: linear-gradient(135deg, #0b1b56 0 44%, #ff3b4e 48% 74%, #ffd23f 78% 100%); }
 .swatch[data-swatch='vintage'] i { background: linear-gradient(135deg, #b8c69a 0 48%, #1e2c16 52% 100%); }
 .swatch[data-swatch='terminal'] i { background: linear-gradient(135deg, #020805 0 48%, #31f084 52% 100%); }
 .swatch[data-swatch='paper'] i { background: linear-gradient(135deg, #f6f1e2 0 48%, #191713 52% 100%); }
@@ -1741,18 +1751,13 @@ body.has-run .shell { z-index: 20; }
   border-left: 0;
   border-right: 0;
 }
-/* text blocks that sit directly on the swirl get a soft glass veil too */
+/* Text blocks that sit directly on the swirl stay readable via a soft shadow.
+   Deliberately no padding, border, background or display change here: those
+   alter the text boxes, which reflows the page every time the theme switches. */
 [data-theme='violet'] .stage__sub,
 [data-theme='violet'] .band__lede {
-  display: inline-block;
-  max-width: 62ch;
-  padding: 10px 16px;
-  border-radius: 14px;
-  background: rgba(18, 8, 36, 0.78);
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  color: #d9cdf2;
+  text-shadow: 0 1px 12px rgba(8, 2, 20, 0.9), 0 0 2px rgba(8, 2, 20, 0.9);
 }
 [data-theme='violet'] .stage__title,
 [data-theme='violet'] .band__title,
@@ -1790,46 +1795,8 @@ body.has-run .shell { z-index: 20; }
   .shell { padding: 24px 8px 48px; }
 }
 
-/* =====================================================================
-   Floating score pill: TOP RIGHT, and only on the desktop Arcade theme,
-   during an active run. Hidden everywhere else.
-   ===================================================================== */
-.hud-float { display: none; }
-@media (min-width: 721px) {
-  html[data-theme='arcade'] body.has-run .hud-float {
-    display: flex;
-    position: fixed;
-    top: max(8px, env(safe-area-inset-top, 0px));
-    right: max(12px, env(safe-area-inset-right, 0px));
-    left: auto;
-    transform: none;
-    z-index: 40;
-    align-items: baseline;
-    gap: 8px;
-    padding: 6px 18px;
-    border: 1px solid color-mix(in srgb, var(--accent-2) 55%, transparent);
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--panel) 92%, black);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-    font-family: 'IBM Plex Mono', monospace;
-    pointer-events: none;
-  }
-}
-.hud-float span {
-  font-size: 10px;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.hud-float b {
-  font-size: 22px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  margin-right: 8px;
-}
-.hud-float b:first-of-type { color: var(--green); }
-.hud-float b:last-of-type { margin-right: 0; }
+/* Floating score pill removed: the main top score HUD (#hud) is used for all themes. */
+.hud-float { display: none !important; }
 
 /* =====================================================================
    Profile page
@@ -2097,7 +2064,10 @@ body.has-run .shell { z-index: 20; }
   .rail > #controls-card { grid-column: 1; grid-row: 2; }
 }
 
-/* XP: a horizontal bar showing progress to the next level. */
+/* XP: progress bar, plus the "i" button that explains how XP is calculated.
+   The explanation sits inside the button, so hover, keyboard focus and tap all
+   work from one element. Sign-in / XP text and the button share a right-aligned
+   group, so the "i" is always to the right of "Sign in to earn XP". */
 .xp-meter {
   display: grid;
   gap: 6px;
@@ -2105,7 +2075,7 @@ body.has-run .shell { z-index: 20; }
 }
 .xp-meter__top {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
@@ -2116,6 +2086,13 @@ body.has-run .shell { z-index: 20; }
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--green);
+}
+.xp-meter__info-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  position: relative;
 }
 .xp-meter__xp,
 .xp-meter__next {
@@ -2133,6 +2110,7 @@ body.has-run .shell { z-index: 20; }
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11px;
   letter-spacing: 0.04em;
+  white-space: nowrap;
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 3px;
@@ -2153,7 +2131,204 @@ body.has-run .shell { z-index: 20; }
   background: linear-gradient(90deg, color-mix(in srgb, var(--green) 70%, #fff), var(--green));
   box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.55);
 }
-.pf-level.xp-meter { margin: 10px 0 8px; max-width: 420px; }
+.pf-level.xp-meter { margin: 10px 0 8px; max-width: 440px; }
+
+.xp-info-btn {
+  position: relative;
+  appearance: none;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.xp-info-btn:hover,
+.xp-info-btn:focus-visible,
+.xp-info-btn.is-open {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(var(--accent-rgb), 0.18);
+  outline: none;
+}
+.xp-info-icon { pointer-events: none; }
+
+.xp-popover {
+  position: absolute;
+  z-index: 120;
+  right: 0;
+  bottom: calc(100% + 8px);
+  width: 290px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #141922;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 16px 36px -8px rgba(0, 0, 0, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  color: #efe8ff;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.45;
+  letter-spacing: normal;
+  text-transform: none;
+  text-align: left;
+  cursor: default;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 150ms ease, visibility 150ms ease;
+}
+/* Invisible bridge over the gap, so the pointer can travel up into the box
+   without the explanation closing. */
+.xp-popover::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 12px;
+}
+.xp-popover::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  right: 6px;
+  border: 6px solid transparent;
+  border-top-color: #141922;
+}
+.xp-popover strong {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--green);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.xp-popover p { margin: 0 0 5px; color: #b9b0d6; font-size: 10.5px; }
+.xp-popover__list {
+  list-style: none;
+  margin: 6px 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px 6px;
+}
+.xp-popover__list li {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 10px;
+}
+.xp-popover__list li b { color: var(--green); }
+.xp-popover__note {
+  margin-top: 6px !important;
+  font-size: 9.5px !important;
+  line-height: 1.35 !important;
+  color: #9d93bd !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 5px;
+}
+
+/* Mouse / trackpad: hover reveals the explanation. */
+@media (hover: hover) and (pointer: fine) {
+  .xp-info-btn:hover .xp-popover { opacity: 1; visibility: visible; pointer-events: auto; }
+}
+/* Keyboard focus and tapping the "i" (toggled by .is-open in app.js/profile.js). */
+.xp-info-btn.is-open .xp-popover,
+.xp-info-btn:focus-visible .xp-popover { opacity: 1; visibility: visible; pointer-events: auto; }
+
+/* Touch screens: bigger tap target, and the explanation opens as a centred card
+   that always sits fully inside the screen. */
+@media (hover: none), (pointer: coarse) {
+  .xp-info-btn { width: 32px; height: 32px; font-size: 13px; }
+  .xp-meter__info-wrap { gap: 10px; }
+  .xp-popover {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    bottom: auto;
+    width: min(320px, calc(100vw - 32px));
+    max-height: calc(100vh - 32px);
+    max-height: calc(100dvh - 32px);
+    overflow-y: auto;
+    transform: translate(-50%, -50%);
+    font-size: 12px;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.75);
+  }
+  .xp-popover::before,
+  .xp-popover::after { display: none; }
+}
+
+/* Profile Hero Metrics */
+.pf-hero-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 10px 0 12px;
+}
+.pf-rank-badge {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: rgba(var(--accent-rgb), 0.15);
+  border: 1px solid rgba(var(--accent-rgb), 0.5);
+  box-shadow: 0 4px 16px rgba(var(--accent-rgb), 0.12);
+}
+.pf-rank-badge__label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pf-rank-badge__val {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--green);
+}
+.pf-stat-badge {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+}
+.pf-stat-badge__label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 9px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pf-stat-badge__val {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--text);
+}
+.pf-fav-segmented { margin: 10px 0 14px; }
 
 /* Profile: cabinet skin sits beside the profile, not inside the game modifiers. */
 .pf-layout {

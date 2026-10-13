@@ -23,7 +23,7 @@
   };
   var THEME_NAMES = {
     arcade: 'Arcade', classic: 'Classic', vintage: 'Vintage', terminal: 'Terminal',
-    paper: 'Paper', violet: 'Violet', sunsetfire: 'Royal Sunset'
+    paper: 'Paper', violet: 'Midnight Violet', sunsetfire: 'Royal Sunset'
   };
 
   function ready(fn) {
@@ -48,7 +48,7 @@
     var d = {
       speedId: 3, speedCustom: 42, useCustomSpeed: false,
       growth: 1, growthCustom: 2, useCustomGrowth: false,
-      theme: 'arcade'
+      theme: 'classic'
     };
     try {
       var raw = window.localStorage.getItem(STORE_KEY);
@@ -431,9 +431,18 @@
     }
 
     function applyTheme() {
+      // A theme swap must repaint in place, never move the page. Arcade adds
+      // cabinet padding below the frame, which changes the document height; if
+      // the browser nudges the scroll offset to compensate, put it straight
+      // back so the clicked theme button stays exactly where it was.
+      var sx = window.scrollX || 0;
+      var sy = window.scrollY || 0;
       document.documentElement.setAttribute('data-theme', settings.theme);
       game.setTheme(THEMES[settings.theme]);
       syncRain();
+      if ((window.scrollX || 0) !== sx || (window.scrollY || 0) !== sy) {
+        window.scrollTo(sx, sy);
+      }
     }
 
     // The snake gets the CPU first: decorative background animation is
@@ -802,12 +811,44 @@
       }).catch(function () { /* offline: keep what we have */ });
     }
 
+    // Put the cursor in the username box of whichever form is showing. Deferred
+    // so it runs after the dialog has opened (showModal would otherwise focus
+    // the close button, which comes first in the markup).
+    function focusAuthField(mode) {
+      var form = mode === 'create' ? formCreate : formLogin;
+      var input = form && form.elements ? form.elements.username : null;
+      if (!input) return;
+      window.setTimeout(function () { input.focus(); }, 0);
+    }
+
     function setAuthMode(mode) {
       var login = mode !== 'create';
       if (formLogin) formLogin.hidden = !login;
       if (formCreate) formCreate.hidden = login;
       if (tabLogin) tabLogin.setAttribute('aria-selected', String(login));
       if (tabCreate) tabCreate.setAttribute('aria-selected', String(!login));
+      focusAuthField(mode);
+    }
+
+    // The "i" buttons open their XP explanation on tap (touch) or hover (mouse).
+    // A tap on the explanation itself is ignored; a tap anywhere else closes it.
+    function bindXpInfo() {
+      if (document.__nlsXpInfoBound) return;
+      document.__nlsXpInfoBound = true;
+      document.addEventListener('click', function (e) {
+        var target = e.target;
+        if (target && target.closest && target.closest('.xp-popover')) return;
+        var btn = target && target.closest ? target.closest('.xp-info-btn') : null;
+        var open = document.querySelectorAll('.xp-info-btn.is-open');
+        for (var i = 0; i < open.length; i++) {
+          if (open[i] !== btn) { open[i].classList.remove('is-open'); open[i].setAttribute('aria-expanded', 'false'); }
+        }
+        if (btn) {
+          var on = !btn.classList.contains('is-open');
+          btn.classList.toggle('is-open', on);
+          btn.setAttribute('aria-expanded', String(on));
+        }
+      });
     }
 
     function openAuthDialog(mode) {
@@ -1195,6 +1236,7 @@
     });
 
     applyTheme();
+    bindXpInfo();
     renderTabs();
     renderFilters();
     renderSettings();

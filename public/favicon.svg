@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0a1a0f"/>
+      <stop offset="100%" stop-color="#040705"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="b1"/>
+      <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="b2"/>
+      <feMerge><feMergeNode in="b2"/><feMergeNode in="b1"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="url(#bgGlow)"/>
+  <rect x="1" y="1" width="62" height="62" rx="13" fill="none" stroke="#2ce05e" stroke-opacity="0.25"/>
+  <path d="M18 15V38C18 47 24 51 32 51C40 51 46 47 46 38V15" fill="none" stroke="#2ce05e" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity="0.35" filter="url(#glow)"/>
+  <path d="M18 15V38C18 47 24 51 32 51C40 51 46 47 46 38V15" fill="none" stroke="#2ce05e" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M18 15V38C18 47 24 51 32 51C40 51 46 47 46 38V15" fill="none" stroke="#a6ffc2" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="46" cy="14" r="4.5" fill="#2ce05e"/>
+  <circle cx="18" cy="15" r="3.2" fill="#2ce05e"/>
+  <g shape-rendering="crispEdges">
+    <rect x="5" y="16" width="5" height="3" fill="#000"/>
+    <rect x="53" y="16" width="5" height="3" fill="#000"/>
+    <rect x="9" y="13" width="20" height="12" fill="#000" stroke="#5c6b63" stroke-width="1"/>
+    <rect x="33" y="13" width="20" height="12" fill="#000" stroke="#5c6b63" stroke-width="1"/>
+    <rect x="27" y="16" width="10" height="3" fill="#000"/>
+    <rect x="12" y="15" width="5" height="2" fill="#ffffff" fill-opacity="0.85"/>
+    <rect x="36" y="15" width="5" height="2" fill="#ffffff" fill-opacity="0.85"/>
+  </g>
+</svg>

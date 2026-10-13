@@ -145,7 +145,7 @@ body.is-playing .snake-canvas { touch-action: none; }
 
 html[data-theme='arcade'] {
   --bezel-border: 5px;
-  --cabinet-top: 76px;
+  --cabinet-top: 0px;
   --cabinet-bottom: 96px;
   --bezel-texture: 0;
   --bezel-radius: 26px;
@@ -326,10 +326,9 @@ html[data-theme='arcade'] .cabinet__deck {
   }
   html[data-theme='arcade'] {
     --bezel-border: 4px;
-    --cabinet-top: 54px;
+    --cabinet-top: 0px;
     --cabinet-bottom: 70px;
   }
-  html[data-theme='arcade'] .cabinet__marquee { height: 44px; gap: 8px; }
   html[data-theme='arcade'] .cabinet__deck { height: 58px; padding: 0 14px; gap: 10px; }
   .cabinet__stick { width: 22px; height: 42px; }
   .cabinet__stick i { width: 22px; height: 22px; margin-left: -11px; }

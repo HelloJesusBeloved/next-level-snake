@@ -1,5 +1,5 @@
 <% content_for :title, "Profile — Next Level Snake" %>
-<% skins = [["arcade", "Arcade"], ["classic", "Classic"], ["vintage", "Vintage"], ["terminal", "Terminal"], ["paper", "Paper"], ["violet", "Violet"], ["sunsetfire", "Royal Sunset"]] %>
+<% skins = [["classic", "Classic"], ["arcade", "Arcade"], ["vintage", "Vintage"], ["terminal", "Terminal"], ["paper", "Paper"], ["violet", "Midnight Violet"], ["sunsetfire", "Royal Sunset"]] %>
 
 <div class="page-texture" aria-hidden="true"></div>
 <div class="page-scrim" aria-hidden="true"></div>
@@ -41,17 +41,17 @@
   </nav>
 </header>
 
-<%# public/profile.js loads GET /api/profile and draws everything in here. The cabinet skin panel stays hidden until a profile actually loads (never on the sign-in gate). %>
+<%# public/profile.js loads GET /api/profile and draws everything in here. The theme panel stays hidden until a profile actually loads (never on the sign-in gate). %>
 <main class="pf-layout is-gated">
-  <aside class="pf-side" aria-label="Cabinet skin" hidden>
+  <aside class="pf-side" aria-label="Theme" hidden>
     <div class="card" id="pf-skin-card">
       <div class="card__head">
-        <h2 class="card__title">Cabinet skin</h2>
-        <span class="setting__value" id="pf-skin-value">Arcade</span>
+        <h2 class="card__title">Theme</h2>
+        <span class="setting__value" id="pf-skin-value">Classic</span>
       </div>
-      <div class="segmented" id="pf-skin-theme" role="group" aria-label="Cabinet skin">
+      <div class="segmented" id="pf-skin-theme" role="group" aria-label="Theme">
         <% skins.each do |id, name| %>
-          <button type="button" data-theme="<%= id %>" aria-pressed="<%= id == "arcade" %>"><span class="swatch" data-swatch="<%= id %>"><i aria-hidden="true"></i><%= name %></span></button>
+          <button type="button" data-theme="<%= id %>" aria-pressed="<%= id == "classic" %>"><span class="swatch" data-swatch="<%= id %>"><i aria-hidden="true"></i><%= name %></span></button>
         <% end %>
       </div>
     </div>
@@ -80,5 +80,5 @@
 <%= render "shared/auth_dialog" %>
 
 <% content_for :scripts do %>
-  <script src="/profile.js"></script>
+  <script src="/profile.js?v=2026-10-12.4"></script>
 <% end %>
