@@ -9,13 +9,13 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
-    <link rel="icon" href="/favicon.svg?v=2026-10-12.4" type="image/svg+xml">
-    <link rel="alternate icon" href="/favicon.ico?v=2026-10-12.4">
-    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2026-10-12.4">
-    <link rel="icon" type="image/png" sizes="192x192" href="/favicon.png?v=2026-10-12.4">
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2026-10-12.4">
-    <link rel="stylesheet" href="/game.css?v=2026-10-12.4">
-    <link rel="stylesheet" href="/styles.css?v=2026-10-12.4">
+    <link rel="icon" href="/favicon.svg?v=2026-10-12.6" type="image/svg+xml">
+    <link rel="alternate icon" href="/favicon.ico?v=2026-10-12.6">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2026-10-12.6">
+    <link rel="icon" type="image/png" sizes="192x192" href="/favicon.png?v=2026-10-12.6">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png?v=2026-10-12.6">
+    <link rel="stylesheet" href="/game.css?v=2026-10-12.6">
+    <link rel="stylesheet" href="/styles.css?v=2026-10-12.6">
     <script>
       try {
         var __s = JSON.parse(localStorage.getItem('snake.settings.v1') || '{}');
@@ -29,11 +29,13 @@
   </head>
   <body>
     <%= yield %>
+    <%# Terminal theme's Matrix rain — shared by the game page and the profile page. %>
+    <script src="/rain.js?v=2026-10-12.6"></script>
     <% if content_for?(:scripts) %>
       <%= yield :scripts %>
     <% else %>
-      <script src="/game.js?v=2026-10-12.4"></script>
-      <script src="/app.js?v=2026-10-12.4"></script>
+      <script src="/game.js?v=2026-10-12.6"></script>
+      <script src="/app.js?v=2026-10-12.6"></script>
     <% end %>
   </body>
 </html>

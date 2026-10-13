@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Script from "next/script";
 import { PUBLIC_ASSET_VERSION } from "@/lib/public-assets";
 
 export const metadata: Metadata = {
@@ -53,7 +54,17 @@ export default function RootLayout({
           }}
         />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        {/* Terminal theme's Matrix rain, shared by the game and profile pages.
+            beforeInteractive guarantees window.MatrixRain exists before app.js
+            or profile.js (both afterInteractive) ask for it. */}
+        <Script
+          id="snake-rain"
+          src={`/rain.js?v=${PUBLIC_ASSET_VERSION}`}
+          strategy="beforeInteractive"
+        />
+      </body>
     </html>
   );
 }

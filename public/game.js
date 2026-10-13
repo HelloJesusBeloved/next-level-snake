@@ -192,6 +192,7 @@
       acc = 0;
       wrapFlash = null;
       crashCell = null;
+      lastResumeAt = -Infinity; // a new run always allows an immediate first pause
       placeFood();
     }
 
@@ -203,6 +204,16 @@
     function nowMs() { return (global.performance || Date).now(); }
     function lockoutRemaining() {
       return Math.max(0, RESTART_LOCKOUT_MS - (nowMs() - deadAt));
+    }
+
+    // Once you resume from a pause, pausing again is locked out for 5 seconds.
+    // A fresh run (reset()) always starts with the cooldown cleared, so the
+    // very first pause of a run is never delayed. The auto-pause on tab-hide
+    // (onVisibility) bypasses this — it is a safety net, not a player action.
+    var PAUSE_LOCKOUT_MS = 5000;
+    var lastResumeAt = -Infinity;
+    function pauseLockoutRemaining() {
+      return Math.max(0, PAUSE_LOCKOUT_MS - (nowMs() - lastResumeAt));
     }
 
     function start() {
@@ -521,7 +532,15 @@
       var key = (e.key || '').toLowerCase();
       var d = KEYMAP[key];
       if (d) {
-        if (paused || !engaged()) return;
+        if (paused) {
+          // A steering key on the pause screen (or the quit-confirm screen) is
+          // the quickest way back in: resume and steer in that direction.
+          e.preventDefault();
+          resume();
+          pushDir(d);
+          return;
+        }
+        if (!engaged()) return;
         e.preventDefault();
         if (!started) start();
         if (running) pushDir(d);
@@ -572,25 +591,38 @@
 
     function onTouchEnd() { touch = null; }
 
-    function pause() {
-      if (!running || paused) return;
+    // doPause() is the actual pause transition, with no cooldown check — used
+    // by the tab-hide safety net, which must always succeed. pause() is the
+    // player-facing entry point (pause button, P, Esc) and enforces the
+    // 5-second cooldown after a resume.
+    function doPause() {
+      if (!running || paused) return false;
       paused = true;
       touch = null;
       root.classList.remove('is-active');
       emit('pause', state());
+      return true;
+    }
+
+    function pause() {
+      if (!running || paused) return false;
+      if (pauseLockoutRemaining() > 0) return false;
+      return doPause();
     }
 
     function resume() {
-      if (!running || !paused) return;
+      if (!running || !paused) return false;
       paused = false;
       touch = null;
       last = 0;
       root.classList.add('is-active');
+      lastResumeAt = nowMs();
       emit('resume', state());
+      return true;
     }
 
     function onVisibility() {
-      if (document.hidden) pause();
+      if (document.hidden) doPause();
     }
 
     global.addEventListener('keydown', onKeyDown, { passive: false });
@@ -625,6 +657,7 @@
       start: start,
       restart: start,
       lockoutRemaining: lockoutRemaining,
+      pauseLockoutRemaining: pauseLockoutRemaining,
       pause: pause,
       resume: resume,
       togglePause: function () {

@@ -823,6 +823,13 @@
     settings.theme = id;
     try { window.localStorage.setItem(STORE_KEY, JSON.stringify(settings)); } catch (err) { /* storage blocked */ }
     syncSkinPanel();
+    syncRain();
+  }
+
+  // Terminal theme's Matrix rain (public/rain.js) — the profile has no run to
+  // yield to, so it simply follows the theme.
+  function syncRain() {
+    if (window.MatrixRain) window.MatrixRain.set(currentTheme() === 'terminal');
   }
 
   function syncSkinPanel() {
@@ -1064,6 +1071,7 @@
     bindSkinPanel();
     bindXpInfo();
     setSkinVisible(false);
+    syncRain();
 
     var isOther = Boolean(root.getAttribute('data-username'));
     root.innerHTML = '<p class="pf-loading">Loading ' + (isOther ? 'the profile' : 'your profile') + '\u2026</p>';

@@ -32,6 +32,7 @@ export default function ProfileShell({ username }: { username?: string }) {
     <>
       <div className="page-texture" aria-hidden="true" />
       <div className="page-scrim" aria-hidden="true" />
+      <canvas id="matrix-rain" className="matrix-rain" aria-hidden="true" />
 
       <div className="spine" aria-hidden="true">
         <span>

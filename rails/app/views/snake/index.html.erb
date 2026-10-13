@@ -77,6 +77,13 @@
     <div class="screen">
       <div id="snake-root"></div>
 
+      <button class="btn-peek" id="btn-peek" type="button" aria-pressed="false" aria-label="Show where the snake ended up" title="Show / hide the game-over screen" hidden>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+          <circle cx="12" cy="12" r="3" />
+        </svg>
+      </button>
+
       <div class="overlay is-visible" id="overlay">
         <div class="panel is-visible" id="panel-start">
           <p class="panel__eyebrow">Ready</p>
@@ -106,11 +113,24 @@
           </dl>
           <p class="panel__body">
             You can scroll while paused. Modifiers stay locked for this run.
-            Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume and lock the page again.
+            <kbd>Enter</kbd>, <kbd>P</kbd> or any steering key resumes; <kbd>Esc</kbd> quits.
           </p>
+          <p class="panel__hint">After you resume, pausing again is locked for 5 seconds.</p>
           <div class="panel__actions">
             <button class="btn btn--primary" id="btn-resume" type="button">Resume</button>
             <button class="btn" id="btn-quit" type="button">Quit run</button>
+          </div>
+        </div>
+
+        <div class="panel" id="panel-pause-confirm">
+          <p class="panel__eyebrow">Hold up</p>
+          <h2 class="panel__title">You for sure want to quit the run man?</h2>
+          <p class="panel__body">
+            <kbd>Esc</kbd> again quits for real. <kbd>Enter</kbd> or any steering key takes you back to the game.
+          </p>
+          <div class="panel__actions">
+            <button class="btn btn--primary" id="btn-pause-confirm-no" type="button">No, keep playing</button>
+            <button class="btn btn--danger" id="btn-pause-confirm-yes" type="button">Yes, quit</button>
           </div>
         </div>
 
@@ -141,6 +161,7 @@
           </dl>
           <p class="flag" id="final-flag" hidden>New best for this mode</p>
           <div class="save-note" id="final-save" hidden>
+            <button class="save-note__close" id="btn-final-save-close" type="button" aria-label="Dismiss, and don't show this again" title="Don't show this again" hidden>✕</button>
             <p id="final-save-text"></p>
             <div class="panel__actions" id="final-save-actions">
               <button class="btn btn--small btn--primary" id="btn-final-signin" type="button">Sign in</button>

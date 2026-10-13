@@ -10,6 +10,14 @@
   var STORE_KEY = 'snake.settings.v1';
   var RUNS_KEY = 'snake.runs.v1';
   var TOKEN_KEY = 'snake.token.v1';
+  var GUEST_DEATHS_KEY = 'snake.guestDeaths.v1';
+  // Set once the player closes the "only saved locally" note with its X; after
+  // that the note never comes back on this device, regardless of death count.
+  var GUEST_NOTE_DISMISSED_KEY = 'snake.guestNoteDismissed.v1';
+  // The "your run is only saved on this device" note only shows for a guest's
+  // first few deaths — after that it would just be noise for someone who has
+  // decided to keep playing anonymously.
+  var GUEST_DEATH_NOTE_LIMIT = 5;
 
   // Canvas palettes — the CSS counterparts live in styles.css [data-theme=...].
   var THEMES = {
@@ -122,6 +130,24 @@
     try { window.localStorage.setItem(RUNS_KEY, JSON.stringify(list.slice(0, 30))); } catch (err) { /* ignore */ }
   }
 
+  // ---- guest death counter (this device) ---------------------------------------
+  function loadGuestDeaths() {
+    try { return parseInt(window.localStorage.getItem(GUEST_DEATHS_KEY), 10) || 0; }
+    catch (err) { return 0; }
+  }
+  function bumpGuestDeaths() {
+    var next = loadGuestDeaths() + 1;
+    try { window.localStorage.setItem(GUEST_DEATHS_KEY, String(next)); } catch (err) { /* ignore */ }
+    return next;
+  }
+  function guestNoteDismissed() {
+    try { return window.localStorage.getItem(GUEST_NOTE_DISMISSED_KEY) === '1'; }
+    catch (err) { return false; }
+  }
+  function dismissGuestNote() {
+    try { window.localStorage.setItem(GUEST_NOTE_DISMISSED_KEY, '1'); } catch (err) { /* ignore */ }
+  }
+
   function levelOf(levels, id) {
     for (var i = 0; i < levels.length; i++) if (levels[i].id === id) return levels[i];
     return levels[2];
@@ -200,7 +226,14 @@
     });
 
     var overlay = $('overlay');
-    var panels = { start: $('panel-start'), pause: $('panel-pause'), over: $('panel-over') };
+    var panels = {
+      start: $('panel-start'),
+      pause: $('panel-pause'),
+      pauseConfirm: $('panel-pause-confirm'),
+      over: $('panel-over')
+    };
+    var peekBtn = $('btn-peek');
+    var peeking = false;
     var speedValueEl = $('speed-value');
     var growthValueEl = $('growth-value');
     var themeValueEl = $('theme-value');
@@ -305,16 +338,42 @@
     }
 
     // ---- overlay panels ---------------------------------------------------------
+    // The eye button (game-over panel only) lets you see the exact cell the
+    // snake ended on. The canvas itself never redraws once the run is over, so
+    // hiding the panel's own background and text reveals the frozen board
+    // underneath — nothing needs to be redrawn. Inline styles are used for the
+    // overlay backdrop (rather than a CSS class) so this always wins over every
+    // theme's own overlay background, with no specificity fights.
+    function setPeeking(on) {
+      peeking = on;
+      if (peekBtn) peekBtn.setAttribute('aria-pressed', String(on));
+      if (!overlay) return;
+      overlay.classList.toggle('is-peeking', on);
+      if (on) {
+        overlay.style.background = 'transparent';
+        overlay.style.backdropFilter = 'none';
+        overlay.style.webkitBackdropFilter = 'none';
+      } else {
+        overlay.style.removeProperty('background');
+        overlay.style.removeProperty('backdrop-filter');
+        overlay.style.removeProperty('-webkit-backdrop-filter');
+      }
+    }
+
     function showPanel(name) {
+      setPeeking(false);
       for (var key in panels) {
         if (panels[key]) panels[key].classList.toggle('is-visible', key === name);
       }
       if (overlay) overlay.classList.add('is-visible');
+      if (peekBtn) peekBtn.hidden = name !== 'over';
       fitOverlayPanel();
     }
 
     function hideOverlay() {
+      setPeeking(false);
       if (overlay) overlay.classList.remove('is-visible');
+      if (peekBtn) peekBtn.hidden = true;
     }
 
     // Fit result/start/pause panels to the screen without a scrollbar. This
@@ -684,20 +743,45 @@
       if (board.last) renderBoard();
     }
 
-    function saveNoteShow(text, showActions) {
+    // While the note is up, the game-over panel is tagged .has-note. On phones
+    // the CSS uses that to slide the final score left, out from under the eye
+    // button in the top-right corner; once the note goes away the score moves
+    // back, because by then it no longer collides with the eye.
+    function saveNoteShow(text, showActions, dismissible) {
       if (saveNote) saveNote.hidden = false;
       if (saveNoteText) saveNoteText.textContent = text;
       if (saveNoteActions) saveNoteActions.hidden = !showActions;
+      var closeBtn = $('btn-final-save-close');
+      if (closeBtn) closeBtn.hidden = !dismissible;
+      if (panels.over) panels.over.classList.add('has-note');
+      fitOverlayPanel();
+    }
+
+    function saveNoteHide() {
+      if (saveNote) saveNote.hidden = true;
+      if (panels.over) panels.over.classList.remove('has-note');
       fitOverlayPanel();
     }
 
     // Guests can play, but nothing is stored for them. A finished guest run is
     // held here and saved the moment they sign in. Starting another run or
     // signing out discards it, so a run is never attached to the wrong account.
+    // The reminder note only shows for a guest's first few deaths — after that
+    // it would just be nagging someone who has decided to stay signed out.
     function saveRun(payload) {
       if (!authUser) {
         pendingRun = payload;
-        saveNoteShow('Guest runs are not saved. Sign in to keep this run.', true);
+        var deaths = bumpGuestDeaths();
+        if (deaths <= GUEST_DEATH_NOTE_LIMIT && !guestNoteDismissed()) {
+          saveNoteShow(
+            'This run is only saved locally, and will be lost if you clear your browser\u2019s cookies. ' +
+            'Sign in or create an account to save this run.',
+            true,
+            true
+          );
+        } else {
+          saveNoteHide();
+        }
         return;
       }
       submitScore(payload);
@@ -907,7 +991,7 @@
       setLocked(true);
       playingNow = true;
       pendingRun = null; // starting a new run discards an unsaved guest run
-      if (saveNote) saveNote.hidden = true;
+      saveNoteHide();
       syncRain();
     });
 
@@ -930,6 +1014,7 @@
       setPlaying(true);
       playingNow = true;
       syncRain();
+      lockPauseButton();
     });
 
     game.on('gameover', function (state) {
@@ -981,14 +1066,38 @@
 
     function guard() { return !locked; }
 
+    // The run is already over by the time the death screen shows, so "Quit" just
+    // closes it and returns to the start screen (modifiers are unlocked by then).
+    // Esc on the game-over screen does the same thing.
+    function quitFromGameOver() { showPanel('start'); }
+
+    // After resuming, the pause button/P/Esc are locked out for the same 5
+    // seconds the engine enforces, so there is visible feedback instead of a
+    // silent no-op if the player mashes pause right after unpausing.
+    function lockPauseButton() {
+      if (!pauseBtn || !game.pauseLockoutRemaining) return;
+      var wait = game.pauseLockoutRemaining();
+      if (wait <= 0) return;
+      pauseBtn.disabled = true;
+      window.setTimeout(function () { pauseBtn.disabled = false; }, Math.ceil(wait) + 20);
+    }
+
     bindClick('btn-start', function () { game.start(); });
     bindClick('btn-again', function () { game.start(); });
     bindClick('btn-resume', function () { game.resume(); });
     bindClick('btn-quit', function () { game.quit(); });
-    // The run is already over by the time the death screen shows, so "Quit" just
-    // closes it and returns to the start screen (modifiers are unlocked by then).
-    bindClick('btn-quit-over', function () { showPanel('start'); });
+    bindClick('btn-quit-over', quitFromGameOver);
     bindClick('pause-btn', function () { game.togglePause(); });
+    bindClick('btn-peek', function () { setPeeking(!peeking); });
+    // The X on the "only saved locally" note: close it now and never show it
+    // again on this device.
+    bindClick('btn-final-save-close', function () {
+      dismissGuestNote();
+      saveNoteHide();
+    });
+    // The confirm screen shown by Esc while paused.
+    bindClick('btn-pause-confirm-yes', function () { game.quit(); });
+    bindClick('btn-pause-confirm-no', function () { game.resume(); });
 
     // Navigation remains usable during play: pause before the anchor scrolls.
     all('.masthead__meta a[href^="#"]').forEach(function (link) {
@@ -1088,7 +1197,7 @@
           pendingRun = null;
           comboBest = {};
           setToken(null);
-          if (saveNote) saveNote.hidden = true;
+          saveNoteHide();
           renderAuth();
           renderXp(null);
           loadBoard();
@@ -1127,87 +1236,58 @@
       var target = e.target;
       if (target && target.closest && target.closest('input, textarea, select, [contenteditable]')) return;
       var key = (e.key || '').toLowerCase();
-      if (key === 'p' || key === 'escape') {
-        var st = game.state();
+      var st = game.state();
+      // A panel only counts as open while the overlay is showing. hideOverlay()
+      // leaves the last panel's own is-visible class in place (fitOverlayPanel
+      // relies on it), so checking the panel alone would mistake a fresh run
+      // started from the death screen for an open game-over screen.
+      var overlayOpen = !!(overlay && overlay.classList.contains('is-visible'));
+      var confirmOpen = overlayOpen && !!(panels.pauseConfirm && panels.pauseConfirm.classList.contains('is-visible'));
+      var overOpen = overlayOpen && !st.running && !!(panels.over && panels.over.classList.contains('is-visible'));
+
+      if (key === 'p') {
         if (st.running) {
           e.preventDefault();
           game.togglePause();
+        }
+        return;
+      }
+
+      if (key === 'escape') {
+        if (overOpen) {
+          // Esc on the game-over screen is the same as pressing Quit.
+          e.preventDefault();
+          quitFromGameOver();
+        } else if (confirmOpen) {
+          // Esc again on the "are you sure" screen confirms the quit.
+          e.preventDefault();
+          game.quit();
+        } else if (st.paused) {
+          // Esc while simply paused asks for confirmation instead of resuming.
+          e.preventDefault();
+          showPanel('pauseConfirm');
+        } else if (st.running) {
+          e.preventDefault();
+          game.pause();
+        }
+        return;
+      }
+
+      if (key === 'enter') {
+        // Enter always gets you back into the game: it resumes from the plain
+        // pause screen, and backs out of the quit confirmation the same way
+        // clicking "No, keep playing" would.
+        if (st.paused) {
+          e.preventDefault();
+          game.resume();
         }
       }
     });
 
     // ---- Matrix rain (terminal theme, page background only) -----------------------------------
-    // Time-based, independent of refresh rate: 8 rows/second, larger 20px glyphs
-    // on a 22px grid. Bigger type in fewer columns is both easier to read and
-    // strictly cheaper to draw than the old 13px/14px grid.
-    var RAIN_COL = 22;
-    var rain = {
-      canvas: null, ctx: null, raf: 0, drops: [], w: 0, h: 0,
-      running: false, last: null, accumulator: 0, stepMs: 1000 / 8,
-      glyphs: '01ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽ'
-    };
-
-    function sizeRain() {
-      if (!rain.canvas) return;
-      rain.w = window.innerWidth;
-      rain.h = window.innerHeight;
-      rain.canvas.width = rain.w;
-      rain.canvas.height = rain.h;
-      var cols = Math.ceil(rain.w / RAIN_COL);
-      if (rain.drops.length !== cols) {
-        rain.drops = [];
-        for (var i = 0; i < cols; i++) rain.drops.push(Math.floor(Math.random() * -50));
-      }
-    }
-
-    function rainFrame(t) {
-      if (!rain.running) { rain.raf = 0; return; }
-      rain.raf = window.requestAnimationFrame(rainFrame);
-      if (document.hidden) { rain.last = null; rain.accumulator = 0; return; }
-      var dt = rain.last == null ? 0 : Math.min(t - rain.last, 250);
-      rain.last = t;
-      rain.accumulator += dt;
-      if (rain.accumulator < rain.stepMs) return;
-      rain.accumulator %= rain.stepMs;
-
-      var ctx = rain.ctx;
-      ctx.fillStyle = 'rgba(3, 7, 10, 0.13)';
-      ctx.fillRect(0, 0, rain.w, rain.h);
-      ctx.font = '20px "IBM Plex Mono", monospace';
-      ctx.fillStyle = 'rgba(49, 240, 132, 0.92)';
-      for (var i = 0; i < rain.drops.length; i++) {
-        var ch = rain.glyphs.charAt(Math.floor(Math.random() * rain.glyphs.length));
-        ctx.fillText(ch, i * RAIN_COL, rain.drops[i] * RAIN_COL);
-        if (rain.drops[i] * RAIN_COL > rain.h && Math.random() > 0.975) rain.drops[i] = 0;
-        rain.drops[i] += 1;
-      }
-    }
-
+    // The rain itself lives in public/rain.js so the profile page can share it.
     function startMatrixRain(enable) {
-      if (!enable || window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        rain.running = false;
-        window.cancelAnimationFrame(rain.raf);
-        rain.raf = 0;
-        rain.last = null;
-        rain.accumulator = 0;
-        if (rain.canvas) rain.canvas.style.display = 'none';
-        return;
-      }
-      if (!rain.canvas) {
-        rain.canvas = $('matrix-rain');
-        if (!rain.canvas) return;
-        rain.ctx = rain.canvas.getContext('2d');
-        if (!rain.ctx) return;
-        window.addEventListener('resize', sizeRain);
-      }
-      rain.canvas.style.display = 'block';
-      if (!rain.running) {
-        sizeRain();
-        rain.running = true;
-        rain.last = null;
-        rain.accumulator = 0;
-        rain.raf = window.requestAnimationFrame(rainFrame);
-      }
+      if (window.MatrixRain) window.MatrixRain.set(enable);
     }
 
     // ---- copy buttons on code blocks ----------------------------------------------------------

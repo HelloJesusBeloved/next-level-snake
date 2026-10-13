@@ -18,12 +18,12 @@
   <circle cx="46" cy="14" r="4.5" fill="#2ce05e"/>
   <circle cx="18" cy="15" r="3.2" fill="#2ce05e"/>
   <g shape-rendering="crispEdges">
-    <rect x="5" y="16" width="5" height="3" fill="#000"/>
-    <rect x="53" y="16" width="5" height="3" fill="#000"/>
-    <rect x="9" y="13" width="20" height="12" fill="#000" stroke="#5c6b63" stroke-width="1"/>
-    <rect x="33" y="13" width="20" height="12" fill="#000" stroke="#5c6b63" stroke-width="1"/>
-    <rect x="27" y="16" width="10" height="3" fill="#000"/>
-    <rect x="12" y="15" width="5" height="2" fill="#ffffff" fill-opacity="0.85"/>
-    <rect x="36" y="15" width="5" height="2" fill="#ffffff" fill-opacity="0.85"/>
+    <rect x="5" y="13" width="5" height="3" fill="#000"/>
+    <rect x="53" y="13" width="5" height="3" fill="#000"/>
+    <rect x="9" y="10" width="20" height="12" fill="#000" stroke="#5c6b63" stroke-width="1"/>
+    <rect x="33" y="10" width="20" height="12" fill="#000" stroke="#5c6b63" stroke-width="1"/>
+    <rect x="27" y="13" width="10" height="3" fill="#000"/>
+    <rect x="12" y="12" width="5" height="2" fill="#ffffff" fill-opacity="0.85"/>
+    <rect x="36" y="12" width="5" height="2" fill="#ffffff" fill-opacity="0.85"/>
   </g>
 </svg>

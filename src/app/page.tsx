@@ -97,6 +97,21 @@ export default function Home() {
           <div className="screen">
             <div id="snake-root" />
 
+            <button
+              className="btn-peek"
+              id="btn-peek"
+              type="button"
+              aria-pressed="false"
+              aria-label="Show where the snake ended up"
+              title="Show / hide the game-over screen"
+              hidden
+            >
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+            </button>
+
             <div className="overlay is-visible" id="overlay">
               <div className="panel is-visible" id="panel-start">
                 <p className="panel__eyebrow">Ready</p>
@@ -128,15 +143,31 @@ export default function Home() {
                 </dl>
                 <p className="panel__body">
                   You can scroll while paused. Modifiers stay locked for this
-                  run. Press <kbd>P</kbd> or <kbd>Esc</kbd> to resume and lock the
-                  page again.
+                  run. <kbd>Enter</kbd>, <kbd>P</kbd> or any steering key resumes; <kbd>Esc</kbd> quits.
                 </p>
+                <p className="panel__hint">After you resume, pausing again is locked for 5 seconds.</p>
                 <div className="panel__actions">
                   <button className="btn btn--primary" id="btn-resume" type="button">
                     Resume
                   </button>
                   <button className="btn" id="btn-quit" type="button">
                     Quit run
+                  </button>
+                </div>
+              </div>
+
+              <div className="panel" id="panel-pause-confirm">
+                <p className="panel__eyebrow">Hold up</p>
+                <h2 className="panel__title">You for sure want to quit the run man?</h2>
+                <p className="panel__body">
+                  <kbd>Esc</kbd> again quits for real. <kbd>Enter</kbd> or any steering key takes you back to the game.
+                </p>
+                <div className="panel__actions">
+                  <button className="btn btn--primary" id="btn-pause-confirm-no" type="button">
+                    No, keep playing
+                  </button>
+                  <button className="btn btn--danger" id="btn-pause-confirm-yes" type="button">
+                    Yes, quit
                   </button>
                 </div>
               </div>
@@ -170,6 +201,7 @@ export default function Home() {
                   New best for this mode
                 </p>
                 <div className="save-note" id="final-save" hidden>
+                  <button className="save-note__close" id="btn-final-save-close" type="button" aria-label="Dismiss, and don't show this again" title="Don't show this again" hidden>✕</button>
                   <p id="final-save-text" />
                   <div className="panel__actions" id="final-save-actions">
                     <button className="btn btn--small btn--primary" id="btn-final-signin" type="button">
