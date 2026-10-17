@@ -407,7 +407,7 @@
       ? last10.reduce(function (sum, g) { return sum + g.score; }, 0) / last10.length
       : 0;
     $('pf-tiles').innerHTML =
-      tile('games', 'Games completed', comma(s.completed), s.last30 + ' in the last 30 days') +
+      tile('games', 'Games completed in last 30 days', comma(s.last30), comma(s.completed) + ' all-time') +
       tile('best', 'Best score', s.best, s.bestGame ? esc(modeLabel(s.bestGame)) : 'No games yet') +
       tile('avg', 'Average score', s.completed ? num(s.avg) : '\u2014', last10.length ? 'last ' + last10.length + ': ' + num(last10avg) : 'play a game') +
       tile('food', 'Food eaten', comma(s.food), 'pieces across runs') +

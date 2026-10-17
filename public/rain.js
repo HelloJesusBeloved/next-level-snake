@@ -16,9 +16,11 @@
   var COL = 22;
   var GLYPHS = '01ﾊﾐﾋｰｳｼﾅﾓﾆｻﾜﾂｵﾘｱﾎﾃﾏｹﾒｴｶｷﾑﾕﾗｾﾈｽ';
 
+  var FADE_OUT_MS = 1400;
   var rain = {
     canvas: null, ctx: null, raf: 0, drops: [], w: 0, h: 0, dpr: 1,
-    running: false, last: null, accumulator: 0, stepMs: 1000 / 8, bound: false
+    running: false, last: null, accumulator: 0, stepMs: 1000 / 8, bound: false,
+    fadeTimer: 0
   };
 
   // Reuse the page's #matrix-rain canvas when it has one; otherwise create it.
@@ -101,13 +103,31 @@
   }
 
   function set(enable) {
-    var c = ensureCanvas();
-    if (!c || !rain.ctx) return;
     if (!enable) {
-      stop();
-      c.style.display = 'none';
+      // Fade the live canvas away while a game starts rather than hiding it
+      // instantly. Keep the frame loop alive beneath the opacity transition.
+      var existing = rain.canvas || document.getElementById('matrix-rain');
+      if (!existing) return;
+      rain.canvas = existing;
+      if (!rain.ctx) rain.ctx = existing.getContext('2d');
+      if (!rain.ctx) return;
+      global.clearTimeout(rain.fadeTimer);
+      existing.style.display = 'block';
+      existing.classList.add('is-fading');
+      rain.fadeTimer = global.setTimeout(function () {
+        existing.style.display = 'none';
+        existing.classList.remove('is-fading');
+        rain.fadeTimer = 0;
+        stop();
+      }, FADE_OUT_MS);
       return;
     }
+
+    var c = ensureCanvas();
+    if (!c || !rain.ctx) return;
+    global.clearTimeout(rain.fadeTimer);
+    rain.fadeTimer = 0;
+    c.classList.remove('is-fading');
     c.style.display = 'block';
     if (!rain.bound) {
       rain.bound = true;
@@ -115,10 +135,7 @@
       global.addEventListener('orientationchange', size);
     }
     size();
-    // The rain always animates. It is a background the player opted into by
-    // choosing the Terminal theme, so the OS "reduce motion" setting does not
-    // switch it off — that used to leave a frozen frame that then vanished on
-    // the next resize, which read as "the rain disappeared" on phones.
+    // The rain always animates once Terminal is enabled, including on mobile.
     if (!rain.running) {
       rain.running = true;
       rain.last = null;

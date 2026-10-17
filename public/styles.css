@@ -544,9 +544,14 @@ body.has-run .pausebar .btn {
 .rail {
   display: grid;
   gap: 18px;
-  position: sticky;
-  top: 22px;
+  /* Keep the rail in normal flow: Arcade's cabinet has decorative bottom
+     padding that changes the shell height, and a sticky element gets clamped
+     against that changing edge when you switch themes. */
+  position: static;
+  top: auto;
+  align-self: start;
   align-items: start;
+  overflow-anchor: none;
 }
 
 .card {
@@ -1193,9 +1198,15 @@ html[data-theme='violet'] body { background-color: #12081f; }
   height: 100%;
   display: none;
   opacity: 0.2;
+  transition: opacity 1400ms ease;
   pointer-events: none;
   z-index: 1;
 }
+.matrix-rain.is-fading { opacity: 0; }
+
+/* The script gradually lowers the existing rain opacity from 0.2 to zero
+   while the animation loop keeps running, then hides it after 1.4s. */
+.matrix-rain.is-fading { transition-duration: 1400ms; }
 html[data-theme='terminal'] .matrix-rain { display: block; }
 
 /* hall: the two public boards (Standard and Custom) sit side by side */
@@ -2634,6 +2645,70 @@ body.has-run .shell { z-index: 20; }
   .result-panel .save-note { font-size: 0.92em; line-height: 1.45; padding: 0.65em 2.2em 0.65em 0.85em; }
   .result-panel .panel__actions .btn { min-height: 2.8em; padding: 0.6em 1.1em; font-size: 0.8em; }
 }
+/* Arcade Easter Egg message popup: fixed in top-right corner across all scroll positions */
+.arcade-egg-toast {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  left: auto;
+  z-index: 10000;
+  width: min(390px, calc(100vw - 36px));
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(14, 20, 52, 0.96);
+  border: 1px solid rgba(255, 59, 78, 0.65);
+  box-shadow: 0 0 24px rgba(255, 59, 78, 0.35), 0 16px 40px rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateX(40px) scale(0.95);
+  transition: opacity 220ms cubic-bezier(0.16, 1, 0.3, 1), transform 220ms cubic-bezier(0.16, 1, 0.3, 1), visibility 220ms ease;
+  pointer-events: auto;
+}
+.arcade-egg-toast.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(0) scale(1);
+}
+.arcade-egg-toast__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+}
+.arcade-egg-toast__badge {
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  font-weight: 700;
+  color: #ff3b4e;
+  text-transform: uppercase;
+}
+.arcade-egg-toast__close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 13px;
+  line-height: 1;
+  border-radius: 4px;
+}
+.arcade-egg-toast__close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+}
+.arcade-egg-toast__text {
+  margin: 0;
+  word-break: break-word;
+  color: #f1f3f8;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .overlay { transition: none; }
 }

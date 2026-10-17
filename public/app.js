@@ -490,18 +490,24 @@
     }
 
     function applyTheme() {
-      // A theme swap must repaint in place, never move the page. Arcade adds
-      // cabinet padding below the frame, which changes the document height; if
-      // the browser nudges the scroll offset to compensate, put it straight
-      // back so the clicked theme button stays exactly where it was.
+      // Theme furniture (notably the Arcade deck) may change the document's
+      // height. Preserve the exact viewport both immediately and after the
+      // browser's next scroll-anchor/layout pass; the rail itself is normal
+      // flow rather than sticky so its vertical coordinate cannot be clamped
+      // against the changing shell height.
       var sx = window.scrollX || 0;
       var sy = window.scrollY || 0;
       document.documentElement.setAttribute('data-theme', settings.theme);
       game.setTheme(THEMES[settings.theme]);
       syncRain();
-      if ((window.scrollX || 0) !== sx || (window.scrollY || 0) !== sy) {
-        window.scrollTo(sx, sy);
+      function restoreScroll() {
+        if ((window.scrollX || 0) !== sx || (window.scrollY || 0) !== sy) window.scrollTo(sx, sy);
       }
+      restoreScroll();
+      window.requestAnimationFrame(function () {
+        restoreScroll();
+        window.requestAnimationFrame(restoreScroll);
+      });
     }
 
     // The snake gets the CPU first: decorative background animation is
@@ -979,6 +985,10 @@
 
     // ---- game events ------------------------------------------------------------------------
     game.on('score', setScore);
+    game.on('hackstart', function () { hideOverlay(); });
+    game.on('hackend', function () {
+      if (!game.state().running && !game.state().started) showPanel('start');
+    });
 
     game.on('start', function () {
       setScore(0);
@@ -1098,6 +1108,121 @@
     // The confirm screen shown by Esc while paused.
     bindClick('btn-pause-confirm-yes', function () { game.quit(); });
     bindClick('btn-pause-confirm-no', function () { game.resume(); });
+
+    // ---- Arcade Easter Egg -------------------------------------------------------------------
+    var ARCADE_MESSAGES = [
+      "Yes, if you were wondering AI coding back-end is less fun lol, but not impossible",
+      "I like the way you think <3",
+      "You can do this too you know",
+      "Don't believe me?",
+      "Here, have a look at the prompts I used to make this site https:linktoatbdprobablygithubpagewiththepromptsiusedtomakethissitebutdon'tactuallyputthisinthetextboxyetactuallywhynotputthisinthepopupboxIlladdthelinkthenlol",
+      "Ps. the list of prompts does not include the 10s and 10s of fixer prompts I had to go through to get the things I wanted to work working lol 😅",
+      "But really all you need is determination, and you can build anything",
+      "Pss. If you disagree with the previous statement, ask AI to teach you how to use it to code(:"
+    ];
+    var eggIndex = 0;
+    var arcadeCurrentIndex = -1;
+    var arcadeToastTimer = 0;
+
+    function showArcadeToastAt(index) {
+      var toast = $('arcade-egg-toast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'arcade-egg-toast';
+        toast.className = 'arcade-egg-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        toast.innerHTML =
+          '<div class="arcade-egg-toast__head">' +
+            '<span class="arcade-egg-toast__badge">Arcade secret</span>' +
+            '<button type="button" class="arcade-egg-toast__close" id="arcade-egg-close" aria-label="Close message">✕</button>' +
+          '</div>' +
+          '<p class="arcade-egg-toast__text" id="arcade-egg-text"></p>';
+        document.body.appendChild(toast);
+        var close = toast.querySelector('#arcade-egg-close');
+        if (close) {
+          close.addEventListener('click', function (e) {
+            e.stopPropagation();
+            window.clearTimeout(arcadeToastTimer);
+            toast.classList.remove('is-visible');
+          });
+        }
+      }
+      var textEl = toast.querySelector('#arcade-egg-text');
+      index = ((index % ARCADE_MESSAGES.length) + ARCADE_MESSAGES.length) % ARCADE_MESSAGES.length;
+      arcadeCurrentIndex = index;
+      eggIndex = (index + 1) % ARCADE_MESSAGES.length;
+      if (textEl) textEl.textContent = ARCADE_MESSAGES[index];
+
+      window.clearTimeout(arcadeToastTimer);
+      toast.classList.remove('is-visible');
+      // trigger reflow for smooth pop-in animation from top right
+      void toast.offsetWidth;
+      toast.classList.add('is-visible');
+
+      // Auto-disappear after 10 seconds
+      arcadeToastTimer = window.setTimeout(function () {
+        toast.classList.remove('is-visible');
+      }, 10000);
+    }
+
+    function showArcadeToast() { showArcadeToastAt(eggIndex); }
+
+    document.addEventListener('click', function (e) {
+      var t = e.target;
+      if (!t) return;
+
+      // Leftmost button (Button 1): go back one message, but only while a
+      // popup is actually visible. At the first message there is no previous.
+      var btn1 = t.closest ? t.closest('.cabinet__buttons i:nth-child(1), [data-arcade-btn="1"]') : null;
+      if (btn1) {
+        e.preventDefault();
+        e.stopPropagation();
+        var toast1 = $('arcade-egg-toast');
+        if (toast1 && toast1.classList.contains('is-visible') && arcadeCurrentIndex > 0) {
+          window.clearTimeout(arcadeToastTimer);
+          showArcadeToastAt(arcadeCurrentIndex - 1);
+        }
+        return;
+      }
+
+      // Rightmost red button (Button 4): triggers the easter egg messages
+      var btn4 = t.closest ? t.closest('.cabinet__buttons i:nth-child(4), [data-arcade-btn="4"]') : null;
+      if (btn4) {
+        e.preventDefault();
+        e.stopPropagation();
+        showArcadeToast();
+        return;
+      }
+
+      // Blue button (Button 3, immediately left of button 4): clears the current message if visible
+      var btn3 = t.closest ? t.closest('.cabinet__buttons i:nth-child(3), [data-arcade-btn="3"]') : null;
+      if (btn3) {
+        e.preventDefault();
+        e.stopPropagation();
+        var toast3 = $('arcade-egg-toast');
+        if (toast3 && toast3.classList.contains('is-visible')) {
+          window.clearTimeout(arcadeToastTimer);
+          toast3.classList.remove('is-visible');
+        }
+        return;
+      }
+
+      // Yellow button (Button 2, left of blue): clears current message AND resets history so next press starts at beginning
+      var btn2 = t.closest ? t.closest('.cabinet__buttons i:nth-child(2), [data-arcade-btn="2"]') : null;
+      if (btn2) {
+        e.preventDefault();
+        e.stopPropagation();
+        eggIndex = 0;
+        arcadeCurrentIndex = -1;
+        var toast2 = $('arcade-egg-toast');
+        if (toast2 && toast2.classList.contains('is-visible')) {
+          window.clearTimeout(arcadeToastTimer);
+          toast2.classList.remove('is-visible');
+        }
+        return;
+      }
+    });
 
     // Navigation remains usable during play: pause before the anchor scrolls.
     all('.masthead__meta a[href^="#"]').forEach(function (link) {

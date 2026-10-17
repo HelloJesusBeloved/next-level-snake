@@ -92,14 +92,100 @@ html[data-theme='classic'] .snake-field::after { background: none; }
   top: 14px;
   left: 18px;
   z-index: 6;
-  color: #31f084;
+  color: #ffffff;
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-size: clamp(22px, 3vw, 30px);
   font-weight: 500;
   line-height: 1;
-  text-shadow: 0 0 14px rgba(49, 240, 132, 0.5);
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.85);
   pointer-events: none;
   user-select: none;
+}
+
+.terminal-hack-code {
+  display: none;
+  position: absolute;
+  inset: 12px 16px;
+  z-index: 5;
+  margin: 0;
+  padding: 0;
+  color: #31f084;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: clamp(11px, 1.3vw, 14px);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-y: auto;
+  pointer-events: none;
+  text-shadow: 0 0 8px rgba(49, 240, 132, 0.45);
+}
+
+.snake-root.is-hacking .terminal-hack-code {
+  display: block;
+}
+
+.snake-root.is-hacking > .snake-frame > .snake-field > .terminal-cursor {
+  display: none !important;
+}
+
+.terminal-hack-cursor {
+  display: inline-block;
+  color: #ffffff;
+  font-weight: 700;
+  text-shadow: 0 0 10px rgba(255, 255, 255, 0.9);
+  animation: terminal-cursor-blink 1.2s step-end infinite;
+  margin-left: 2px;
+}
+
+.terminal-access-granted {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  background: rgba(0, 12, 5, 0.32);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 110ms ease, visibility 110ms ease;
+}
+.terminal-access-granted.is-visible {
+  opacity: 1;
+  visibility: visible;
+  animation: terminal-access-flash 1.2s ease-out both;
+}
+.terminal-access-granted__text {
+  color: #a6ffc2;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: clamp(32px, 6vw, 64px);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-align: center;
+  text-shadow: 0 0 6px #2ce05e, 0 0 18px #2ce05e, 0 0 38px rgba(44, 224, 94, 0.85);
+  animation: terminal-access-text-flash 160ms steps(2, end) 4;
+}
+.terminal-access-glasses {
+  position: absolute;
+  z-index: 9;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  filter: drop-shadow(0 0 5px rgba(0, 0, 0, 0.85));
+  pointer-events: none;
+}
+.terminal-access-glasses.is-visible { display: flex; }
+.terminal-access-glasses svg { width: 100%; height: 100%; overflow: visible; }
+@keyframes terminal-access-flash {
+  0%, 100% { background: rgba(0, 12, 5, 0.12); }
+  12%, 30% { background: rgba(44, 224, 94, 0.32); }
+  42%, 58% { background: rgba(0, 12, 5, 0.08); }
+  70% { background: rgba(44, 224, 94, 0.24); }
+}
+@keyframes terminal-access-text-flash {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.38; }
 }
 
 /* Visible only in Terminal, before/after a run or while it is paused. */
@@ -239,7 +325,21 @@ html[data-theme='arcade'] .cabinet__deck {
     0 20px 36px -22px rgba(0, 0, 0, 0.92);
 }
 
-.cabinet__stick { position: relative; width: 28px; height: 54px; flex: none; }
+.cabinet__stick {
+  position: relative;
+  width: 28px;
+  height: 54px;
+  flex: none;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  pointer-events: auto;
+}
+
+.cabinet__stick:active,
+.cabinet__stick.is-grabbed {
+  cursor: grabbing;
+}
 
 .cabinet__stick::before {
   content: '';
@@ -251,6 +351,8 @@ html[data-theme='arcade'] .cabinet__deck {
   margin-left: -4.5px;
   border-radius: 5px;
   background: linear-gradient(180deg, #ccd2da, #7c848e);
+  transform-origin: 50% 100%;
+  transform: rotate(var(--stick-rot, 0deg));
 }
 
 .cabinet__stick i {
@@ -264,10 +366,18 @@ html[data-theme='arcade'] .cabinet__deck {
   border: 3px solid #22080f;
   background: radial-gradient(circle at 32% 28%, #ff929e, #d81f3c 58%, #8b1029);
   transform-origin: 50% 100%;
+  transform: translate(var(--stick-x, 0px), 0px) rotate(var(--stick-rot, 0deg));
   animation: stick-wobble 2.8s ease-in-out infinite;
+  pointer-events: auto;
 }
 
-.cabinet__buttons { display: flex; gap: 12px; }
+.cabinet__stick.is-grabbed i,
+.cabinet__stick[style*="--stick-rot"] i {
+  animation: none !important;
+}
+
+.cabinet__deck { pointer-events: auto; }
+.cabinet__buttons { display: flex; gap: 12px; pointer-events: auto; }
 
 .cabinet__buttons i {
   width: 32px;
@@ -275,6 +385,16 @@ html[data-theme='arcade'] .cabinet__deck {
   border-radius: 50%;
   border: 4px solid #22080f;
   box-shadow: inset 0 -4px 0 rgba(0, 0, 0, 0.3), 0 3px 0 rgba(0, 0, 0, 0.38);
+  pointer-events: auto;
+  cursor: pointer;
+  user-select: none;
+  transition: transform 80ms ease, box-shadow 80ms ease;
+}
+
+.cabinet__buttons i:active,
+.cabinet__buttons i.is-pressed {
+  transform: translateY(3px);
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, 0.4), 0 1px 0 rgba(0, 0, 0, 0.5);
 }
 
 .cabinet__buttons i:nth-child(1) { background: #ff3b4e; }
@@ -282,14 +402,136 @@ html[data-theme='arcade'] .cabinet__deck {
 .cabinet__buttons i:nth-child(3) { background: #8fc1ff; }
 .cabinet__buttons i:nth-child(4) { background: #ff3b4e; }
 
-.cabinet__coin {
-  width: 46px;
+/* Arcade Deck Cartridge Slot (Drag to pull out Snake Cartridge) */
+.cabinet__slot {
+  position: relative;
+  width: 44px;
   height: 16px;
-  border-radius: 8px;
-  border: 3px solid #22080f;
-  background: linear-gradient(180deg, #9ba4ae, #5b646e);
-  box-shadow: inset 0 2px 0 rgba(255, 255, 255, 0.38);
   flex: none;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  z-index: 100;
+}
+
+.arcade-cartridge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 44px;
+  height: 16px;
+  border-radius: 5px;
+  border: 2px solid #22080f;
+  background: linear-gradient(180deg, #9ba4ae 0%, #686f7b 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+  cursor: grab;
+  transform: translateY(var(--cart-y, 0px));
+  transition: transform 220ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms ease;
+  transform-origin: top center;
+  box-sizing: border-box;
+}
+
+.arcade-cartridge.is-dragging {
+  cursor: grabbing;
+  transition: none;
+}
+
+.arcade-cartridge.is-ejected {
+  transform: translateY(48px);
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.9);
+}
+
+/* The visible back edge of the cartridge when inserted in the slot */
+.arcade-cartridge__back {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+}
+
+.arcade-cart-grip {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5px;
+}
+
+.arcade-cart-grip i {
+  display: block;
+  width: 16px;
+  height: 1.5px;
+  background: #22080f;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 1px;
+}
+
+/* The mini cartridge body revealed above when dragged down */
+.arcade-cartridge__body {
+  position: absolute;
+  bottom: calc(100% + 1px);
+  left: 0;
+  width: 40px;
+  height: 48px;
+  background: linear-gradient(180deg, #90949d 0%, #767a83 40%, #63666f 100%);
+  border: 2px solid #22080f;
+  border-radius: 5px 5px 0 0;
+  box-shadow: 0 -6px 16px rgba(0, 0, 0, 0.85), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  padding: 3px 4px;
+  box-sizing: border-box;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.arcade-cartridge.is-ejected .arcade-cartridge__body,
+.arcade-cartridge.is-dragging .arcade-cartridge__body,
+.arcade-cartridge[style*="--cart-y"] .arcade-cartridge__body {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.arcade-cart-notch {
+  position: absolute;
+  top: -2px;
+  right: 5px;
+  width: 8px;
+  height: 4px;
+  background: #22080f;
+  border-radius: 0 0 2px 2px;
+}
+
+/* Sideways SNAKE label */
+.arcade-cart-label {
+  background: linear-gradient(135deg, #0f1c11 0%, #152c1a 50%, #0c180e 100%);
+  border: 1px solid #234d2b;
+  border-radius: 3px;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.8);
+  box-sizing: border-box;
+}
+
+.arcade-cart-text {
+  font-family: 'Space Grotesk', 'Helvetica Neue', sans-serif;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.16em;
+  color: #2ce05e;
+  text-shadow: 0 0 5px rgba(44, 224, 94, 0.7), 0 1px 0 #000;
+  transform: rotate(-90deg);
+  white-space: nowrap;
+  line-height: 1;
+  display: block;
+  text-align: center;
 }
 
 @keyframes marquee-glow {
@@ -335,5 +577,7 @@ html[data-theme='arcade'] .cabinet__deck {
   .cabinet__stick::before { height: 26px; }
   .cabinet__buttons { gap: 8px; }
   .cabinet__buttons i { width: 24px; height: 24px; border-width: 3px; }
-  .cabinet__coin { display: none; }
+  .cabinet__slot { width: 36px; height: 16px; }
+  .arcade-cartridge { width: 36px; height: 16px; }
+  .arcade-cart-text { font-size: 6px; letter-spacing: 0.08em; }
 }
