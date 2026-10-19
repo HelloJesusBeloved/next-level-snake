@@ -15,6 +15,11 @@ module Api
       record = Score.new(score_params)
       record.user = current_user
       record.end_state = Score.sanitize_end_state(params[:end_state])
+      raw_end = params[:end_state]
+      explicit_quit = raw_end.respond_to?(:[]) && (raw_end[:cause] || raw_end["cause"]) == "quit"
+      if explicit_quit && record.end_state.nil?
+        return render json: { error: "A quit needs a valid ending position" }, status: :unprocessable_entity
+      end
 
       if record.save
         render json: { ok: true, best: best_map(current_user), xp: xp_payload(current_user) },

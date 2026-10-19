@@ -1585,12 +1585,13 @@ html[data-theme='terminal'] .matrix-rain { display: block; }
 .runs__when { font-size: 10px; color: var(--muted); }
 .runs__item.is-best .runs__score { color: var(--green); }
 .runs__item.is-best .runs__score::after { content: ' ★'; font-size: 10px; }
+.runs__item.is-quit .runs__score { color: var(--muted); }
 .runs__empty { padding: 6px 2px; font-size: 12px; color: var(--muted); }
 
-/* The pause button exists for touch screens only; desktop uses P / Esc. */
+/* No pre-game button or extra gap below the box. A paused run is still a run. */
 .pausebar { display: none; }
 @media (pointer: coarse), (max-width: 720px) {
-  .pausebar { display: flex; }
+  body.has-run .pausebar { display: flex; }
 }
 
 /* =====================================================================

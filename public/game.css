@@ -21,6 +21,14 @@
 
 .snake-root { width: 100%; }
 
+/* Native image/selection dragging must never steal a joystick gesture. */
+.snake-frame,
+.snake-frame * {
+  -webkit-user-drag: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
 .snake-frame {
   position: relative;
   width: 100%;
@@ -336,10 +344,21 @@ html[data-theme='arcade'] .cabinet__deck {
   pointer-events: auto;
 }
 
+/* The visual knob is small on phones; make near misses hit the stick too. */
+.cabinet__stick::after {
+  content: '';
+  position: absolute;
+  inset: -14px -18px -8px;
+  cursor: grab;
+  z-index: 2;
+}
+
 .cabinet__stick:active,
 .cabinet__stick.is-grabbed {
   cursor: grabbing;
 }
+
+.cabinet__stick.is-grabbed::after { cursor: grabbing; }
 
 .cabinet__stick::before {
   content: '';
@@ -560,11 +579,19 @@ html[data-theme='arcade'] .cabinet__deck {
   html[data-theme='arcade'] .cabinet__stick i { animation: none; }
 }
 
+/* When the rail is below the screen, reserve the deck's space in EVERY theme.
+   Otherwise toggling Arcade adds/removes 70-96px before the settings buttons
+   and mobile scroll anchoring visibly jumps the page between frames. */
+@media (max-width: 1100px) {
+  :root { --cabinet-bottom: 96px; }
+}
+
 @media (max-width: 720px) {
   :root {
     --frame-pad: 12px;
     --frame-radius: 20px;
     --field-radius: 6px;
+    --cabinet-bottom: 70px;
   }
   html[data-theme='arcade'] {
     --bezel-border: 4px;

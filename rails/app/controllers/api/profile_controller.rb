@@ -35,12 +35,13 @@ module Api
     private
 
     def render_profile(user, is_you)
-      games = user.scores.order(created_at: :desc, id: :desc).limit(MAX_GAMES)
+      games = user.scores.recorded.order(created_at: :desc, id: :desc).limit(MAX_GAMES)
+      total_games = user.scores.recorded.count
       
       # Rank calculation: 1 + number of players whose sum of completed scores
       # (excluding quits) is strictly greater.
       # First, find user's total score (completed runs only).
-      user_total = user.scores.where("end_state IS NULL OR end_state->>'cause' <> 'quit'").sum(:score)
+      user_total = user.scores.completed.sum(:score)
       
       # Count users who have a strictly greater sum.
       greater_count = Score.find_by_sql([<<-SQL.squish, user_total])
@@ -61,6 +62,7 @@ module Api
           favorite_theme: user.favorite_theme,
           created_at: user.created_at,
           rank: rank,
+          total_games: total_games,
           is_you: is_you,
           games: games.map { |game| game_json(game) }
         }

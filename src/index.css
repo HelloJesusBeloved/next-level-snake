@@ -1,0 +1,7 @@
+/* The game ships its own complete stylesheet (public/game.css +
+   public/styles.css, loaded from index.html). No Tailwind preflight here —
+   it would fight the hand-tuned cabinet CSS. */
+html,
+body {
+  min-height: 100%;
+}

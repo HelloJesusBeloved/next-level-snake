@@ -22,15 +22,21 @@ class Score < ApplicationRecord
   }
   validate :validate_speed!
   validate :validate_growth!
+  validate :validate_quit_score!
   before_validation :assign_combo
 
   def is_custom?
     speed_custom.present? || growth_custom.present?
   end
 
+  # A quit needs more than 10 points to become a logged game. Completed runs
+  # continue to power records, rank and XP; eligible quits count only as log entries.
+  scope :completed, -> { where("end_state IS NULL OR COALESCE(end_state->>'cause', '') <> 'quit'") }
+  scope :recorded, -> { where("end_state IS NULL OR COALESCE(end_state->>'cause', '') <> 'quit' OR score > 10") }
+
   # Best run for each combination, newest record wins ties.
   scope :best_per_combo, lambda {
-    select(
+    completed.select(
       "DISTINCT ON (speed_level, speed_custom, growth, growth_custom) " \
       "speed_level, speed_custom, growth, growth_custom, score, created_at"
     ).order(
@@ -96,6 +102,7 @@ class Score < ApplicationRecord
         SELECT DISTINCT ON (user_id, speed_level, speed_custom, growth, growth_custom)
           user_id, speed_level, speed_custom, growth, growth_custom, score, created_at
         FROM scores
+        WHERE end_state IS NULL OR COALESCE(end_state->>'cause', '') <> 'quit'
         ORDER BY user_id,
           speed_level NULLS FIRST, speed_custom NULLS FIRST,
           growth NULLS FIRST, growth_custom NULLS FIRST,
@@ -149,7 +156,7 @@ class Score < ApplicationRecord
 
   def self.xp_total(user)
     rows = where(user_id: user.id, speed_custom: nil, growth_custom: nil)
-           .where("end_state IS NULL OR COALESCE(end_state->>'cause', '') <> 'quit'")
+           .completed
            .pluck(:score, :speed_level)
     rows.sum do |score, speed_level|
       weight = BigDecimal(XP_WEIGHT.fetch(speed_level, 1.0).to_s)
@@ -194,6 +201,12 @@ class Score < ApplicationRecord
     else
       errors.add(:growth, "set exactly one of growth or growth_custom")
     end
+  end
+
+  def validate_quit_score!
+    return unless end_state.is_a?(Hash) && end_state["cause"] == "quit"
+
+    errors.add(:score, "must be over 10 to record a quit") if score.to_i <= 10
   end
 
   def exactly_one_of?(a, b)

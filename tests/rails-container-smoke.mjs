@@ -80,6 +80,27 @@ try {
   assert.equal(profile.user.games[0].end_state.cols, 24);
   assert.equal(profile.user.games[0].end_state.cause, 'crash');
   console.log('PASS: Rails profile shows the saved ending snake');
+
+  const quit = (score) => context.request.post(base + '/api/scores', {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      score, speed_level: 3, growth: 1,
+      end_state: { cols: 24, rows: 18, snake: [120, 119, 118], food: 200, crash: null, cause: 'quit' }
+    }
+  });
+  assert.equal((await quit(10)).status(), 422);
+  const savedQuit = await quit(11);
+  assert.equal(savedQuit.status(), 201);
+  assert.equal((await savedQuit.json()).best['3-1'], 1, 'quits do not become best scores');
+  const afterQuit = await (await context.request.get(base + '/api/profile')).json();
+  assert.equal(afterQuit.user.total_games, 2);
+  assert.equal(afterQuit.user.games.length, 2);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.locator('.pf-stat-badge__val')).toHaveText('2');
+  await expect(page.locator('.log__item.is-quit')).toHaveCount(1);
+  const boardAfterQuit = await (await context.request.get(base + '/api/leaderboard')).json();
+  assert.equal(boardAfterQuit.rows.find((row) => row.username === username).score, 1);
+  console.log('PASS: short quits are ignored and longer quits count only in the log and total');
   
   await page.locator('[data-fav-theme="violet"]').click();
   await expect(page.locator('#pf-fav-badge')).toContainText('Violet');
@@ -88,12 +109,16 @@ try {
   await expect(page.locator('#pf-fav-badge')).toContainText('Violet');
   console.log('PASS: favorite-theme updates work without resupplying a password');
   
-  await page.locator('.log__item [data-remove]').click();
-  await page.locator('.log__item [data-remove-yes]').click();
-  await expect(page.locator('.log__item')).toHaveCount(0);
+  await page.locator('.log__item:not(.is-quit) [data-remove]').click();
+  await page.locator('.log__item:not(.is-quit) [data-remove-yes]').click();
+  await expect(page.locator('.log__item')).toHaveCount(1);
   const board = await (await context.request.get(base + '/api/leaderboard')).json();
   assert.ok(!board.rows.some((row) => row.username === username));
-  console.log('PASS: profile deletion removes the run from the log and leaderboard');
+  await page.locator('.log__item.is-quit [data-remove]').click();
+  await page.locator('.log__item.is-quit [data-remove-yes]').click();
+  await expect(page.locator('.log__item')).toHaveCount(0);
+  await expect(page.locator('.pf-stat-badge__val')).toHaveText('0');
+  console.log('PASS: deleting completed and quit runs updates the log and leaderboard');
 
   assert.deepEqual(pageErrors, []);
   console.log('PASS: no browser script errors while running the actual Rails container');

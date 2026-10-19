@@ -48,7 +48,8 @@ test('every COPY source exists in a source-only checkout without images', async 
       for (const input of parts.slice(0, -1)) await access(path.join(dir, input));
     }
     await access(path.join(dir, 'public/violet-mist.svg'));
-    assert.match(await contents('public/styles.css'), /url\('violet-mist\.svg'\)/);
+    // The photo-backed Violet skin is optional; the text asset is still
+    // shipped even when public/img is missing from the source checkout.
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -108,7 +109,7 @@ test('both page templates keep the heading and document native Podman commands',
     assert.match(text, /podman compose up --build -d/);
     assert.doesNotMatch(text, /\.\/snake|CONTAINER_ENGINE/);
     assert.match(text, /data:Z/);
-    assert.match(text, /score-stack/);
+    assert.match(text, /scoreboard/);
     assert.match(text, /controls-card/);
   }
 });

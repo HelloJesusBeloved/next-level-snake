@@ -193,6 +193,9 @@
     if (stickEl) {
       function onStickDown(e) {
         if (e.button !== undefined && e.button !== 0) return;
+        if (isStickGrabbed) return;
+        e.preventDefault();
+        e.stopPropagation();
         isStickGrabbed = true;
         cancelStickSpring();
         stickEl.classList.add('is-grabbed');
@@ -204,32 +207,33 @@
         }
 
         function onStickMove(ev) {
-          if (!isStickGrabbed) return;
+          if (!isStickGrabbed || (pointerId !== undefined && ev.pointerId !== pointerId)) return;
+          if (ev.cancelable) ev.preventDefault();
           var dx = ev.clientX - stickOriginX;
           var deg = Math.max(-44, Math.min(44, dx * 1.15));
           applyStickAngle(deg);
         }
 
-        function onStickUp() {
-          if (!isStickGrabbed) return;
+        function onStickUp(ev) {
+          if (!isStickGrabbed || (pointerId !== undefined && ev.pointerId !== pointerId)) return;
           isStickGrabbed = false;
           stickEl.classList.remove('is-grabbed');
+          if (stickEl.releasePointerCapture && pointerId !== undefined && stickEl.hasPointerCapture && stickEl.hasPointerCapture(pointerId)) {
+            stickEl.releasePointerCapture(pointerId);
+          }
           global.removeEventListener('pointermove', onStickMove);
           global.removeEventListener('pointerup', onStickUp);
           global.removeEventListener('pointercancel', onStickUp);
-          global.removeEventListener('mousemove', onStickMove);
-          global.removeEventListener('mouseup', onStickUp);
           springRelease();
         }
 
-        global.addEventListener('pointermove', onStickMove);
+        global.addEventListener('pointermove', onStickMove, { passive: false });
         global.addEventListener('pointerup', onStickUp);
         global.addEventListener('pointercancel', onStickUp);
-        global.addEventListener('mousemove', onStickMove);
-        global.addEventListener('mouseup', onStickUp);
       }
 
       stickEl.addEventListener('pointerdown', onStickDown);
+      frame.addEventListener('dragstart', function (e) { e.preventDefault(); });
     }
 
     // ---- Arcade Cartridge Drag Interaction -------------------------------
@@ -851,6 +855,10 @@
       if (wasActive) hackStoryIndex = (hackStoryIndex + 1) % HACK_STORIES.length;
       if (hackText) hackText.textContent = '';
       root.classList.remove('is-hacking');
+      if (wasActive && !started && !running) {
+        score = 0;
+        emit('score', score);
+      }
       if (wasActive) emit('hackend');
       // Escape returns to the normal title screen with ordinary food rather
       // than leaving a hack-mode pellet on the board.
@@ -942,7 +950,7 @@
       running = true;
       paused = false;
       touch = null;
-      last = 0;
+      last = nowMs();
       root.classList.add('is-active');
       emit('start', state());
       emit('score', score);
@@ -1192,14 +1200,16 @@
       if (running && !paused) {
         var dt = last ? t - last : 0;
         last = t;
-        if (dt > 400) dt = 400;
+        if (!isFinite(dt) || dt < 0) dt = 0;
+        if (dt > 250) dt = 250;
         var ms = speedMs();
+        if (!isFinite(ms) || ms < 0) ms = 105;
         if (ms < 16) {
           // Custom speed in the sub-frame range: exactly one step per frame.
           acc = 0;
           if (dt > 0) { step(); markDirty(); }
         } else {
-          acc += dt;
+          acc = Math.min((isFinite(acc) ? acc : 0) + dt, ms * 6);
           var guard = 0;
           while (acc >= ms && guard < 6) {
             acc -= ms;
@@ -1317,16 +1327,22 @@
     // clicks. Route every tap through this one handler and deduplicate the
     // follow-up events so one physical tap adds exactly one code chunk.
     var lastTerminalTapAt = -Infinity;
+    var lastTouchPointerAt = -Infinity;
     function handleTerminalTap(target, source) {
+      if (!target || !target.closest) return false;
+      // The overlay also covers the field: only actual controls are exempt.
+      // Do not treat a tap on Start (or a theme button) as hacker typing.
+      if (target.closest('button, a, input, textarea, select, label, dialog, [role="button"], .cabinet')) return false;
+
       // The Ready overlay covers the canvas before a run starts; it is still
       // inside .screen, so a tap there must count as a tap in the playfield.
-      var inField = target && target.closest ? target.closest('.snake-field, .screen') : null;
+      var inField = target.closest('.screen');
       var now = Date.now();
       // pointerdown -> touchstart is normally less than 80ms; the synthetic
       // click after a touch can arrive ~300ms later. Deduplicate those event
       // representations without suppressing deliberate rapid repeated taps.
-      if (source === 'touchstart' && now - lastTerminalTapAt < 80) return true;
-      if ((source === 'click' || source === 'pointerdown') && now - lastTerminalTapAt < 650) return true;
+      if (source === 'touchstart' && now - lastTouchPointerAt < 100) return true;
+      if (source === 'click' && now - lastTerminalTapAt < 650) return true;
 
       var handled = false;
       if (isHacking) {
@@ -1337,7 +1353,8 @@
         typeHack();
         handled = true;
       }
-      if (handled) lastTerminalTapAt = now;
+      if (handled && source !== 'click') lastTerminalTapAt = now;
+      if (handled && source === 'pointerdown') lastTouchPointerAt = now;
       return handled;
     }
 

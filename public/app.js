@@ -281,7 +281,7 @@
       if (authUser) return typeof comboBest[key] === 'number' ? comboBest[key] : undefined;
       var best;
       for (var i = 0; i < runs.length; i++) {
-        if (runs[i].key === key && (best === undefined || runs[i].score > best)) best = runs[i].score;
+        if (runs[i].cause !== 'quit' && runs[i].key === key && (best === undefined || runs[i].score > best)) best = runs[i].score;
       }
       return best;
     }
@@ -296,22 +296,24 @@
       } else {
         var bestByKey = {};
         runs.forEach(function (r) {
+          if (r.cause === 'quit') return;
           if (bestByKey[r.key] === undefined || r.score > bestByKey[r.key]) bestByKey[r.key] = r.score;
         });
         var html = '';
         runs.forEach(function (r) {
-          var isBest = r.score > 0 && r.score === bestByKey[r.key];
-          html += '<li class="runs__item' + (isBest ? ' is-best' : '') + '">' +
+          var quit = r.cause === 'quit';
+          var isBest = !quit && r.score > 0 && r.score === bestByKey[r.key];
+          html += '<li class="runs__item' + (isBest ? ' is-best' : '') + (quit ? ' is-quit' : '') + '">' +
             '<span class="runs__score">' + r.score + '</span>' +
             '<span class="runs__mode">' + esc(r.mode) + '</span>' +
-            '<span class="runs__when">' + timeAgo(r.at) + '</span></li>';
+            '<span class="runs__when">' + (quit ? 'Quit · ' : '') + timeAgo(r.at) + '</span></li>';
         });
         listEl.innerHTML = html;
       }
 
       if (statsEl) {
         var key = comboKeyOf(currentSettingsShape());
-        var same = runs.filter(function (r) { return r.key === key; });
+        var same = runs.filter(function (r) { return r.key === key && r.cause !== 'quit'; });
         if (!same.length) {
           statsEl.textContent = 'No runs in this mode yet';
         } else {
@@ -332,7 +334,8 @@
     }
 
     function addRun(state) {
-      runs.unshift({ score: state.score, key: comboKeyOf(state), mode: modeLabel(state), at: Date.now() });
+      runs.unshift({ score: state.score, key: comboKeyOf(state), mode: modeLabel(state), at: Date.now(),
+        cause: state.endState && state.endState.cause === 'quit' ? 'quit' : 'crash' });
       runs = runs.slice(0, 30);
       saveRuns(runs);
     }
@@ -803,10 +806,13 @@
           if (out.ok) {
             comboBest = out.json.best || comboBest;
             applyXpPayload(out.json);
-            saveNoteShow('Saved to the leaderboard as ' + authUser + '.', false);
+            var quit = payload.end_state && payload.end_state.cause === 'quit';
+            saveNoteShow((quit ? 'Saved to your game log as ' : 'Saved to the leaderboard as ') + authUser + '.', false);
             refreshReadouts();
-            pendingHighlight = true; // renderBoard will flash + scroll to this row
-            loadBoard();
+            if (!quit) {
+              pendingHighlight = true; // only completed runs can be ranked
+              loadBoard();
+            }
           } else if (out.status === 401) {
             // The server does not recognise this browser's session any more.
             authUser = null;
@@ -987,7 +993,10 @@
     game.on('score', setScore);
     game.on('hackstart', function () { hideOverlay(); });
     game.on('hackend', function () {
-      if (!game.state().running && !game.state().started) showPanel('start');
+      if (!game.state().running && !game.state().started) {
+        setScore(0);
+        showPanel('start');
+      }
     });
 
     game.on('start', function () {
@@ -1036,7 +1045,9 @@
 
       var key = comboKeyOf(state);
       var previousBest = bestFor(key);
-      var isRecord = state.score > 0 && (previousBest === undefined || state.score > previousBest);
+      var quit = state.endState && state.endState.cause === 'quit';
+      var recordable = !quit || state.score > 10;
+      var isRecord = !quit && state.score > 0 && (previousBest === undefined || state.score > previousBest);
 
       var scoreEl = $('final-score');
       var speedEl = $('final-speed');
@@ -1053,19 +1064,24 @@
       }
       if (flagEl) flagEl.hidden = !isRecord;
 
-      addRun(state);
+      if (recordable) addRun(state);
       refreshReadouts();
       showPanel('over');
       lockAgain();
 
-      saveRun({
-        score: state.score,
-        speed_level: state.useCustomSpeed ? null : state.speedPreset,
-        speed_custom: state.useCustomSpeed ? state.speedCustom : null,
-        growth: state.useCustomGrowth ? null : state.growthPreset,
-        growth_custom: state.useCustomGrowth ? state.growthCustom : null,
-        end_state: state.endState || null
-      });
+      if (recordable) {
+        saveRun({
+          score: state.score,
+          speed_level: state.useCustomSpeed ? null : state.speedPreset,
+          speed_custom: state.useCustomSpeed ? state.speedCustom : null,
+          growth: state.useCustomGrowth ? null : state.growthPreset,
+          growth_custom: state.useCustomGrowth ? state.growthCustom : null,
+          end_state: state.endState || null
+        });
+      } else {
+        pendingRun = null;
+        saveNoteShow('Quit runs need more than 10 points to appear in your game log.', false);
+      }
     });
 
     // ---- controls ----------------------------------------------------------------------------

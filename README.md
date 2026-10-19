@@ -285,10 +285,12 @@ bare-metal reads `rails/.env` (see `rails/.env.example`).
   digests (Rails) / scrypt hashes (preview) — never in plaintext.
 * Sessions: Rails signed cookie (30 days) on bare metal / in the container; a
   `sessions` table + httpOnly cookie in the preview.
-* **Only signed-in runs are saved.** Each one is stored against the account
-  and appears on the public boards — **Standard** (presets) and **Custom**
-  (any custom slider) — ranked by score. A player appears once per board with
-  their best run for each modifier combination.
+* **Only signed-in runs are saved.** Completed games appear on the public
+  **Standard** (presets) and **Custom** (any custom slider) boards, ranked by
+  score. A player appears once per board per modifier combination.
+* Quits at **10 points or less** are discarded. Quits **above 10** appear in
+  Recent runs and the profile game log and count toward **Total Games**, but
+  never award XP or affect records, averages, rankings, or the leaderboards.
 * **Guests can play, but nothing is stored.** The server refuses guest writes
   (`401`), and the game-over screen says so. A guest's finished run is held
   and saved the moment they sign in, as long as they sign in before starting

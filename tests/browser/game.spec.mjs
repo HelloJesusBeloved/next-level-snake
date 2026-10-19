@@ -147,6 +147,55 @@ async function tallWindow(page) {
   await page.setViewportSize({ width: size.width, height: 2400 });
 }
 
+test('mobile Terminal distinguishes tapping the game box from tapping Start', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'Touch controls regression');
+  await openGame(page, 'terminal');
+  await page.locator('#panel-start .panel__title').tap();
+  await expect(page.locator('#snake-root')).toHaveClass(/is-hacking/);
+  const first = await page.evaluate(() => window.__snakeTest.state().score);
+  expect(first).toBe(1);
+  await page.locator('.snake-field').tap();
+  expect(await page.evaluate(() => window.__snakeTest.state().score)).toBe(first + 1);
+  await page.evaluate(() => window.__snakeTest.clearHack());
+  await page.locator('#btn-start').tap();
+  expect(await page.evaluate(() => window.__snakeTest.state().running)).toBe(true);
+  await expect(page.locator('#snake-root')).not.toHaveClass(/is-hacking/);
+});
+
+test('mobile pause control appears only while a run exists', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'The pause button is touch-only');
+  await openGame(page);
+  await expect(page.locator('#pause-btn')).toBeHidden();
+  await page.locator('#btn-start').tap();
+  await expect(page.locator('#pause-btn')).toBeVisible();
+  await page.locator('#pause-btn').tap();
+  await expect(page.locator('#pause-btn')).toHaveText('Unpause');
+  await page.locator('#btn-quit').tap();
+  await expect(page.locator('#pause-btn')).toBeHidden();
+});
+
+test('mobile switching Arcade never shifts the game or settings', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'Mobile scroll-anchor regression');
+  await openGame(page);
+  await page.locator('#settings-theme').scrollIntoViewIfNeeded();
+  await settleScroll(page);
+  const coordinates = () => page.evaluate(() => ({
+    screen: document.querySelector('.snake-field').getBoundingClientRect().top,
+    settings: document.querySelector('#settings-theme').getBoundingClientRect().top,
+    scroll: window.scrollY,
+  }));
+  const before = await coordinates();
+  await page.locator('#settings-theme [data-theme="arcade"]').tap();
+  const arcade = await coordinates();
+  await page.locator('#settings-theme [data-theme="classic"]').tap();
+  const classic = await coordinates();
+  for (const current of [arcade, classic]) {
+    expect(Math.abs(current.screen - before.screen)).toBeLessThan(2);
+    expect(Math.abs(current.settings - before.settings)).toBeLessThan(2);
+    expect(Math.abs(current.scroll - before.scroll)).toBeLessThan(2);
+  }
+});
+
 test('outlined navigation remains clickable and pauses before scrolling', async ({ page }, info) => {
   await openGame(page);
   await tallWindow(page);

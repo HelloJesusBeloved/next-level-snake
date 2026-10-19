@@ -60,12 +60,12 @@
   function comma(x) { return String(Math.round(x)).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
 
   // ---- run classification ---------------------------------------------------
-  // A run that the player quit does not count toward any stats; it only appears
-  // in the log when it reached a score of 10 or higher.
+  // Qualifying quits appear in the log and total-games count, never in
+  // completed-run stats, records, rank or XP.
   function isQuit(g) { return g.end_state && g.end_state.cause === 'quit'; }
   function isCompleted(g) { return !isQuit(g); }          // includes older runs with no end_state
   function isCustom(g) { return g.speed_custom != null || g.growth_custom != null; }
-  function logVisible(g) { return isCompleted(g) || (isQuit(g) && g.score >= 10); }
+  function logVisible(g) { return isCompleted(g) || (isQuit(g) && g.score > 10); }
   function xpFor(g) {
     if (!isCompleted(g) || isCustom(g)) return 0;
     var weight = (g.speed_level && XP_WEIGHT[g.speed_level]) || 1;
@@ -140,9 +140,9 @@
     return list;
   }
 
-  // Stats over completed (non-quit) games. `total` is every game in the log.
+  // Stats over completed (non-quit) games. `total` includes eligible quits.
   function summarize(games) {
-    var s = { total: games.length, completed: 0, food: 0, best: 0, bestGame: null, days: {}, last30: 0, avg: 0 };
+    var s = { total: games.filter(logVisible).length, completed: 0, food: 0, best: 0, bestGame: null, days: {}, last30: 0, avg: 0 };
     var cutoff = Date.now() - 30 * 86400000;
     games.forEach(function (g) {
       if (!isCompleted(g)) return;
@@ -213,6 +213,7 @@
     username: null,          // whose profile is shown
     isYou: true,
     games: [],               // newest first, as the API returns them
+    totalGames: null,        // server total (the game log itself is capped)
     rank: 1,
     favorite: null,
     chartMode: 'all',
@@ -265,6 +266,7 @@
     state.username = json.user.username;
     state.isYou = json.user.is_you === true;
     state.games = json.user.games || [];
+    state.totalGames = typeof json.user.total_games === 'number' ? json.user.total_games : null;
     state.rank = json.user.rank || 1;
     state.favorite = json.user.favorite_theme || null;
     state.chartMode = 'all';
@@ -313,7 +315,7 @@
             '</div>' +
             '<div class="pf-stat-badge">' +
               '<span class="pf-stat-badge__label">Total Games</span>' +
-              '<span class="pf-stat-badge__val">' + comma(s.total) + '</span>' +
+              '<span class="pf-stat-badge__val">' + comma(state.totalGames === null ? s.total : state.totalGames) + '</span>' +
             '</div>' +
           '</div>' +
           '<div class="xp-meter pf-level">' +
@@ -722,7 +724,7 @@
       '<div class="log__actions">' + actions + '</div></li>';
   }
 
-  // Only completed games, and quit games with a score of 10 or higher, are shown.
+  // Only completed games and quits with more than 10 points are shown.
   function logList() {
     return state.games.filter(function (g) {
       if (!logVisible(g)) return false;
@@ -752,13 +754,22 @@
   function fillSelects() {
     var list = modeTable(state.games);
     var completedTotal = state.games.filter(isCompleted).length;
-    [['pf-chart-mode', 'chartMode'], ['pf-log-mode', 'logMode']].forEach(function (pair) {
+    var logCounts = {}, logModes = [];
+    state.games.forEach(function (g) {
+      if (!logVisible(g)) return;
+      var key = modeKey(g);
+      if (!logCounts[key]) { logCounts[key] = { key: key, label: modeLabel(g), count: 0 }; logModes.push(logCounts[key]); }
+      logCounts[key].count += 1;
+    });
+    [['pf-chart-mode', 'chartMode', list, completedTotal],
+      ['pf-log-mode', 'logMode', logModes, state.games.filter(logVisible).length]].forEach(function (pair) {
       var select = $(pair[0]);
       var current = state[pair[1]];
-      if (current !== 'all' && !list.some(function (m) { return m.key === current; })) {
+      var modes = pair[2];
+      if (current !== 'all' && !modes.some(function (m) { return m.key === current; })) {
         current = state[pair[1]] = 'all';
       }
-      select.innerHTML = '<option value="all">All modes (' + completedTotal + ')</option>' + list.map(function (m) {
+      select.innerHTML = '<option value="all">All modes (' + pair[3] + ')</option>' + modes.map(function (m) {
         return '<option value="' + esc(m.key) + '">' + esc(m.label) + ' (' + m.count + ')</option>';
       }).join('');
       select.value = current;
@@ -783,10 +794,14 @@
     api('/api/games/' + id, { method: 'DELETE' }).then(readJson).then(function (out) {
       if (out.status === 401) { state.isYou = false; loadProfile(); return; }
       if (!out.ok && out.status !== 404) { toast(out.json.error || 'Could not remove the game.', true); return; }
+      var removed = state.games.find(function (g) { return g.id === id; });
       state.games = state.games.filter(function (g) { return g.id !== id; });
+      if (state.totalGames !== null && removed && logVisible(removed)) state.totalGames -= 1;
+      var total = root.querySelector('.pf-stat-badge__val');
+      if (total) total.textContent = comma(state.totalGames === null ? summarize(state.games).total : state.totalGames);
       state.confirmId = null;
       renderAll();
-      toast('Game removed from your log and from the leaderboard.');
+      toast(removed && isQuit(removed) ? 'Quit removed from your game log.' : 'Game removed from your log and from the leaderboard.');
     }).catch(function () { toast('Could not reach the server.', true); });
   }
 
