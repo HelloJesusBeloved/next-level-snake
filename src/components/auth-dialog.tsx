@@ -41,7 +41,14 @@ export default function AuthDialog() {
             <span>Confirm password</span>
             <input name="confirm-password" type="password" autoComplete="new-password" required minLength={8} />
           </label>
+          <div className="auth-disclaimer" role="note">
+            <strong>⚠️ Disclaimer</strong>
+            <p>
+              This comes with no warranty, there is a possibility I may accidentally delete your user data while trying to add a feature 😅
+            </p>
+          </div>
           <div className="auth-warning" role="note">
+            <strong>🔑 Warning</strong>
             <p>
               An email is not required to make an account. However, this means
               that you will not be able to reset your password if you forget it.

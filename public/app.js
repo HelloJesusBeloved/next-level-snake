@@ -513,6 +513,30 @@
       });
     }
 
+    // ---- auto-select the account's favorite theme on sign-in ----------------------------------
+    // The toggle lives in the profile's favorite-theme card and is device-local
+    // (snake.autoTheme.v1). The favorite itself belongs to the account, so it is
+    // fetched once at sign-in rather than cached here. A plain page load never
+    // touches the theme: whatever you last picked on this device survives it.
+    var AUTO_THEME_KEY = 'snake.autoTheme.v1';
+
+    function autoThemeWanted() {
+      try { return window.localStorage.getItem(AUTO_THEME_KEY) === '1'; }
+      catch (err) { return false; }
+    }
+
+    function maybeAutoTheme() {
+      if (!authUser || !autoThemeWanted()) return;
+      api('/api/profile').then(readJson).then(function (out) {
+        var id = out.ok && out.json.user ? out.json.user.favorite_theme : null;
+        if (!id || !THEMES[id] || id === settings.theme) return;
+        settings.theme = id;
+        saveSettings(settings);
+        applyTheme();
+        renderSettings();
+      }).catch(function () { /* offline: keep the theme this device already has */ });
+    }
+
     // The snake gets the CPU first: decorative background animation is
     // suspended for the duration of an active run and returns on pause/quit.
     function syncRain() {
@@ -975,6 +999,7 @@
           if (authDialog && authDialog.open) authDialog.close();
           if (!flushPendingRun()) loadScores();
           loadBoard();
+          maybeAutoTheme();
         })
         .catch(function () {
           if (errEl) errEl.textContent = 'Network error — try again';
@@ -1139,6 +1164,15 @@
     var eggIndex = 0;
     var arcadeCurrentIndex = -1;
     var arcadeToastTimer = 0;
+    // Most secrets flash by in 10 seconds. The one carrying the link to the
+    // prompts is meant to be read (and clicked), so it stays up twice as long.
+    var ARCADE_TOAST_MS = 10000;
+    var ARCADE_PROMPT_LINK_MESSAGE = 4;
+    var ARCADE_LONG_TOAST_MS = 20000;
+
+    function arcadeToastMs(index) {
+      return index === ARCADE_PROMPT_LINK_MESSAGE ? ARCADE_LONG_TOAST_MS : ARCADE_TOAST_MS;
+    }
 
     function showArcadeToastAt(index) {
       var toast = $('arcade-egg-toast');
@@ -1175,11 +1209,12 @@
       // trigger reflow for smooth pop-in animation from top right
       void toast.offsetWidth;
       toast.classList.add('is-visible');
+      toast.classList.toggle('is-long', arcadeToastMs(index) > ARCADE_TOAST_MS);
 
-      // Auto-disappear after 10 seconds
+      // Auto-dismiss: 10 seconds, 20 for the message with the prompts link.
       arcadeToastTimer = window.setTimeout(function () {
         toast.classList.remove('is-visible');
-      }, 10000);
+      }, arcadeToastMs(index));
     }
 
     function showArcadeToast() { showArcadeToastAt(eggIndex); }
@@ -1432,6 +1467,40 @@
     }
 
     // ---- copy buttons on code blocks ----------------------------------------------------------
+    // navigator.clipboard only exists in a secure context, so a container
+    // reached over plain HTTP (http://my-server:3000) has no clipboard API at
+    // all — that is why Copy silently did nothing. Fall back to a hidden
+    // textarea + execCommand, which still works everywhere.
+    function legacyCopy(text) {
+      try {
+        var ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.top = '0';
+        ta.style.left = '0';
+        ta.style.opacity = '0';
+        ta.style.pointerEvents = 'none';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ta.setSelectionRange(0, text.length);
+        var ok = document.execCommand && document.execCommand('copy');
+        document.body.removeChild(ta);
+        return !!ok;
+      } catch (err) { return false; }
+    }
+
+    function copyToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).then(
+          function () { return true; },
+          function () { return legacyCopy(text); }
+        );
+      }
+      return Promise.resolve(legacyCopy(text));
+    }
+
     all('pre.code').forEach(function (pre) {
       var parent = pre.parentElement;
       if (!parent) return;
@@ -1440,18 +1509,31 @@
       btn.type = 'button';
       btn.className = 'code-copy';
       btn.textContent = 'Copy';
+      btn.setAttribute('aria-label', 'Copy this block to the clipboard');
+      var resetTimer = 0;
       btn.addEventListener('click', function () {
-        var text = pre.innerText;
+        var text = (pre.innerText || pre.textContent || '').replace(/\s+$/, '');
+        window.clearTimeout(resetTimer);
         function done(ok) {
-          btn.textContent = ok ? 'Copied' : 'Ctrl+C';
-          window.setTimeout(function () { btn.textContent = 'Copy'; }, 1400);
+          btn.classList.toggle('is-copied', ok);
+          btn.classList.toggle('is-failed', !ok);
+          btn.textContent = ok ? 'Copied ✓' : 'Select all';
+          if (!ok) {
+            // Nothing could reach the clipboard: hand-select the block so the
+            // player can copy it with their own keyboard shortcut.
+            try {
+              var range = document.createRange();
+              range.selectNodeContents(pre);
+              var sel = window.getSelection();
+              if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+            } catch (err) { /* selection is a nicety, not a requirement */ }
+          }
+          resetTimer = window.setTimeout(function () {
+            btn.textContent = 'Copy';
+            btn.classList.remove('is-copied', 'is-failed');
+          }, 1600);
         }
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
-        } else {
-          pre.style.userSelect = 'all';
-          done(false);
-        }
+        copyToClipboard(text).then(done, function () { done(false); });
       });
       parent.insertBefore(btn, pre);
     });

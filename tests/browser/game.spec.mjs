@@ -162,6 +162,45 @@ test('mobile Terminal distinguishes tapping the game box from tapping Start', as
   await expect(page.locator('#snake-root')).not.toHaveClass(/is-hacking/);
 });
 
+test('mobile Arcade rounds the playfield with the bezel and pads every control', async ({ page }, info) => {
+  test.skip(info.project.name !== 'mobile', 'Phone cabinet geometry');
+  await openGame(page, 'arcade');
+  const m = await page.evaluate(() => {
+    const rect = (s) => document.querySelector(s).getBoundingClientRect();
+    // The painted control plus its invisible ::after hit pad.
+    const target = (s) => {
+      const el = document.querySelector(s);
+      const b = el.getBoundingClientRect();
+      const v = getComputedStyle(el, '::after').inset.split(' ').map(parseFloat);
+      const t = v[0], r = v[1] ?? v[0], bo = v[2] ?? v[0], l = v[3] ?? v[1] ?? v[0];
+      return { w: b.width - l - r, h: b.height - t - bo };
+    };
+    const deck = rect('.cabinet__deck');
+    const frame = rect('.snake-frame');
+    return {
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      deckInsideFrame: deck.left >= frame.left - 0.5 && deck.right <= frame.right + 0.5,
+      deckOnScreen: deck.left >= 0 && deck.right <= window.innerWidth,
+      bezel: parseFloat(getComputedStyle(document.querySelector('.snake-frame')).borderRadius),
+      field: parseFloat(getComputedStyle(document.querySelector('.snake-field')).borderRadius),
+      overlay: parseFloat(getComputedStyle(document.querySelector('#overlay')).borderRadius),
+      button: target('.cabinet__buttons i'),
+      stick: target('.cabinet__stick'),
+      slot: target('.cabinet__slot'),
+    };
+  });
+  expect(m.overflow).toBeLessThanOrEqual(0);
+  expect(m.deckOnScreen).toBe(true);
+  expect(m.deckInsideFrame).toBe(true);          // the deck no longer overhangs the bezel
+  expect(m.bezel).toBeGreaterThanOrEqual(20);
+  expect(m.field).toBeGreaterThanOrEqual(16);    // the playfield is not square
+  expect(Math.abs(m.bezel - m.field)).toBeLessThanOrEqual(8);  // concentric corners
+  expect(m.overlay).toBe(m.field);               // the result screen matches the field
+  expect(Math.min(m.button.w, m.button.h)).toBeGreaterThanOrEqual(44);
+  expect(Math.min(m.stick.w, m.stick.h)).toBeGreaterThanOrEqual(44);
+  expect(Math.min(m.slot.w, m.slot.h)).toBeGreaterThanOrEqual(36);
+});
+
 test('mobile pause control appears only while a run exists', async ({ page }, info) => {
   test.skip(info.project.name !== 'mobile', 'The pause button is touch-only');
   await openGame(page);
@@ -177,22 +216,45 @@ test('mobile pause control appears only while a run exists', async ({ page }, in
 test('mobile switching Arcade never shifts the game or settings', async ({ page }, info) => {
   test.skip(info.project.name !== 'mobile', 'Mobile scroll-anchor regression');
   await openGame(page);
-  await page.locator('#settings-theme').scrollIntoViewIfNeeded();
-  await settleScroll(page);
-  const coordinates = () => page.evaluate(() => ({
-    screen: document.querySelector('.snake-field').getBoundingClientRect().top,
-    settings: document.querySelector('#settings-theme').getBoundingClientRect().top,
-    scroll: window.scrollY,
-  }));
-  const before = await coordinates();
-  await page.locator('#settings-theme [data-theme="arcade"]').tap();
-  const arcade = await coordinates();
-  await page.locator('#settings-theme [data-theme="classic"]').tap();
-  const classic = await coordinates();
-  for (const current of [arcade, classic]) {
-    expect(Math.abs(current.screen - before.screen)).toBeLessThan(2);
-    expect(Math.abs(current.settings - before.settings)).toBeLessThan(2);
-    expect(Math.abs(current.scroll - before.scroll)).toBeLessThan(2);
+  // The switch is dispatched in the page and sampled every frame: a Playwright
+  // tap scrolls the button into view first, which would be measured as a jump
+  // the theme switch never caused.
+  const drift = (from, to) => page.evaluate(async ({ from, to }) => {
+    const button = (theme) => document.querySelector(`#settings-theme [data-theme="${theme}"]`);
+    button(from).scrollIntoView({ block: 'center' });
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const read = () => ({
+      scroll: window.scrollY,
+      field: document.querySelector('.snake-field').getBoundingClientRect().top,
+      settings: document.querySelector('#settings-theme').getBoundingClientRect().top,
+      height: document.documentElement.scrollHeight,
+      reserved: getComputedStyle(document.querySelector('.screen')).paddingBottom,
+    });
+    const base = read();
+    const frames = [];
+    button(to).click();
+    await new Promise((done) => {
+      let n = 0;
+      const tick = () => { frames.push(read()); if (++n < 30) requestAnimationFrame(tick); else done(); };
+      requestAnimationFrame(tick);
+    });
+    const peak = (key) => Math.max(...frames.map((f) => Math.abs(f[key] - base[key])));
+    return {
+      scroll: peak('scroll'), field: peak('field'), settings: peak('settings'), height: peak('height'),
+      reserved: [...new Set(frames.map((f) => f.reserved))],
+      theme: document.documentElement.getAttribute('data-theme'),
+    };
+  }, { from, to });
+
+  for (const [from, to] of [['classic', 'arcade'], ['arcade', 'classic'], ['violet', 'arcade']]) {
+    const moved = await drift(from, to);
+    expect(moved.theme).toBe(to);
+    expect(moved.scroll).toBeLessThan(1);
+    expect(moved.field).toBeLessThan(1);
+    expect(moved.settings).toBeLessThan(1);
+    expect(moved.height).toBe(0);
+    // The deck's room is reserved in every theme, so nothing above it reflows.
+    expect(moved.reserved).toHaveLength(1);
   }
 });
 

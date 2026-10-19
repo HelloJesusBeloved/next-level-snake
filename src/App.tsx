@@ -94,8 +94,11 @@ export default function App() {
   return <>
     <div className="page-texture" aria-hidden="true" /><div className="page-scrim" aria-hidden="true" />
     <div className="spine" aria-hidden="true"><span>Next Level Snake / Wall-Wrap Arcade</span></div>
-    <header className="masthead"><div className="masthead__brand"><span className="mark" aria-hidden="true" />
-      <span className="brand__text"><span className="brand__eyebrow">Next Level</span><span className="wordmark">Snake</span></span></div>
+    <header className="masthead"><div className="masthead__brand-group">
+      <div className="masthead__brand"><span className="mark" aria-hidden="true" />
+        <span className="brand__text"><span className="brand__eyebrow">Next Level</span><span className="wordmark">Snake</span></span></div>
+      <span className="brand__credit">Made almost entirely with <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a> ❤️</span>
+    </div>
       <nav className="masthead__meta"><a className="btn btn--small btn--nav" href="https://github.com/HelloJesusBeloved/next-level-snake" target="_blank" rel="noreferrer">Open Source</a></nav>
     </header>
     <main className="shell"><section className="stage" aria-label="Snake game">

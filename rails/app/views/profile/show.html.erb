@@ -10,13 +10,16 @@
 </div>
 
 <header class="masthead">
-  <a class="masthead__brand" href="/" aria-label="Next Level Snake — back to the game">
-    <span class="mark" aria-hidden="true"></span>
-    <span class="brand__text">
-      <span class="brand__eyebrow">Next Level</span>
-      <span class="wordmark">Snake</span>
-    </span>
-  </a>
+  <div class="masthead__brand-group">
+    <a class="masthead__brand" href="/" aria-label="Next Level Snake — back to the game">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="brand__text">
+        <span class="brand__eyebrow">Next Level</span>
+        <span class="wordmark">Snake</span>
+      </span>
+    </a>
+    <span class="brand__credit">Made almost entirely with <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a> ❤️</span>
+  </div>
   <nav class="masthead__meta" aria-label="Main navigation">
     <a class="btn btn--small btn--nav" href="/">Play</a>
     <a class="btn btn--small btn--nav" href="/#leaderboard">
@@ -81,5 +84,5 @@
 <%= render "shared/auth_dialog" %>
 
 <% content_for :scripts do %>
-  <script src="/profile.js?v=2026-10-19.1"></script>
+  <script src="/profile.js?v=2026-10-19.4"></script>
 <% end %>

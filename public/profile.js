@@ -12,6 +12,10 @@
 
   var TOKEN_KEY = 'snake.token.v1';
   var STORE_KEY = 'snake.settings.v1';
+  // "Auto-select my favorite theme when I sign in". Device-local on purpose:
+  // the theme itself already lives in snake.settings.v1 on this device, and
+  // the toggle only decides whether signing in overwrites it.
+  var AUTO_THEME_KEY = 'snake.autoTheme.v1';
 
   var LEVELS = [
     { id: 1, label: 'Chill', ms: 165 },
@@ -218,6 +222,8 @@
     favorite: null,
     chartMode: 'all',
     logMode: 'all',
+    logSort: 'date',         // which column the game log is ordered by
+    logDir: 'desc',          // 'asc' | 'desc'
     logShown: LOG_PAGE,
     confirmId: null,
     themeNote: '',
@@ -271,9 +277,13 @@
     state.favorite = json.user.favorite_theme || null;
     state.chartMode = 'all';
     state.logMode = 'all';
+    var savedSort = readLogSort();
+    state.logSort = savedSort ? savedSort.id : 'date';
+    state.logDir = savedSort ? savedSort.dir : 'desc';
     state.logShown = LOG_PAGE;
     state.confirmId = null;
     state.themeNote = '';
+    maybeAutoTheme();
   }
 
   function loadProfile() {
@@ -373,7 +383,11 @@
         '<section class="card pf-card pf-wide" aria-labelledby="pf-log-title">' +
           '<div class="pf-card__head"><h2 class="card__title" id="pf-log-title">Game log</h2>' +
           '<span class="pf-count" id="pf-log-count"></span>' +
-          '<label class="pf-select"><span class="sr-only">Mode shown in the log</span><select id="pf-log-mode"></select></label></div>' +
+          '<label class="pf-select"><span class="sr-only">Mode shown in the log</span><select id="pf-log-mode"></select></label>' +
+          '<div class="pf-sort">' +
+            '<label class="pf-select"><span class="sr-only">Sort the log by</span><select id="pf-log-sort"></select></label>' +
+            '<button type="button" class="pf-sort__dir" id="pf-log-dir"></button>' +
+          '</div></div>' +
           '<ol class="log" id="pf-log"></ol>' +
           '<div class="pf-more"><button type="button" class="btn btn--small" id="pf-log-more" hidden>Show more</button></div>' +
         '</section>' +
@@ -468,6 +482,13 @@
           return '<button type="button" data-fav-theme="' + t.id + '" aria-pressed="' + isFav + '">' +
             '<span class="swatch" data-swatch="' + t.id + '"><i aria-hidden="true"></i>' + esc(t.name) + '</span></button>';
         }).join('') + '</div>' +
+        '<label class="switch pf-autotheme">' +
+          '<input type="checkbox" id="pf-theme-auto"' + (autoThemeOn() ? ' checked' : '') + '>' +
+          '<span class="pf-autotheme__text">' +
+            '<span class="pf-autotheme__label">Auto-select my favorite theme when I sign in</span>' +
+            '<span class="pf-autotheme__hint">Saved on this device. Signing in then switches the game and this page to your favorite instead of the last theme you picked here.</span>' +
+          '</span>' +
+        '</label>' +
         '<div class="pf-theme-actions">' +
           (state.favorite ? '<button type="button" class="btn btn--small" id="pf-theme-clear">Clear favorite</button>' : '') +
         '</div>' +
@@ -724,12 +745,68 @@
       '<div class="log__actions">' + actions + '</div></li>';
   }
 
+  // ---- game log ordering --------------------------------------------------------
+  // One table drives the menu, the comparator and the direction button's wording,
+  // so adding a column only means describing it once. `initial` is the direction
+  // that reads naturally for that column (newest dates, best scores, A-Z modes),
+  // and is applied when you switch columns; the button still reverses anything.
+  var LOG_SORTS = [
+    { id: 'date', label: 'Date', initial: 'desc', desc: 'Newest first', asc: 'Oldest first',
+      value: function (g) { return asDate(g.created_at).getTime(); } },
+    { id: 'score', label: 'Score', initial: 'desc', desc: 'Best first', asc: 'Lowest first',
+      value: function (g) { return g.score; } },
+    { id: 'length', label: 'Length', initial: 'desc', desc: 'Longest first', asc: 'Shortest first',
+      value: function (g) { return g.end_state && g.end_state.snake ? g.end_state.snake.length : -1; } },
+    { id: 'mode', label: 'Mode', initial: 'asc', desc: 'Z to A', asc: 'A to Z',
+      value: function (g) { return modeLabel(g).toLowerCase(); } },
+    { id: 'outcome', label: 'Outcome', initial: 'asc', desc: 'Quits first', asc: 'Crashes first',
+      value: function (g) { return isQuit(g) ? 1 : 0; } }
+  ];
+
+  function logSortBy(id) {
+    for (var i = 0; i < LOG_SORTS.length; i++) if (LOG_SORTS[i].id === id) return LOG_SORTS[i];
+    return LOG_SORTS[0];
+  }
+
+  // The chosen order is a per-device preference, like the theme: it outlives a
+  // reload and applies to any profile you open.
+  var LOG_SORT_KEY = 'snake.logSort.v1';
+  function readLogSort() {
+    try {
+      var parts = (window.localStorage.getItem(LOG_SORT_KEY) || '').split(':');
+      if (!LOG_SORTS.some(function (s) { return s.id === parts[0]; })) return null;
+      return { id: parts[0], dir: parts[1] === 'asc' ? 'asc' : 'desc' };
+    } catch (err) { return null; }
+  }
+  function saveLogSort() {
+    try { window.localStorage.setItem(LOG_SORT_KEY, state.logSort + ':' + state.logDir); }
+    catch (err) { /* storage blocked */ }
+  }
+
+  function compareLog(sort, dir) {
+    var sign = dir === 'asc' ? 1 : -1;
+    return function (a, b) {
+      var av = sort.value(a);
+      var bv = sort.value(b);
+      if (av < bv) return -sign;
+      if (av > bv) return sign;
+      // Ties always fall back to newest-then-id so that paging through
+      // "Show more" never reshuffles rows that compare equal.
+      var at = asDate(a.created_at).getTime();
+      var bt = asDate(b.created_at).getTime();
+      if (at !== bt) return bt - at;
+      return (b.id || 0) - (a.id || 0);
+    };
+  }
+
   // Only completed games and quits with more than 10 points are shown.
+  // filter() hands back a fresh array, so sorting here never reorders
+  // state.games (the chart and every stat still read it newest-first).
   function logList() {
     return state.games.filter(function (g) {
       if (!logVisible(g)) return false;
       return state.logMode === 'all' || modeKey(g) === state.logMode;
-    });
+    }).sort(compareLog(logSortBy(state.logSort), state.logDir));
   }
 
   function isQuitsHidden() {
@@ -751,9 +828,31 @@
     more.textContent = 'Show more (' + left + ' left)';
   }
 
+  function renderLogSort() {
+    var select = $('pf-log-sort');
+    var button = $('pf-log-dir');
+    if (!select || !button) return;
+    var sort = logSortBy(state.logSort);
+    var ascending = state.logDir === 'asc';
+    select.innerHTML = LOG_SORTS.map(function (s) {
+      return '<option value="' + s.id + '">Sort: ' + esc(s.label) + '</option>';
+    }).join('');
+    select.value = sort.id;
+    // The button says what the order IS, so the control explains itself
+    // without needing the arrow to be decoded first.
+    var wording = ascending ? sort.asc : sort.desc;
+    button.innerHTML = '<span class="pf-sort__arrow" aria-hidden="true">' + (ascending ? '\u2191' : '\u2193') +
+      '</span>' + esc(wording);
+    button.classList.toggle('is-asc', ascending);
+    button.title = wording + ' \u2014 click to reverse';
+    button.setAttribute('aria-label', 'Game log sorted by ' + sort.label.toLowerCase() + ', ' +
+      wording.toLowerCase() + '. Activate to reverse the order.');
+  }
+
   function fillSelects() {
     var list = modeTable(state.games);
     var completedTotal = state.games.filter(isCompleted).length;
+    renderLogSort();
     var logCounts = {}, logModes = [];
     state.games.forEach(function (g) {
       if (!logVisible(g)) return;
@@ -820,6 +919,30 @@
   function readSettings() {
     try { return JSON.parse(window.localStorage.getItem(STORE_KEY) || '{}') || {}; }
     catch (err) { return {}; }
+  }
+
+  function autoThemeOn() {
+    try { return window.localStorage.getItem(AUTO_THEME_KEY) === '1'; }
+    catch (err) { return false; }
+  }
+
+  function setAutoTheme(on) {
+    try {
+      if (on) window.localStorage.setItem(AUTO_THEME_KEY, '1');
+      else window.localStorage.removeItem(AUTO_THEME_KEY);
+    } catch (err) { /* storage blocked */ }
+  }
+
+  // Called right after a successful sign-in (never on a plain page load, so a
+  // theme you chose yourself on this device survives a reload).
+  var justSignedIn = false;
+  function maybeAutoTheme() {
+    if (!justSignedIn) return;
+    justSignedIn = false;
+    if (!state.isYou || !autoThemeOn() || !state.favorite) return;
+    applyGlobalTheme(state.favorite);
+    state.themeNote = 'Signed in — this device switched to your favorite, ' + themeName(state.favorite) + '.';
+    toast(state.themeNote);
   }
 
   function currentTheme() {
@@ -971,6 +1094,14 @@
     el = t.closest('[data-remove]');
     if (el) { state.confirmId = Number(el.getAttribute('data-remove')); return renderLog(); }
     if (t.closest('#pf-log-more')) { state.logShown += LOG_PAGE; return renderLog(); }
+    if (t.closest('#pf-log-dir')) {
+      state.logDir = state.logDir === 'asc' ? 'desc' : 'asc';
+      state.logShown = LOG_PAGE;
+      state.confirmId = null;
+      saveLogSort();
+      renderLogSort();
+      return renderLog();
+    }
     if (t.closest('#pf-retry')) { loadProfile(); return; }
     if (t.closest('#gate-signin')) return openAuthDialog('login');
     if (t.closest('#gate-create')) return openAuthDialog('create');
@@ -980,6 +1111,36 @@
     var id = e.target && e.target.id;
     if (id === 'pf-chart-mode') { state.chartMode = e.target.value; renderChart(); }
     if (id === 'pf-log-mode') { state.logMode = e.target.value; state.logShown = LOG_PAGE; state.confirmId = null; renderLog(); }
+    if (id === 'pf-log-sort') {
+      state.logSort = e.target.value;
+      // Switching column resets to that column's natural direction; the
+      // button is still there to flip it.
+      state.logDir = logSortBy(state.logSort).initial;
+      state.logShown = LOG_PAGE;
+      state.confirmId = null;
+      saveLogSort();
+      renderLogSort();
+      renderLog();
+    }
+    if (id === 'pf-theme-auto') {
+      var on = !!e.target.checked;
+      setAutoTheme(on);
+      if (!on) {
+        state.themeNote = 'Auto-select is off — this device keeps whichever theme you last chose.';
+      } else if (state.favorite) {
+        // Switch immediately so the toggle shows what it does, not just promises it.
+        applyGlobalTheme(state.favorite);
+        state.themeNote = 'Auto-select is on — this device is in ' + themeName(state.favorite) +
+          ' now, and every sign-in will put you back in it.';
+        toast(state.themeNote);
+      } else {
+        state.themeNote = 'Auto-select is on. Pick a favorite theme above and sign-in will apply it.';
+      }
+      // Patch the status line in place: re-rendering the card would steal
+      // focus from the switch the player just tapped.
+      var statusEl = $('pf-theme-status');
+      if (statusEl) statusEl.textContent = state.themeNote;
+    }
   });
 
   // ---- accounts ---------------------------------------------------------------------
@@ -1061,7 +1222,9 @@
       setToken(out.json.token || null);
       renderAuth();
       if (authDialog && authDialog.open) authDialog.close();
-      // Viewing your own profile? Reload it now that you're signed in.
+      // Viewing your own profile? Reload it now that you're signed in — and if
+      // auto-select is on, that reload is what applies your favorite theme.
+      justSignedIn = true;
       if (!root.getAttribute('data-username')) loadProfile();
     }).catch(function () { if (errEl) errEl.textContent = 'Network error \u2014 try again'; });
   }

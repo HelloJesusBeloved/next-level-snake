@@ -208,6 +208,72 @@ test('profile total and log count only qualifying quits, not XP or completed sta
   } finally { h.dom.window.close(); }
 });
 
+test('the game log can be reordered by any column, in either direction', async () => {
+  const h = makeDom('<main class="pf-layout"><aside class="pf-side" hidden><span id="pf-skin-value"></span></aside><div id="profile-root" data-username="tester"></div></main>');
+  try {
+    const day = (n) => new Date(Date.UTC(2026, 9, n, 12)).toISOString();
+    const end = (len, cause) => ({ cols: 24, rows: 18, cause, snake: Array.from({ length: len }, (_, i) => i + 1) });
+    const games = [
+      { id: 1, score: 30, speed_level: 3, growth: 1, created_at: day(5), end_state: end(7, 'crash') },
+      { id: 2, score: 12, speed_level: 1, growth: 2, created_at: day(9), end_state: end(3, 'quit') },
+      { id: 3, score: 30, speed_level: 6, growth: 1, created_at: day(2), end_state: end(11, 'crash') },
+      { id: 4, score: 4, speed_level: 4, growth: 3, created_at: day(11), end_state: end(2, 'crash') },
+      { id: 5, score: 21, speed_level: 2, growth: 1, created_at: day(7), end_state: end(5, 'crash') },
+      { id: 6, score: 2, speed_level: 3, growth: 1, created_at: day(1), end_state: end(2, 'quit') },
+    ];
+    h.w.fetch = async () => ({ ok: true, status: 200, json: async () => ({ user: {
+      username: 'tester', rank: 1, total_games: games.length, is_you: true, games, created_at: day(1),
+    } }) });
+    h.w.eval(script('profile.js'));
+    await until(() => h.d.querySelectorAll('.log__item').length > 0);
+
+    const ids = () => [...h.d.querySelectorAll('.log__item')].map((li) => Number(li.dataset.id));
+    const select = h.d.querySelector('#pf-log-sort');
+    const button = h.d.querySelector('#pf-log-dir');
+    const sortBy = async (value) => {
+      select.value = value;
+      select.dispatchEvent(new h.w.Event('change', { bubbles: true }));
+      await wait(20);
+    };
+    const reverse = async () => {
+      button.dispatchEvent(new h.w.MouseEvent('click', { bubbles: true, cancelable: true }));
+      await wait(20);
+    };
+
+    assert.deepEqual([...select.options].map((o) => o.value), ['date', 'score', 'length', 'mode', 'outcome']);
+    // The 2-point quit stays filtered out no matter how the list is ordered.
+    assert.ok(!ids().includes(6));
+    assert.deepEqual(ids(), [4, 2, 5, 1, 3], 'defaults to newest first');
+    assert.match(button.textContent, /Newest first/);
+
+    await reverse();
+    assert.deepEqual(ids(), [3, 1, 5, 2, 4], 'reversed to oldest first');
+    assert.match(button.textContent, /Oldest first/);
+
+    await sortBy('score');
+    assert.match(button.textContent, /Best first/, 'a new column adopts its natural direction');
+    assert.deepEqual(ids(), [1, 3, 5, 2, 4], 'best first, ties broken by newest');
+    await reverse();
+    assert.deepEqual(ids(), [4, 2, 5, 1, 3], 'lowest first, ties still newest-first');
+
+    await sortBy('length');
+    assert.deepEqual(ids(), [3, 1, 5, 2, 4], 'longest snake first');
+    await sortBy('mode');
+    assert.deepEqual(
+      [...h.d.querySelectorAll('.log__item .log__mode')].map((e) => e.textContent),
+      ['Chill · ×2', 'Easy · ×1', 'Fast · ×3', 'Ludicrous · ×1', 'Normal · ×1'],
+    );
+    await sortBy('outcome');
+    assert.equal(h.d.querySelector('.log__item:last-child').classList.contains('is-quit'), true);
+    assert.ok(!ids().includes(6), 'the hidden quit never reappears');
+
+    // Ordering the log must not disturb anything that reads state.games.
+    assert.equal(h.d.querySelector('.pf-stat-badge__val').textContent, '6');
+    assert.match(h.d.querySelector('#pf-log-count').textContent, /5 games/);
+    assert.equal(h.w.localStorage.getItem('snake.logSort.v1'), 'outcome:asc');
+  } finally { h.dom.window.close(); }
+});
+
 test('Rails enforces the >10 quit threshold and excludes quits from best scores', () => {
   const model = readFileSync(new URL('../rails/app/models/score.rb', import.meta.url), 'utf8');
   const profile = readFileSync(new URL('../rails/app/controllers/api/profile_controller.rb', import.meta.url), 'utf8');
@@ -219,6 +285,169 @@ test('Rails enforces the >10 quit threshold and excludes quits from best scores'
   assert.match(model, /FROM scores\s+WHERE end_state IS NULL OR COALESCE\(end_state->>'cause', ''\) <> 'quit'/);
   assert.match(profile, /user\.scores\.recorded\.count/);
   assert.match(client, /body\.has-run \.pausebar \{ display: flex; \}/);
+});
+
+test('mobile Arcade keeps rounded corners, fits the viewport and pads every control', () => {
+  const cabinet = script('game.css');
+  const mobile = cabinet.slice(cabinet.indexOf('@media (max-width: 720px)'));
+  // The deck's space is reserved in every theme, so switching to Arcade does
+  // not shove the settings card down the page.
   assert.match(cabinet, /@media \(max-width: 1100px\) \{\s*:root \{ --cabinet-bottom: 96px; \}/);
-  assert.match(cabinet, /@media \(max-width: 720px\) \{\s*:root \{[^}]*--cabinet-bottom: 70px;/);
+  assert.match(mobile, /:root \{[^}]*--cabinet-bottom: 82px;/);
+  assert.match(mobile, /html\[data-theme='arcade'\] \{[^}]*--cabinet-bottom: 82px;/);
+  // Nested rounding: a 24px bezel with a 4px pad needs a ~20px field, or the
+  // playfield reads as a square poking into the cabinet's rounded corners.
+  assert.match(mobile, /html\[data-theme='arcade'\] \{[^}]*--bezel-radius: 24px;[^}]*--field-radius: 20px;/);
+  // The deck must not overhang the bezel on a phone.
+  assert.match(mobile, /html\[data-theme='arcade'\] \.cabinet__deck \{\s*left: 0;\s*right: 0;/);
+  // The painted button stays 24px on mobile while the hitbox reaches 44px.
+  assert.match(mobile, /\.cabinet__buttons i \{ width: 24px; height: 24px; border-width: 3px; \}/);
+  assert.match(mobile, /\.cabinet__buttons i::after \{ inset: -10px; \}/);
+  assert.match(mobile, /\.cabinet__stick::after \{ inset: -14px -14px -10px; \}/);
+  assert.match(mobile, /\.cabinet__slot::after \{ inset: -14px -8px; \}/);
+  assert.match(cabinet, /\.cabinet__buttons i::after \{[\s\S]*?inset: -5px;/);
+});
+
+test('leaderboard rank, callout prose and code-copy affordances are styled', () => {
+  const client = script('styles.css');
+  // The rank numeral used to sit flush against the board's left edge.
+  assert.match(client, /\.records th:first-child,\s*\.records td:first-child \{ padding-left: 16px; \}/);
+  assert.match(client, /\.records \.rank \{[\s\S]*?width: 46px;/);
+  // Block flow (not a 2-column grid) so inline <code> stays inside the sentence.
+  assert.match(client, /\.callout li \{\s*position: relative;\s*display: block;\s*padding-left: 26px;/);
+  assert.match(client, /\.callout li::before \{\s*content: '';\s*position: absolute;/);
+  assert.match(client, /\.band__kicker \{[\s\S]*?font-family: 'Space Grotesk'/);
+  assert.match(client, /\.auth-disclaimer \{/);
+  assert.match(client, /\.brand__credit \{/);
+  assert.match(client, /\.code-copy\.is-copied \{/);
+  assert.match(client, /\.pf-autotheme \{/);
+  assert.match(client, /\.pf-sort \{ display: inline-flex;/);
+  assert.match(client, /\.pf-sort__dir \{/);
+  assert.match(client, /\.steps h3 \.step-sub \{/);
+  // A heading's trailing note must sit on the title's baseline, one word space
+  // away — so the heading stays in inline flow and the note inherits its size.
+  const heading = client.slice(client.indexOf('.steps h3 {'), client.indexOf('.steps h3 a {'));
+  assert.doesNotMatch(heading, /display:\s*flex/, 'a flex heading forces a hard gap between title and note');
+  assert.match(client, /\.steps h3 \.step-sub \{[^}]*font-size: inherit;/);
+  assert.doesNotMatch(client, /\.steps h3 \.step-sub \{[^}]*margin-left/);
+  // The email notice got a titled header, and the two notices now sit 16px
+  // apart instead of 33px (the grid gap is 13px).
+  assert.match(client, /\.auth-warning strong \{[^}]*font-weight: 600;/);
+  assert.match(client, /\.auth-disclaimer \{\s*margin: 14px 0 3px;/);
+  assert.match(client, /\.auth-warning \{\s*margin: 0 0 16px;/);
+  assert.match(client, /\.xp-info-btn \{\s*width: 18px;\s*height: 18px;/);
+});
+
+test('both sign-in notices appear in every copy of the auth dialog', () => {
+  const copies = {
+    'rails game view': gameView,
+    'rails shared dialog': readFileSync(new URL('../rails/app/views/shared/_auth_dialog.html.erb', import.meta.url), 'utf8'),
+    'preview page': readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8'),
+    'preview dialog': readFileSync(new URL('../src/components/auth-dialog.tsx', import.meta.url), 'utf8'),
+  };
+  for (const [name, text] of Object.entries(copies)) {
+    const disclaimer = text.indexOf('auth-disclaimer');
+    const warning = text.indexOf('auth-warning');
+    assert.ok(disclaimer > -1, name + ' is missing the no-warranty disclaimer');
+    assert.ok(warning > -1, name + ' is missing the email warning');
+    // The disclaimer comes first, and the warning it precedes is now titled.
+    assert.ok(disclaimer < warning, name + ': the disclaimer must sit above the warning');
+    assert.match(text, /auth-warning["'][^>]*>\s*<strong>🔑 Warning<\/strong>/, name + ': the warning is missing its title');
+    assert.match(text, /no warranty/);
+  }
+
+  // The bare-metal heading separates its note with a single plain space, and the
+  // note is a classed span so it inherits the heading's colour and baseline.
+  assert.match(gameView, /No containers\? Bare metal <span class="step-sub">\(I Wouldn’t personally recommend\)<\/span>/);
+  assert.match(copies['preview page'], /No containers\? Bare metal <span className="step-sub">\(?I Wouldn’t personally recommend\)?<\/span>/);
+});
+
+test('the Arcade secret with the prompts link stays up for 20 seconds', async () => {
+  const h = await gamePage('arcade');
+  try {
+    const { w, d } = h;
+    const button = d.querySelector('.cabinet__buttons i[data-arcade-btn="4"]');
+    const toast = () => d.getElementById('arcade-egg-toast');
+    for (let press = 0; press < 5; press++) {
+      button.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+      await wait(10);
+    }
+    assert.equal(toast().classList.contains('is-visible'), true);
+    assert.match(toast().textContent, /prompts I used to make this site/);
+    assert.equal(toast().classList.contains('is-long'), true, 'the link message gets the long timer');
+    // Any other message keeps the 10-second default.
+    button.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+    await wait(10);
+    assert.equal(toast().classList.contains('is-long'), false);
+    assert.doesNotMatch(toast().textContent, /prompts I used to make this site/);
+  } finally { h.close(); }
+});
+
+test('code-copy falls back to execCommand when the Clipboard API is unavailable', async () => {
+  const h = await gamePage();
+  try {
+    const { w, d } = h;
+    const button = d.querySelector('pre.code + .code-copy') || d.querySelector('.code-copy');
+    assert.ok(button, 'every code block gets a copy button');
+    const pre = button.parentElement.querySelector('pre.code');
+    const copied = [];
+    // A container reached over plain HTTP has no navigator.clipboard at all.
+    Object.defineProperty(w.navigator, 'clipboard', { value: undefined, configurable: true });
+    w.document.execCommand = (command) => { copied.push(command); return true; };
+    w.HTMLElement.prototype.focus = function () {};
+    button.dispatchEvent(new w.MouseEvent('click', { bubbles: true, cancelable: true }));
+    await until(() => button.textContent !== 'Copy');
+    assert.deepEqual(copied, ['copy'], 'the legacy path really ran execCommand("copy")');
+    assert.equal(button.textContent, 'Copied ✓');
+    assert.equal(button.classList.contains('is-copied'), true);
+    // And the text handed to the clipboard is the block's own content
+    // (jsdom has no innerText, which is exactly why app.js falls back).
+    assert.equal(pre.innerText, undefined);
+    assert.ok(pre.textContent.trim().length > 10);
+  } finally { h.close(); }
+});
+
+test('auto-selecting the favorite theme is a device toggle applied at sign-in', () => {
+  const profile = script('profile.js');
+  const app = script('app.js');
+  assert.match(profile, /var AUTO_THEME_KEY = 'snake\.autoTheme\.v1';/);
+  assert.match(profile, /id="pf-theme-auto"/);
+  assert.match(profile, /Auto-select my favorite theme when I sign in/);
+  // The switch is only rendered on your own profile.
+  const editable = profile.slice(profile.indexOf('function renderTheme'), profile.indexOf('function heatLevel'));
+  assert.ok(editable.indexOf('pf-theme-auto') > editable.indexOf('if (editable) {'));
+  assert.ok(editable.indexOf('pf-theme-auto') < editable.indexOf('} else {'));
+  // A page load never overrides your chosen theme; only signing in does.
+  assert.match(profile, /var justSignedIn = false;/);
+  assert.match(profile, /if \(!justSignedIn\) return;/);
+  assert.match(app, /function maybeAutoTheme\(\) \{\s*if \(!authUser \|\| !autoThemeWanted\(\)\) return;/);
+  assert.match(app, /loadBoard\(\);\s*maybeAutoTheme\(\);/);
+});
+
+test('both self-host sections carry the new wording, disclaimers and real compose file', () => {
+  const page = readFileSync(new URL('../src/app/page.tsx', import.meta.url), 'utf8');
+  const compose = readFileSync(new URL('../compose.yaml', import.meta.url), 'utf8');
+  for (const text of [gameView, page]) {
+    assert.match(text, /Host this website/);
+    assert.match(text, /This comes with no warranty/);
+    assert.match(text, /accidentally delete your user data/);
+    assert.match(text, /Made almost entirely with/);
+    assert.match(text, /https:\/\/arena\.ai/);
+    assert.match(text, /https:\/\/podman\.io\/docs\/installation/);
+    assert.match(text, /https:\/\/docs\.docker\.com\/engine\/install/);
+    assert.match(text, /git clone https:\/\/github\.com\/HelloJesusBeloved\/next-level-snake/);
+    assert.match(text, /cd \.\/next-level-snake/);
+    assert.match(text, /sed -i "s\/\^SECRET_KEY_BASE=\.\*\/SECRET_KEY_BASE=\$\(openssl rand -hex 64\)\/" \.env/);
+    assert.match(text, /\(I Wouldn.t personally recommend\)/);
+    assert.doesNotMatch(text, /open http:\/\/localhost:3000/);
+    assert.doesNotMatch(text, /github\.com\/your-org\/snake/);
+    // The published compose block is the file that actually ships. The TSX
+    // source escapes ${ for its template literal, so compare the rendered form.
+    const rendered = text.replace(/\\\$\{/g, '${');
+    for (const line of compose.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      assert.ok(rendered.includes(trimmed), 'compose.yaml line missing from the page: ' + trimmed);
+    }
+  }
 });

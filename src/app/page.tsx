@@ -15,11 +15,18 @@ export default function Home() {
       </div>
 
       <header className="masthead">
-        <div className="masthead__brand">
-          <span className="mark" aria-hidden="true" />
-          <span className="brand__text">
-            <span className="brand__eyebrow">Next Level</span>
-            <span className="wordmark">Snake</span>
+        <div className="masthead__brand-group">
+          <div className="masthead__brand">
+            <span className="mark" aria-hidden="true" />
+            <span className="brand__text">
+              <span className="brand__eyebrow">Next Level</span>
+              <span className="wordmark">Snake</span>
+            </span>
+          </div>
+          <span className="brand__credit">
+            Made almost entirely with{" "}
+            <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a>{" "}
+            ❤️
           </span>
         </div>
         <nav className="masthead__meta" aria-label="Main navigation">
@@ -503,6 +510,7 @@ export default function Home() {
       <section className="band band--manual" id="manual">
         <p className="band__eyebrow">03 — Self-hosting · Podman first</p>
         <h2 className="band__title">One container. Two commands. Yours.</h2>
+        <p className="band__kicker">Host this website <em>yourself!</em></p>
         <p className="band__lede">
           Run the Rails app and PostgreSQL directly with <code>podman compose up --build -d</code>
           {" "}from the repository root. No helper script. Prefer Docker? Use
@@ -515,15 +523,22 @@ export default function Home() {
           <ol className="steps">
             <li>
               <div>
-                <h3>Bring it up</h3>
+                <h3>
+                  Bring it up{" "}
+                  <span className="req">
+                    Requires{" "}
+                    <a href="https://podman.io/docs/installation" target="_blank" rel="noreferrer">Podman</a>{" "}
+                    or{" "}
+                    <a href="https://docs.docker.com/engine/install/" target="_blank" rel="noreferrer">Docker</a>
+                  </span>
+                </h3>
                 <p>Builds the image and starts PostgreSQL with persistent, SELinux-labeled storage.</p>
-                <pre className="code"><code>{`git clone https://github.com/HelloJesusBeloved/next-level-snake.git
-cd snake
+                <pre className="code"><code>{`git clone https://github.com/HelloJesusBeloved/next-level-snake
+cd ./next-level-snake
 cp .env.example .env
 # Set SECRET_KEY_BASE in .env to this generated value:
-openssl rand -hex 64
-podman compose up --build -d
-open http://localhost:3000`}</code></pre>
+sed -i "s/^SECRET_KEY_BASE=.*/SECRET_KEY_BASE=$(openssl rand -hex 64)/" .env
+podman compose up --build -d`}</code></pre>
               </div>
             </li>
             <li>
@@ -531,7 +546,7 @@ open http://localhost:3000`}</code></pre>
                 <h3>Configure it</h3>
                 <p>
                   The whole surface is <code>.env</code> at the repo root —
-                  port, secret, database credentials. Restart after editing:
+                  port, secret, database credentials. Restart after editing:{" "}
                   <code>podman compose up -d --force-recreate</code>.
                 </p>
                 <pre className="code"><code>{`# .env
@@ -565,13 +580,13 @@ sudo ufw reload`}</code></pre>
                 <h3>Operate it</h3>
                 <p>Logs, a console, backups — all one line each, engine-agnostic.</p>
                 <pre className="code"><code>{`podman compose logs -f app
- podman compose exec app bin/rails console
- podman compose exec db pg_dump -U snake snake_production > snake.sql`}</code></pre>
+podman compose exec app bin/rails console
+podman compose exec db pg_dump -U snake snake_production > snake.sql`}</code></pre>
               </div>
             </li>
             <li>
               <div>
-                <h3>No containers? Bare metal</h3>
+                <h3>No containers? Bare metal <span className="step-sub">(I Wouldn’t personally recommend)</span></h3>
                 <p>
                   On Fedora or Ubuntu, <code>install.sh</code> detects the distro,
                   installs mise, compiles the pinned Ruby and wires up systemd.
@@ -588,50 +603,106 @@ systemctl status snake`}</code></pre>
               <h3>The compose surface</h3>
               <ul>
                 <li>
-                  <code>app</code> — builds the Rails image, exposes
-                  <code> {`$PORT`} </code>→ 3000, healthchecks <code>/up</code>.
+                  <code>app</code> — builds the Rails image, publishes{" "}
+                  <code>$BIND_ADDRESS:$PORT</code> (default{" "}
+                  <code>0.0.0.0:3000</code>) to the container’s 3000, and
+                  healthchecks <code>/up</code> with curl every 30s.
                 </li>
                 <li>
                   <code>db</code> — <code>postgres:16-alpine</code>, role and
-                  database created from your <code>.env</code> values.
+                  database created from your <code>.env</code> values,
+                  healthchecked with <code>pg_isready</code> before{" "}
+                  <code>app</code> starts.
                 </li>
                 <li>
                   <code>pgdata</code> — named volume; <code>podman compose down</code>{" "}
                   keeps it, <code>down -v</code> wipes it.
                 </li>
                 <li>
+                  Both services use <code>restart: unless-stopped</code> on the{" "}
+                  <code>snakenet</code> network, and the entrypoint waits for
+                  Postgres itself rather than trusting compose ordering.
+                </li>
+                <li>
                   Fedora: <code>pgdata:/var/lib/postgresql/data:Z</code> gives
                   the database a private SELinux label. No privileged mode or
                   disabled security labels.
+                </li>
+                <li>
+                  Tunables, all optional in <code>.env</code>:{" "}
+                  <code>RAILS_LOG_LEVEL</code>, <code>RAILS_FORCE_SSL</code>,{" "}
+                  <code>RAILS_MAX_THREADS</code>, <code>WEB_CONCURRENCY</code>,{" "}
+                  <code>DATABASE_PORT</code>.
                 </li>
               </ul>
             </div>
 
             <pre className="code"><code>{`# compose.yaml — read by both Podman and Docker compose
+# Native commands, from the repository root:
+#   podman compose up --build -d
+#   docker compose up --build -d   # optional alternative; same configuration
+#
+# Fedora/SELinux: application files are copied INTO the image, not bind-mounted
+# from your home directory. Database storage uses a private :Z-labeled named
+# volume. SELinux stays enforcing; do not use privileged or label=disable.
 services:
   app:
-    build: { context: . }
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: next-level-snake:local
-    networks: [snakenet]
-    ports: ["\${PORT:-3000}:3000"]
+    restart: unless-stopped
+    networks:
+      - snakenet
+    ports:
+      - "\${BIND_ADDRESS:-0.0.0.0}:\${PORT:-3000}:3000"
     environment:
-      SECRET_KEY_BASE: \${SECRET_KEY_BASE}
+      RAILS_ENV: production
+      RAILS_LOG_LEVEL: \${RAILS_LOG_LEVEL:-info}
+      PORT: 3000
+      SECRET_KEY_BASE: \${SECRET_KEY_BASE:?Set SECRET_KEY_BASE in .env with openssl rand -hex 64}
       DATABASE_HOST: db
+      DATABASE_PORT: 5432
       DATABASE_USER: \${DATABASE_USER:-snake}
       DATABASE_PASSWORD: \${DATABASE_PASSWORD:-snake}
       DATABASE_NAME: \${DATABASE_NAME:-snake_production}
+      RAILS_FORCE_SSL: \${RAILS_FORCE_SSL:-false}
+      RAILS_MAX_THREADS: \${RAILS_MAX_THREADS:-5}
+      WEB_CONCURRENCY: \${WEB_CONCURRENCY:-0}
     depends_on:
-      db: { condition: service_healthy }
+      db:
+        condition: service_healthy
+    # The entrypoint ALSO waits for Postgres; it does not rely solely on the
+    # compose provider supporting health-based dependency ordering.
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:3000/up"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+
   db:
     image: docker.io/library/postgres:16-alpine
-    networks: [snakenet]
+    restart: unless-stopped
+    networks:
+      - snakenet
     environment:
       POSTGRES_USER: \${DATABASE_USER:-snake}
       POSTGRES_PASSWORD: \${DATABASE_PASSWORD:-snake}
       POSTGRES_DB: \${DATABASE_NAME:-snake_production}
-    volumes: ["pgdata:/var/lib/postgresql/data:Z"]
+    volumes:
+      # Private SELinux relabeling for this database container. Docker on
+      # non-SELinux hosts also accepts this suffix, so no override is required.
+      - pgdata:/var/lib/postgresql/data:Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$\${POSTGRES_USER}\" -d \"$\${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
 networks:
   snakenet:
+
 volumes:
   pgdata:`}</code></pre>
           </div>
@@ -641,6 +712,10 @@ volumes:
       <footer className="footer">
         <span>Next Level Snake — wall-wrap arcade</span>
         <span>Ruby on Rails 8 · PostgreSQL · Puma · Podman/Docker</span>
+        <span>
+          Made entirely with{" "}
+          <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a>
+        </span>
         <span>Scores isolated per speed × growth</span>
       </footer>
 
@@ -682,7 +757,14 @@ volumes:
               <span>Confirm password</span>
               <input name="confirm-password" type="password" autoComplete="new-password" required minLength={8} />
             </label>
+            <div className="auth-disclaimer" role="note">
+              <strong>⚠️ Disclaimer</strong>
+              <p>
+                This comes with no warranty, there is a possibility I may accidentally delete your user data while trying to add a feature 😅
+              </p>
+            </div>
             <div className="auth-warning" role="note">
+              <strong>🔑 Warning</strong>
               <p>
                 An email is not required to make an account. However, this means
                 that you will not be able to reset your password if you forget it.

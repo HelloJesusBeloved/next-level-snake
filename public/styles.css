@@ -105,6 +105,44 @@ pre { font-family: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, monos
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.masthead__brand-group {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.brand__credit {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.brand__credit a {
+  color: var(--green);
+  text-decoration: none;
+  margin: 0 4px;
+  border-bottom: 1px solid color-mix(in srgb, var(--green) 40%, transparent);
+  transition: border-color 160ms ease, text-shadow 160ms ease;
+}
+
+.brand__credit a:hover,
+.brand__credit a:focus-visible {
+  border-bottom-color: currentColor;
+  text-shadow: 0 0 16px rgba(var(--accent-rgb), 0.45);
+  outline: none;
+}
+
+@media (max-width: 720px) {
+  .masthead__brand-group { gap: 8px; }
+  .brand__credit { font-size: 10px; }
+}
+
 .masthead__brand { display: flex; align-items: center; gap: 14px; }
 
 .brand__text { display: flex; flex-direction: column; gap: 3px; }
@@ -753,6 +791,32 @@ kbd {
 
 .band__lede { max-width: 62ch; color: #aab1b9; }
 
+/* The invitation under "One container. Two commands. Yours." — deliberately a
+   step or two louder than the lede beneath it, in the display face. */
+.band__kicker {
+  margin: 0 0 12px;
+  max-width: 24ch;
+  font-family: 'Space Grotesk', 'Helvetica Neue', sans-serif;
+  font-size: clamp(19px, 2.3vw, 24px);
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.band__kicker em {
+  font-style: normal;
+  color: var(--green);
+  text-shadow: 0 0 26px rgba(var(--accent-rgb), 0.4);
+}
+
+/* Inline commands stay on one line so a sentence never breaks mid-token. */
+.band__lede code,
+.band__kicker code,
+.callout code,
+.steps p code,
+.note-card code { white-space: nowrap; }
+
 .records {
   width: 100%;
   border-collapse: collapse;
@@ -815,7 +879,51 @@ kbd {
   text-align: center;
 }
 
-.steps h3 { font-size: 18px; font-weight: 500; margin-bottom: 6px; letter-spacing: -0.01em; }
+/* Inline flow, not flex: a heading's trailing note has to sit on the very same
+   baseline as the title and be separated by nothing but a word space. Flex
+   items align by baseline too, but the gap between them is a hard 10px, which
+   read as a wide, slightly sunken second label. */
+.steps h3 {
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.3;
+  margin-bottom: 6px;
+  letter-spacing: -0.01em;
+}
+
+/* Requirements named inside a step heading are links, not decoration. */
+.steps h3 a {
+  color: var(--green);
+  text-decoration: none;
+  border-bottom: 1px solid color-mix(in srgb, var(--green) 45%, transparent);
+  transition: border-color 160ms ease, text-shadow 160ms ease;
+}
+.steps h3 a:hover,
+.steps h3 a:focus-visible {
+  border-bottom-color: currentColor;
+  text-shadow: 0 0 18px rgba(var(--accent-rgb), 0.45);
+  outline: none;
+}
+.steps h3 .req {
+  margin-left: 10px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+/* A plain continuation of the heading: same colour, same baseline, one space. */
+.steps h3 .step-sub {
+  font-size: inherit;
+  font-weight: 400;
+  line-height: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  text-transform: none;
+  font-family: inherit;
+  vertical-align: baseline;
+}
 .steps p { color: var(--muted); font-size: 14px; margin-bottom: 10px; }
 
 pre.code {
@@ -850,10 +958,15 @@ pre.code {
 
 .callout ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 11px; }
 
+/* One list item = one bullet + ONE run of text. This used to be a two-column
+   grid, which turned every element child (each <code> span) into its own grid
+   item — so "app — builds the Rails image, exposes $PORT → 3000" stacked into
+   six separate lines. Block flow with an absolutely placed marker keeps the
+   sentence reading as a sentence. */
 .callout li {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
-  gap: 10px;
+  position: relative;
+  display: block;
+  padding-left: 26px;
   font-size: 14px;
   color: #c3cad2;
   line-height: 1.55;
@@ -861,13 +974,110 @@ pre.code {
 
 .callout li::before {
   content: '';
+  position: absolute;
+  left: 4px;
+  top: 0.52em;
   width: 8px;
   height: 8px;
-  margin-top: 8px;
   border-radius: 2px;
   background: var(--green);
   box-shadow: 0 0 12px rgba(var(--accent-rgb), 0.5);
 }
+
+.callout li + li { margin-top: 11px; }
+[data-theme='paper'] .callout li { color: #4a4433; }
+
+/* =====================================================================
+   Self-host notes: the no-warranty warning and the build credit. Unequal
+   cards — the warning gets the wider column — that stack on phones.
+   ===================================================================== */
+.manual-notes {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 14px;
+  margin: 22px 0 4px;
+}
+
+@media (max-width: 860px) {
+  .manual-notes { grid-template-columns: minmax(0, 1fr); }
+}
+
+.note-card {
+  position: relative;
+  padding: 15px 18px 16px 19px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--note-accent, var(--green));
+  border-radius: 12px;
+  background:
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.03) 0 8px, rgba(255, 255, 255, 0) 8px 18px),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.015));
+  transition: transform 170ms ease, border-color 170ms ease, box-shadow 170ms ease;
+}
+
+.note-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--note-accent, var(--green));
+  box-shadow: 0 18px 38px -26px rgba(0, 0, 0, 0.95);
+}
+
+.note-card--warranty { --note-accent: #ffc44c; }
+.note-card--credit { --note-accent: var(--green); }
+
+.note-card .note-card__head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-bottom: 7px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--note-accent, var(--green));
+}
+
+.note-card__icon { font-size: 14px; line-height: 1; }
+
+.note-card p {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.62;
+  color: #c3cad2;
+}
+
+.note-card a {
+  color: var(--note-accent, var(--green));
+  text-decoration: none;
+  font-weight: 500;
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 0% 1px;
+  background-position: 0 100%;
+  background-repeat: no-repeat;
+  transition: background-size 240ms ease;
+}
+
+.note-card a:hover,
+.note-card a:focus-visible { background-size: 100% 1px; outline: none; }
+
+[data-theme='paper'] .note-card { background: rgba(255, 255, 255, 0.55); }
+[data-theme='paper'] .note-card p { color: #4a4433; }
+[data-theme='paper'] .note-card--warranty { --note-accent: #a86a00; }
+[data-theme='violet'] .note-card {
+  background: rgba(22, 10, 42, 0.84);
+  border-color: rgba(255, 255, 255, 0.2);
+  border-left-color: var(--note-accent, var(--green));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+[data-theme='violet'] .note-card p { color: #d9cdf2; }
+
+.footer a {
+  color: var(--muted);
+  text-decoration: none;
+  border-bottom: 1px solid transparent;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+.footer a:hover,
+.footer a:focus-visible { color: var(--green); border-bottom-color: currentColor; outline: none; }
 
 .footer {
   position: relative;
@@ -1186,6 +1396,27 @@ html[data-theme='violet'] body { background-color: #12081f; }
   cursor: pointer;
 }
 .code-copy:hover { color: var(--green); border-color: var(--green); }
+.code-copy:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+
+/* Confirmation that the clipboard actually took the text. */
+.code-copy.is-copied {
+  color: var(--on-accent);
+  background: var(--green);
+  border-color: var(--green);
+  animation: code-copy-pop 260ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.code-copy.is-failed { color: #ff8a80; border-color: rgba(255, 90, 80, 0.7); }
+@keyframes code-copy-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.09); }
+  100% { transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) { .code-copy.is-copied { animation: none; } }
+
+/* Fingers: the copy target is tiny in a code block, so pad it on touch. */
+@media (pointer: coarse), (max-width: 720px) {
+  .code-copy { min-height: 40px; min-width: 74px; padding: 8px 12px; font-size: 10px; }
+}
 [data-theme='paper'] .code-copy { background: rgba(255, 255, 255, 0.7); color: #5d5340; }
 
 /* Matrix rain — terminal theme, page background only, never inside the game
@@ -1325,7 +1556,42 @@ html[data-theme='terminal'] .matrix-rain { display: block; }
   margin: 0;
 }
 
+.auth-disclaimer {
+  margin: 14px 0 3px;
+  border: 1px solid rgba(255, 75, 75, 0.55);
+  background: rgba(255, 60, 60, 0.10);
+  color: #ffc4c4;
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-size: 13px;
+  line-height: 1.65;
+}
+.auth-disclaimer strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+  color: #ff6b6b;
+  font-weight: 600;
+}
+.auth-disclaimer p { margin: 0; }
+[data-theme='paper'] .auth-disclaimer {
+  color: #9c1c1c;
+  background: rgba(220, 40, 40, 0.08);
+  border-color: rgba(200, 30, 30, 0.4);
+}
+[data-theme='paper'] .auth-disclaimer strong { color: #b31414; }
+[data-theme='violet'] .auth-disclaimer {
+  background: rgba(42, 10, 22, 0.84);
+  border-color: rgba(255, 80, 100, 0.45);
+}
+
+/* .auth-form is a grid with its own 13px gap, so the space between the two
+   notices was 10 + 13 + 10 = 33px. Halved to 16px: 3 from the disclaimer, the
+   grid's 13, nothing from the warning. */
 .auth-warning {
+  margin: 0 0 16px;
   border: 1px solid rgba(255, 190, 60, 0.5);
   background: rgba(255, 190, 60, 0.09);
   color: #ffd98a;
@@ -1334,9 +1600,18 @@ html[data-theme='terminal'] .matrix-rain { display: block; }
   font-size: 13px;
   line-height: 1.65;
 }
-.auth-warning strong { display: block; letter-spacing: 0.04em; margin-bottom: 3px; }
+.auth-warning strong {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #ffeab6;
+}
 .auth-warning a { color: inherit; text-decoration: underline; text-underline-offset: 3px; }
 [data-theme='paper'] .auth-warning { color: #8a5a00; background: rgba(200, 140, 0, 0.08); border-color: rgba(160, 110, 0, 0.4); }
+[data-theme='paper'] .auth-warning strong { color: #6d4300; }
 
 .auth-form .btn { width: 100%; }
 
@@ -1363,11 +1638,22 @@ html[data-theme='terminal'] .matrix-rain { display: block; }
   gap: 12px;
 }
 
+/* Every other cell has right padding only, which left the rank numeral pressed
+   against the board's left edge. Give the first column real breathing room and
+   let the rank column be a little wider than the digit needs. */
+.records th:first-child,
+.records td:first-child { padding-left: 16px; }
+
 .records .rank {
   font-family: 'IBM Plex Mono', monospace;
   font-variant-numeric: tabular-nums;
   color: var(--muted);
-  width: 34px;
+  width: 46px;
+}
+
+@media (max-width: 720px) {
+  .records th:first-child,
+  .records td:first-child { padding-left: 12px; }
 }
 .records tr:nth-child(1) .rank,
 .records tr:nth-child(2) .rank,
@@ -1725,7 +2011,20 @@ html[data-theme='terminal'] .matrix-rain { display: block; }
 .rank__badge--1 { background: #ffd34e; border-color: transparent; color: #2a1c00; }
 .rank__badge--2 { background: #d4dae6; border-color: transparent; color: #1c2230; }
 .rank__badge--3 { background: #e0a070; border-color: transparent; color: #2a1405; }
-.user__cell { display: inline-flex; align-items: center; gap: 10px; }
+.user__cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  text-decoration: none !important;
+}
+.user__link {
+  text-decoration: none !important;
+  color: inherit;
+}
+.user__link:hover .user__name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .avatar {
   display: inline-grid;
   place-items: center;
@@ -1736,6 +2035,10 @@ html[data-theme='terminal'] .matrix-rain { display: block; }
   color: var(--green);
   font-size: 12px;
   font-weight: 600;
+  text-decoration: none !important;
+}
+.user__link .avatar {
+  text-decoration: none !important;
 }
 .you-tag {
   padding: 2px 8px;
@@ -1986,6 +2289,44 @@ body.has-run .shell { z-index: 20; }
   font-size: 11px;
 }
 .pf-select select option { background: #14161a; color: #e9ecef; }
+
+/* Game log ordering: the menu picks the column, the pill reverses it and
+   states the order in words so the arrow never has to be decoded alone. */
+.pf-sort { display: inline-flex; align-items: center; gap: 8px; }
+.pf-sort__dir {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 13px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.pf-sort__dir:hover,
+.pf-sort__dir:focus-visible {
+  color: var(--green);
+  border-color: var(--green);
+  background: rgba(var(--accent-rgb), 0.12);
+  outline: none;
+}
+.pf-sort__arrow { font-size: 12px; line-height: 1; color: var(--green); }
+[data-theme='paper'] .pf-sort__dir { background: rgba(28, 24, 16, 0.05); }
+
+/* Fingers get a full-height target; the pill keeps its compact type. */
+@media (pointer: coarse), (max-width: 720px) {
+  .pf-sort { width: 100%; }
+  .pf-sort .pf-select { flex: 1; min-width: 0; }
+  .pf-sort .pf-select select { width: 100%; }
+  .pf-sort__dir { min-height: 40px; padding: 8px 14px; }
+}
 
 /* progress chart */
 .pf-chart { width: 100%; }
@@ -2342,7 +2683,17 @@ body.has-run .shell { z-index: 20; }
 /* Touch screens: bigger tap target, and the explanation opens as a centred card
    that always sits fully inside the screen. */
 @media (hover: none), (pointer: coarse) {
-  .xp-info-btn { width: 32px; height: 32px; font-size: 13px; }
+  .xp-info-btn {
+    width: 18px;
+    height: 18px;
+    font-size: 11px;
+  }
+  .xp-info-btn::after {
+    content: '';
+    position: absolute;
+    inset: -8px;
+    border-radius: 50%;
+  }
   .xp-meter__info-wrap { gap: 10px; }
   .xp-popover {
     position: fixed;
@@ -2417,6 +2768,33 @@ body.has-run .shell { z-index: 20; }
   color: var(--text);
 }
 .pf-fav-segmented { margin: 10px 0 14px; }
+
+/* "Auto-select my favorite theme when I sign in" — your profile only. */
+.pf-autotheme {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  margin: 2px 0 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease;
+}
+.pf-autotheme:hover { border-color: color-mix(in srgb, var(--green) 45%, var(--line)); }
+.pf-autotheme input { margin-top: 1px; }
+.pf-autotheme__text { display: grid; gap: 4px; min-width: 0; }
+.pf-autotheme__label { font-size: 13px; line-height: 1.4; color: var(--text); }
+.pf-autotheme__hint {
+  margin: 0;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  line-height: 1.5;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+[data-theme='paper'] .pf-autotheme { background: rgba(28, 24, 16, 0.05); }
 
 /* Profile: cabinet skin sits beside the profile, not inside the game modifiers. */
 .pf-layout {

@@ -7,6 +7,12 @@ food, and walls that **wrap instead of killing you**. Ships as a single
 container run directly with **Podman Compose** (Docker Compose also works), with a
 one-command setup, plus a bare-metal installer for Fedora/Ubuntu.
 
+> **Disclaimer.** This comes with no warranty. There is a possibility I may
+> accidentally delete your user data while trying to add a feature 😅 — keep a
+> `pg_dump` of your database handy before you upgrade.
+>
+> Made almost entirely with [arena.ai](https://arena.ai) ❤️.
+
 ---
 
 ## Features
@@ -123,7 +129,8 @@ rootless Podman keep separate images, volumes, and containers.
 From your extracted or cloned repository:
 
 ```bash
-cd /path/to/next-level-snake
+git clone https://github.com/HelloJesusBeloved/next-level-snake
+cd ./next-level-snake
 cp .env.example .env
 # Fill in a private session-signing key; never use a published example key.
 sed -i "s/^SECRET_KEY_BASE=.*/SECRET_KEY_BASE=$(openssl rand -hex 64)/" .env
@@ -227,7 +234,7 @@ database volume or disable SELinux to fix a missing source file.
 * The entrypoint's `pg_isready` loop is the startup gate even on older Compose
   providers that do not fully enforce `condition: service_healthy`.
 
-## Bare metal (Fedora / Ubuntu)
+## Bare metal (Fedora / Ubuntu) — wouldn't personally recommend
 
 ```bash
 chmod +x install.sh
