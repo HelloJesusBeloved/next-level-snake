@@ -74,6 +74,26 @@ class RoomMembership < ApplicationRecord
     ACTIVE_STATES.include?(state)
   end
 
+  def ready?
+    state == "ready"
+  end
+
+  # Last sign of life. A brand-new member has not polled yet, so fall back to
+  # the moment they sat down instead of treating them as instantly offline.
+  def seen_at
+    last_seen_at || joined_at || created_at || Time.current
+  end
+
+  # Presence is derived from the heartbeat the page sends while polling, so
+  # a closed tab fades out on its own without any socket (step 3 is HTTP).
+  def online?(at: Time.current)
+    seen_at > at - Rails.configuration.x.multiplayer.presence_timeout
+  end
+
+  def offline_for?(seconds, at: Time.current)
+    seen_at <= at - seconds
+  end
+
   def guest?
     guest_session_id.present?
   end
@@ -168,10 +188,14 @@ class RoomMembership < ApplicationRecord
 
   private
 
-  # Shared leave/remove path. Locks the room so host succession is atomic:
-  # if the host departs, the longest-seated remaining member inherits;
-  # if the room is now empty it disbands itself (releasing nothing —
-  # nobody is left) instead of lingering as a host-less zombie lobby.
+  # Shared leave/remove path. Locks the room so host succession is atomic: if
+  # the host departs, the longest-seated remaining member inherits at once.
+  #
+  # An emptied room is deliberately NOT disbanded here. The invitation link
+  # has to keep working for a moment — people leave and come back, and a whole
+  # lobby can reload at once — so the room simply sits there host-less until
+  # somebody rejoins (Room#join! hands them the crown) or the inactivity
+  # sweeper expires it (Room#sweep!, step 3 requirement 11).
   def depart!(to_state)
     return self unless active?
 
@@ -181,11 +205,7 @@ class RoomMembership < ApplicationRecord
       next unless was_host
 
       successor = room.room_memberships.active.seated_first.first
-      if successor
-        room.transfer_host_to!(successor)
-      elsif !room.closed?
-        room.disband!
-      end
+      room.transfer_host_to!(successor) if successor
     end
     self
   end

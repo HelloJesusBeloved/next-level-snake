@@ -1,4 +1,9 @@
 <% content_for :title, "Multiplayer — Next Level Snake" %>
+<% content_for :head do %>
+  <%# Lobby styling lives beside the lobby module, not in the single-player
+      stylesheet, so the two pages stay independent. %>
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=2026-10-20.1">
+<% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
 <div class="page-scrim" aria-hidden="true"></div>
@@ -10,12 +15,17 @@
 
 <header class="masthead">
   <div class="masthead__brand-group">
-    <div class="masthead__brand">
+    <%# The wordmark always goes back to the main page. %>
+    <a class="masthead__brand masthead__brand--link" href="<%= root_path %>" aria-label="Next Level Snake — back to the main page">
       <span class="mark" aria-hidden="true"></span>
       <span class="brand__text">
         <span class="brand__eyebrow">Next Level</span>
         <span class="wordmark">Snake</span>
       </span>
+    </a>
+    <div class="masthead__auth" id="mp-header-auth" aria-label="Account">
+      <button class="btn btn--small" id="mp-signin-top" type="button">Sign in</button>
+      <button class="btn btn--small" id="mp-create-top" type="button">Create account</button>
     </div>
     <span class="brand__credit">Made almost entirely with <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a> ❤️</span>
   </div>
@@ -43,23 +53,146 @@
   </nav>
 </header>
 
-<main class="band" id="multiplayer-root" aria-labelledby="multiplayer-title">
+<main class="band" id="multiplayer-root" aria-labelledby="multiplayer-title"
+      data-room-code="<%= @invitation_code %>"
+      data-poll-interval="<%= Rails.application.config.x.multiplayer.poll_interval %>">
   <p class="band__eyebrow">A new way to play</p>
   <h1 class="band__title" id="multiplayer-title">Multiplayer</h1>
   <p class="band__lede" style="color: var(--text)">
-    Multiplayer is not available yet. For now, enjoy the original game in Single Player.
+    Open a room, share the code, and gather your friends. Brawls are played here once the
+    match engine lands — the lobby itself is live.
   </p>
-  <div class="panel__actions" style="justify-content: flex-start; margin-top: 24px">
-    <a class="btn btn--primary" href="<%= root_path %>">Play single player</a>
+
+  <%# Same segmented control and swatches as the game page settings. %>
+  <div class="segmented mp-themes" id="mp-themes" role="group" aria-label="Theme">
+    <button type="button" data-theme="classic" aria-pressed="false">
+      <span class="swatch" data-swatch="classic"><i aria-hidden="true"></i>Classic</span>
+    </button>
+    <button type="button" data-theme="arcade" aria-pressed="false">
+      <span class="swatch" data-swatch="arcade"><i aria-hidden="true"></i>Arcade</span>
+    </button>
+    <button type="button" data-theme="vintage" aria-pressed="false">
+      <span class="swatch" data-swatch="vintage"><i aria-hidden="true"></i>Vintage</span>
+    </button>
+    <button type="button" data-theme="terminal" aria-pressed="false">
+      <span class="swatch" data-swatch="terminal"><i aria-hidden="true"></i>Terminal</span>
+    </button>
+    <button type="button" data-theme="paper" aria-pressed="false">
+      <span class="swatch" data-swatch="paper"><i aria-hidden="true"></i>Paper</span>
+    </button>
+    <button type="button" data-theme="violet" aria-pressed="false">
+      <span class="swatch" data-swatch="violet"><i aria-hidden="true"></i>Midnight Violet</span>
+    </button>
+    <button type="button" data-theme="sunsetfire" aria-pressed="false">
+      <span class="swatch" data-swatch="sunsetfire"><i aria-hidden="true"></i>Royal Sunset</span>
+    </button>
   </div>
+
+  <noscript>
+    <p class="mp-note mp-note--warn">Multiplayer rooms need JavaScript. Single Player works without it.</p>
+  </noscript>
+
+  <p class="mp-flash" id="mp-flash" role="status" aria-live="polite" hidden></p>
+
+  <%# ---- not in a room ------------------------------------------------- %>
+  <section class="mp-grid" id="mp-entry" hidden>
+    <article class="mp-card">
+      <h2 class="mp-card__title">Play as</h2>
+      <p class="mp-card__hint" id="mp-identity-note">Guests can play straight away — no account needed.</p>
+      <label class="auth-field">
+        <span>Display name</span>
+        <input id="mp-name" type="text" maxlength="30" minlength="2" autocomplete="nickname"
+               placeholder="e.g. Ada" spellcheck="false">
+      </label>
+      <p class="mp-card__hint">Used in this room only. Your account name never changes.</p>
+      <div class="mp-actions" id="mp-auth-actions">
+        <button class="btn btn--small" id="mp-signin" type="button">Sign in</button>
+        <button class="btn btn--small" id="mp-create-account" type="button">Create account</button>
+      </div>
+    </article>
+
+    <article class="mp-card">
+      <h2 class="mp-card__title">Start a room</h2>
+      <p class="mp-card__hint">You become the host <span class="mp-crown" aria-hidden="true">👑</span> and get an invitation code to share. No size to pick — rooms expand as friends pile in.</p>
+      <div class="mp-actions">
+        <button class="btn btn--primary" id="mp-create" type="button">Create room</button>
+      </div>
+    </article>
+
+    <article class="mp-card">
+      <h2 class="mp-card__title">Join a room</h2>
+      <p class="mp-card__hint">Enter the code a friend shared, or open their invitation link.</p>
+      <label class="auth-field">
+        <span>Invitation code</span>
+        <input id="mp-code" type="text" maxlength="20" autocapitalize="characters" autocorrect="off"
+               spellcheck="false" placeholder="ABCD-EFGH-JKMN" value="<%= @invitation_code %>">
+      </label>
+      <p class="mp-card__hint" id="mp-code-preview" hidden></p>
+      <div class="mp-actions">
+        <button class="btn btn--primary" id="mp-join" type="button">Join room</button>
+      </div>
+    </article>
+  </section>
+
+  <%# ---- inside a room ---------------------------------------------------- %>
+  <section class="mp-room" id="mp-room" hidden>
+    <header class="mp-room__head">
+      <div>
+        <p class="mp-room__eyebrow">Brawl lobby · <span id="mp-room-state">lobby</span></p>
+        <h2 class="mp-room__code" id="mp-room-code">————————————</h2>
+      </div>
+      <div class="mp-room__share">
+        <button class="btn btn--small" id="mp-copy-code" type="button">Copy code</button>
+        <button class="btn btn--small" id="mp-copy-link" type="button">Copy invite link</button>
+      </div>
+    </header>
+
+    <p class="mp-room__meta">
+      <span id="mp-count">0 players</span>
+      <span aria-hidden="true">·</span>
+      <span id="mp-ready-count">0 ready</span>
+      <span aria-hidden="true">·</span>
+      <span id="mp-start-state">Waiting for players</span>
+    </p>
+
+    <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
+
+    <div class="mp-actions mp-actions--room">
+      <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
+      <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
+      <button class="btn btn--small btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
+      <button class="btn btn--small" id="mp-leave" type="button">Leave room</button>
+    </div>
+
+    <p class="mp-note" id="mp-host-note" hidden>
+      Ready votes are advisory — as host, you decide when the Brawl begins.
+    </p>
+  </section>
 </main>
 
 <footer class="footer">
   <span>Next Level Snake — wall-wrap arcade</span>
   <span>Ruby on Rails <%= Rails.version %> · PostgreSQL · Puma · Podman/Docker</span>
-  <span>Multiplayer · in development</span>
+  <span>Multiplayer · lobbies live, Brawl engine in development</span>
 </footer>
 
+<%# Confirmation before leaving a room you are already in (requirement 12). %>
+<dialog class="dialog" id="mp-confirm" aria-labelledby="mp-confirm-title">
+  <div class="dialog__inner">
+    <div class="dialog__head">
+      <h2 class="dialog__title" id="mp-confirm-title">Leave your current room?</h2>
+      <button class="dialog__close" id="mp-confirm-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <p class="mp-card__hint" id="mp-confirm-body">You are already in a room.</p>
+    <div class="mp-actions">
+      <button class="btn btn--primary" id="mp-confirm-ok" type="button">Leave and join</button>
+      <button class="btn btn--small" id="mp-confirm-cancel" type="button">Stay here</button>
+    </div>
+  </div>
+</dialog>
+
+<%= render "shared/auth_dialog" %>
+
 <% content_for :scripts do %>
-  <script type="module" src="/multiplayer/page.js?v=1"></script>
+  <script type="module" src="/multiplayer/page.js?v=2026-10-20.1"></script>
 <% end %>

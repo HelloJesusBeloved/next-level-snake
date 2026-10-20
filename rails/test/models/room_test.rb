@@ -85,14 +85,38 @@ class RoomTest < ActiveSupport::TestCase
     end
   end
 
-  test "capacity is respected for brawls" do
-    room = make_room_with_user_host(max_members: 2)
-    room.join!(guest_session: make_guest.first, display_name: "Second")
-
+  test "a full room expands by itself up to the hard ceiling" do
+    room = Room.create_with_host!(guest_session: make_guest.first,
+                                  display_name: "Host", max_members: 2)
+    make_guest_membership(room, "Second")
     assert room.full?
-    assert_raises(Room::NotJoinable) do
-      room.join!(guest_session: make_guest.first, display_name: "Overflow")
+
+    make_guest_membership(room, "Third")
+    assert_equal 4, room.reload.max_members, "the room grew instead of refusing"
+    assert_equal 3, room.active_memberships.count
+  end
+
+  test "the ceiling is the only place a room ever refuses for size" do
+    room = Room.create_with_host!(guest_session: make_guest.first,
+                                  display_name: "Host", max_members: 2)
+    with_capacity_ceiling(3) do
+      make_guest_membership(room, "Second")
+      make_guest_membership(room, "Third") # expanded 2 -> 3 and seated
+      assert_equal 3, room.reload.max_members
+      assert_raises(Room::NotJoinable) do
+        make_guest_membership(room, "OneTooMany")
+      end
     end
+  end
+
+  test "a duel never expands beyond its two seats" do
+    room = Room.create_with_host!(guest_session: make_guest.first,
+                                  display_name: "Host", mode: "duel", max_members: 2)
+    make_guest_membership(room, "Second")
+    assert_raises(Room::NotJoinable) do
+      make_guest_membership(room, "OneTooMany")
+    end
+    assert_equal 2, room.reload.max_members
   end
 
   test "settings are rebuilt from an allow-list, junk is dropped" do

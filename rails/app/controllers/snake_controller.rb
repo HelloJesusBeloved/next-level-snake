@@ -4,6 +4,10 @@ class SnakeController < ApplicationController
   # leaderboards to the JSON API, so there is nothing to load here.
   def index; end
 
-  # Page shell only; multiplayer frontend modules are isolated from app.js.
-  def multiplayer; end
+  # Lobby shell. public/multiplayer/lobby.js fetches the room state from
+  # /api/rooms/*; an invitation code in the path is handed to it through a
+  # data attribute so /multiplayer/CODE opens on the right room.
+  def multiplayer
+    @invitation_code = params[:code].to_s.strip.upcase.delete("-").presence
+  end
 end

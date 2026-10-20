@@ -76,12 +76,13 @@ one-command setup, plus a bare-metal installer for Fedora/Ubuntu.
 │   ├── profile.js          #    the profile page: stats, charts, heatmap, game log
 │   ├── game.css            #    the cabinet: grey bezel + black screen
 │   ├── styles.css          #    page chrome + themes
+│   ├── multiplayer/        #    lobby page module + stylesheet (isolated from app.js)
 │   ├── violet-mist.svg     #    source-text Violet fallback; always included
 │   └── img/                #    optional photos: metal.jpg and violet-swirl.jpg
 ├── src/, package.json …    # preview app (see "The preview in this sandbox")
 └── rails/                  # ← the canonical Ruby on Rails application
-    ├── app/controllers/    #    SnakeController, ProfileController, Api::{Scores,Auth,Leaderboard,Profile,Games}Controller
-    ├── app/models/         #    Score, User
+    ├── app/controllers/    #    SnakeController, ProfileController, Api::{Scores,Auth,Leaderboard,Profile,Games,Rooms}Controller
+    ├── app/models/         #    Score, User, Room, RoomMembership, GuestSession
     ├── app/views/snake/    #    the game page (ERB)
     ├── app/views/profile/  #    the profile page shell (ERB)
     ├── bin/                #    rails, setup, sync-assets, docker-entrypoint
@@ -282,6 +283,12 @@ bare-metal reads `rails/.env` (see `rails/.env.example`).
 | `RAILS_FORCE_SSL` | `false` | `true` when TLS terminates in front of Puma |
 | `RAILS_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `RAILS_MAX_THREADS` / `WEB_CONCURRENCY` | `5` / `0` | Puma threads / worker processes |
+| `MULTIPLAYER_PRESENCE_TIMEOUT` | `90` | seconds before a quiet lobby member shows as *away* |
+| `MULTIPLAYER_HOST_GRACE` | `120` | seconds a silent host keeps the crown before it passes on |
+| `MULTIPLAYER_MEMBER_DROP` | `600` | seconds before a silent member's seat is released (identity kept) |
+| `MULTIPLAYER_ROOM_IDLE` | `1800` | seconds an empty room survives before it expires |
+| `MULTIPLAYER_MAX_ROOM_SIZE` | `64` | hard ceiling a room can expand into (rooms start at 8 and grow on their own) |
+| `MULTIPLAYER_POLL_INTERVAL` | `5` | lobby poll interval handed to the page (real-time sync replaces it) |
 
 ## Accounts & the leaderboard
 
@@ -505,6 +512,16 @@ show "no snapshot". Data model: `scores.end_state` (jsonb) and `users.favorite_t
 | `GET` | `/api/profile` | — | `{ user: { username, favorite_theme, created_at }, games[] }` — your full game log (newest first, up to 1000); `401` for guests |
 | `PATCH` | `/api/profile` | `{ favorite_theme: "violet" \| null }` | `{ user }`; `400` for an unknown theme; `401`; `415` unless JSON |
 | `DELETE` | `/api/games/:id` | `{}` | `{ ok: true }`; `404` for a missing game **or another player's**; `401`; `415` unless JSON |
+| `POST` | `/api/rooms` | `{ display_name?, leave_current? }` | `201` room state, caller is host; `409 in_other_room`; `422` when a guest sends no name |
+| `GET` | `/api/rooms/current` | — | the caller's room state, or `{ room: null }` — this is what a page refresh uses |
+| `GET` | `/api/rooms/:code` | — | member → full state; anyone else → a join preview; `404` unknown code; `410` disbanded/expired |
+| `POST` | `/api/rooms/:code/join` | `{ display_name?, leave_current? }` | room state; `409 room_full` / `in_other_room`; `403` if removed; `410` closed |
+| `POST` | `/api/rooms/:code/ready` | `{ ready: true\|false }` | room state with updated ready counts (advisory vote) |
+| `POST` | `/api/rooms/:code/leave` | `{}` | `{ room: null, left: CODE }` — the guest identity is kept for reconnecting |
+| `POST` | `/api/rooms/:code/start` | `{}` | **host only.** `200 { start: { eligible … }, started: false }`; `422 not_eligible`; `403` otherwise |
+| `POST` | `/api/rooms/:code/disband` | `{}` | **host only.** `{ room: null, disbanded: CODE }`; `403` otherwise |
+| `POST` | `/api/rooms/:code/host` | `{ member_id }` | **host only.** hands the crown to another member; `403`/`404` |
+| `POST` | `/api/rooms/claim` | `{}` | links this browser's guest seat to the signed-in account; `401`/`404`/`409` |
 
 `score` is an integer `0..1000000`. For speed you provide **exactly one** of
 `speed_level` (`1..6`) or `speed_custom` (`0..100`); for growth, exactly one
@@ -516,6 +533,37 @@ globally. Filter values are `all`, a preset number (speed `1`–`6`, growth `1`�
 `c` (any custom value) or `cNN` (exactly that custom value, `0`–`100`). Standard
 only ever contains preset runs; Custom contains runs with at least one custom
 slider.
+
+## Multiplayer rooms
+
+`/multiplayer` is a working lobby; the Brawl match engine is not built yet.
+
+* **Create a room** and you are its host, marked with a crown (👑) in the
+  roster. You get a 12-character invitation code and an invite link
+  (`/multiplayer/CODE`) that opens the page straight onto that room. There is
+  no size to pick: rooms start at 8 seats and **expand by themselves** as
+  players pile in, up to `MULTIPLAYER_MAX_ROOM_SIZE`.
+* **Guests never need an account.** Enter a display name and join. The server
+  issues an httpOnly guest cookie, so a plain refresh — or a closed laptop
+  reopened minutes later — restores the same seat. Sign In / Create Account
+  sit beside it, and signing in while seated *links* that seat to the account
+  (the room display name stays room-local; your username never changes).
+* **Ready votes are advisory.** The roster shows who is ready and who is away;
+  the host alone decides when a Brawl begins, and a Brawl needs at least two
+  connected players. Today `POST /api/rooms/:code/start` answers the
+  eligibility question and deliberately starts nothing.
+* **Leaving, succession and expiry.** Leaving keeps your identity so you can
+  come back to the same seat. If the host leaves, the crown passes immediately
+  to the longest-seated member; if the host simply goes silent, it passes after
+  `MULTIPLAYER_HOST_GRACE`. An emptied room keeps working for anyone who
+  rejoins, then expires after `MULTIPLAYER_ROOM_IDLE`. Hosts can disband a room
+  outright; invalid, disbanded and expired codes each say so (`404` / `410`).
+* **Switching rooms is deliberate**: the server refuses with `409 in_other_room`
+  and the page asks before leaving the room you are already in.
+
+Synchronization is plain HTTP polling in this step (`MULTIPLAYER_POLL_INTERVAL`),
+which also acts as the presence heartbeat; real-time updates come next. Duels,
+rankings, archives and QR invitations are not implemented yet.
 
 ### Database access
 

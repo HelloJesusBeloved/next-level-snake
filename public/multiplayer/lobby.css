@@ -1,0 +1,172 @@
+/*!
+ * Multiplayer lobby — scoped to /multiplayer only.
+ * Reuses the shared tokens from styles.css (--panel, --line, --green,
+ * --accent-rgb, ...), so every theme, including light Paper, is inherited
+ * rather than re-stated. Loaded through `content_for :head` in the view.
+ */
+
+#multiplayer-root { padding-bottom: 48px; }
+
+.mp-flash {
+  margin: 18px 0 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent-2) 10%, transparent);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+.mp-flash[data-kind='error'] {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+
+.mp-grid {
+  display: grid;
+  gap: 16px;
+  margin-top: 26px;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.mp-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+.mp-card__title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
+.mp-card__hint { color: var(--muted); font-size: 13px; line-height: 1.5; margin: 0; }
+.mp-card__sub { color: var(--muted); font-weight: 400; }
+.mp-card .auth-field { margin: 0; }
+
+.mp-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: auto; }
+.mp-actions--room { margin-top: 18px; }
+
+.mp-room {
+  margin-top: 26px;
+  padding: 20px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--line));
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+.mp-room__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.mp-room__eyebrow {
+  margin: 0 0 6px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+.mp-room__code {
+  margin: 0;
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: clamp(22px, 4.4vw, 32px);
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--green);
+  word-break: break-all;
+}
+.mp-room__share { display: flex; flex-wrap: wrap; gap: 8px; }
+.mp-room__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.mp-roster { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+.mp-player {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+}
+.mp-player.is-you { border-color: color-mix(in srgb, var(--accent-2) 55%, transparent); }
+.mp-player__name { font-weight: 600; font-size: 14px; }
+.mp-player__tag {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mp-player__spacer { flex: 1 1 auto; }
+
+.mp-crown { font-size: 15px; line-height: 1; filter: saturate(1.2); }
+
+.mp-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.mp-dot.is-online {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 22%, transparent);
+}
+
+.mp-badge {
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mp-badge.is-ready {
+  border-color: color-mix(in srgb, var(--green) 55%, transparent);
+  color: var(--green);
+}
+
+.mp-note {
+  margin: 14px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.mp-note--warn {
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--red) 45%, transparent);
+  border-radius: 12px;
+  color: var(--text);
+}
+
+#mp-confirm .mp-actions { margin-top: 18px; }
+
+@media (max-width: 560px) {
+  .mp-room { padding: 16px; }
+  .mp-actions--room .btn { flex: 1 1 auto; }
+}
+
+/* Brand + account shortcuts in the masthead's left cluster. */
+.masthead__brand--link {
+  text-decoration: none;
+  color: inherit;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.masthead__brand--link:hover .wordmark { color: var(--green); }
+.masthead__brand--link:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 4px;
+}
+.masthead__auth { display: flex; gap: 8px; margin-top: 10px; }
+
+/* Theme picker: the shared `.segmented` styles still apply; we only place it. */
+.mp-themes { margin-top: 20px; max-width: 640px; }

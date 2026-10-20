@@ -146,11 +146,29 @@ class RoomMembershipTest < ActiveSupport::TestCase
     assert_equal elder, room.reload.host_membership
   end
 
-  test "the last member leaving disbands the empty room" do
+  # Step 3: an emptied room stays open (its invitation link must survive a
+  # lobby-wide reload) until somebody rejoins or the inactivity sweeper
+  # expires it — see Room#sweep! and the rooms API tests.
+  test "the last member leaving empties the room without closing it" do
     room = make_room_with_user_host
     room.host_membership.leave!
 
-    assert room.reload.disbanded?
+    room.reload
+    assert room.lobby?
+    assert_not room.closed?
+    assert_equal 0, room.active_memberships.count
+    assert_nil room.host_membership
+  end
+
+  test "rejoining an emptied room makes the returning player its host" do
+    room = make_room_with_user_host
+    room.host_membership.leave!
+
+    guest, _raw = make_guest
+    seat = room.join!(guest_session: guest, display_name: "Newcomer")
+
+    assert seat.host?, "an empty room hands the crown to whoever shows up"
+    assert_equal seat, room.reload.host_membership
   end
 
   test "ready toggles only from joined" do

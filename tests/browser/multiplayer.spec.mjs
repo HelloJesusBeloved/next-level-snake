@@ -16,9 +16,32 @@ test('Rails serves both original game routes and the separate multiplayer page',
     expect(html).toContain('name="csrf-token"'); // Rails layout, not a preview fallback.
     expect(html).toContain(path === '/multiplayer' ? 'id="multiplayer-root"' : 'id="snake-root"');
   }
-  const module = await request.get('/multiplayer/page.js');
-  expect(module.status()).toBe(200);
-  expect(module.headers()['content-type']).toMatch(/javascript/);
+  for (const asset of ['/multiplayer/page.js', '/multiplayer/lobby.js']) {
+    const module = await request.get(asset);
+    expect(module.status()).toBe(200);
+    expect(module.headers()['content-type']).toMatch(/javascript/);
+  }
+  const css = await request.get('/multiplayer/lobby.css');
+  expect(css.status()).toBe(200);
+  expect(css.headers()['content-type']).toContain('text/css');
+});
+
+test('an invitation URL opens the page on that room code', async ({ request }) => {
+  const created = await request.post('/api/rooms', {
+    headers: { 'Content-Type': 'application/json' },
+    data: { display_name: 'LinkTester' },
+  });
+  expect(created.status()).toBe(201);
+  const { room } = await created.json();
+
+  const page = await request.get(`/multiplayer/${room.code}`);
+  expect(page.status()).toBe(200);
+  const html = await page.text();
+  expect(html).toContain(`data-room-code="${room.code}"`);
+  expect(html).toContain('id="multiplayer-root"');
+
+  // Unknown codes still render the lobby; the page explains the failure.
+  expect((await request.get('/multiplayer/ZZZZZZZZZZZZ')).status()).toBe(200);
 });
 
 for (const entry of ['/', '/play']) {
@@ -44,21 +67,170 @@ for (const entry of ['/', '/play']) {
   });
 }
 
-test('multiplayer has no pretend controls, game engine, or API traffic', async ({ page }) => {
-  const apiRequests = [];
+test('the lobby is real, but no gameplay is faked', async ({ page }) => {
   const sockets = [];
+  const apiPaths = new Set();
   page.on('request', (request) => {
-    if (new URL(request.url()).pathname.startsWith('/api/')) apiRequests.push(request.url());
+    const { pathname } = new URL(request.url());
+    if (pathname.startsWith('/api/')) apiPaths.add(pathname.replace(/\/[A-Z0-9]{12}(?=\/|$)/, '/:code'));
   });
   page.on('websocket', (socket) => sockets.push(socket.url()));
+
   await page.goto('/multiplayer');
-  await expect(page.locator('#multiplayer-root')).toContainText('Multiplayer is not available yet.');
-  await expect(page.locator('button, input, select, form, #snake-root, .snake-canvas')).toHaveCount(0);
+  await expect(page.locator('#mp-entry')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Create room' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Join room' })).toBeVisible();
+  // Sign In / Create Account: in the header AND under the display name.
+  await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Create account' })).toHaveCount(2);
+  await expect(page.getByRole('button', { name: 'Sign in' }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Sign in' }).last()).toBeVisible();
+
+  // No single-player engine, no canvas game, no sockets yet (step 4 adds them).
+  await expect(page.locator('#snake-root, .snake-canvas, #btn-start')).toHaveCount(0);
   await expect(page.locator('script[src^="/game.js"], script[src^="/app.js"], script[src^="/profile.js"]')).toHaveCount(0);
-  await expect(page.locator('script[type="module"][src^="/multiplayer/page.js"]')).toHaveCount(1);
   expect(await page.evaluate(() => typeof window.SnakeGame)).toBe('undefined');
-  expect(apiRequests).toEqual([]);
   expect(sockets).toEqual([]);
+
+  // The lobby talks only to the room API.
+  await expect.poll(() => [...apiPaths]).toContain('/api/rooms/current');
+  expect([...apiPaths].every((path) => path.startsWith('/api/rooms'))).toBe(true);
+});
+
+test('a guest creates a room, wears the crown, and a friend joins by link', async ({ page, browser }) => {
+  await page.goto('/multiplayer');
+  await page.fill('#mp-name', 'Ada');
+  await page.click('#mp-create');
+
+  await expect(page.locator('#mp-room')).toBeVisible();
+  const code = (await page.locator('#mp-room-code').textContent()).trim();
+  expect(code).toMatch(/^[A-Z0-9]{12}$/);
+  await expect(page).toHaveURL(new RegExp(`/multiplayer/${code}$`));
+  await expect(page.locator('#mp-roster .mp-player')).toHaveCount(1);
+  await expect(page.locator('#mp-roster .mp-crown')).toHaveCount(1);
+  await expect(page.locator('#mp-roster .mp-player').first()).toContainText('Ada');
+  await expect(page.locator('#mp-start')).toBeVisible();   // host-only controls
+  await expect(page.locator('#mp-disband')).toBeVisible();
+
+  // A refresh must restore exactly the same room, with no code typed again.
+  await page.reload();
+  await expect(page.locator('#mp-room-code')).toHaveText(code);
+  await expect(page.locator('#mp-roster .mp-player')).toHaveCount(1);
+
+  // A second browser opens the invitation link and joins as a guest.
+  const friendContext = await browser.newContext();
+  const friend = await friendContext.newPage();
+  await friend.goto(`/multiplayer/${code}`);
+  await friend.fill('#mp-name', 'Grace');
+  await friend.click('#mp-join');
+  await expect(friend.locator('#mp-room')).toBeVisible();
+  await expect(friend.locator('#mp-roster .mp-player')).toHaveCount(2);
+  await expect(friend.locator('#mp-start')).toBeHidden();  // not the host
+  await expect(friend.locator('#mp-disband')).toBeHidden();
+
+  // Readiness is advisory and visible to everyone.
+  await friend.click('#mp-ready-toggle');
+  await expect(friend.locator('#mp-ready-count')).toHaveText('1 ready');
+  await expect.poll(async () => (await page.locator('#mp-ready-count').textContent()).trim())
+    .toBe('1 ready');
+  await expect.poll(async () => page.locator('#mp-roster .mp-player').count()).toBe(2);
+
+  // The host may start without unanimity — and nothing pretends to play.
+  await page.click('#mp-start');
+  await expect(page.locator('#mp-flash')).toContainText('later step');
+  await expect(page.locator('#mp-room-state')).toHaveText('lobby');
+
+  // Leaving puts the friend back on the entry screen.
+  await friend.click('#mp-leave');
+  await expect(friend.locator('#mp-entry')).toBeVisible();
+  await expect.poll(async () => page.locator('#mp-roster .mp-player').count()).toBe(1);
+
+  // The host disbands; the friend is told why on their next poll.
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.click('#mp-disband');
+  await expect(page.locator('#mp-entry')).toBeVisible();
+  await friendContext.close();
+});
+
+test('joining a second room asks before leaving the first', async ({ page, request }) => {
+  const other = await request.post('/api/rooms', {
+    headers: { 'Content-Type': 'application/json' },
+    data: { display_name: 'Bob' },
+  });
+  const { room } = await other.json();
+
+  await page.goto('/multiplayer');
+  await page.fill('#mp-name', 'Ada');
+  await page.click('#mp-create');
+  await expect(page.locator('#mp-room')).toBeVisible();
+  const mine = (await page.locator('#mp-room-code').textContent()).trim();
+
+  // Opening somebody else's invitation while seated must ask first.
+  await page.goto(`/multiplayer/${room.code}`);
+  await expect(page.locator('#mp-confirm')).toBeVisible();
+  await expect(page.locator('#mp-confirm-body')).toContainText(mine);
+  await page.click('#mp-confirm-cancel');
+  await expect(page.locator('#mp-confirm')).toBeHidden();
+  await expect(page.locator('#mp-room-code')).toHaveText(mine);
+  await expect(page).toHaveURL(new RegExp(`/multiplayer/${mine}$`));
+
+  await page.goto(`/multiplayer/${room.code}`);
+  await page.click('#mp-confirm-ok');
+  await expect(page.locator('#mp-room-code')).toHaveText(room.code);
+  await expect(page.locator('#mp-roster .mp-player')).toHaveCount(2);
+});
+
+test('brand goes home, header auth opens the dialog, theme picker persists', async ({ page, isMobile }) => {
+  await page.goto('/multiplayer');
+
+  // No room-size selector anywhere on the page.
+  await expect(page.locator('#mp-capacity')).toHaveCount(0);
+
+  // The wordmark always returns to the main page.
+  await activate(page.locator('.masthead__brand--link'), isMobile);
+  await expect(page).toHaveURL(/\/$/);
+  await page.goBack();
+  await expect(page.locator('#multiplayer-root')).toBeVisible();
+
+  // Header auth opens the shared dialog and closes again.
+  await expect(page.locator('#mp-signin-top')).toBeVisible();
+  await expect(page.locator('#mp-create-top')).toBeVisible();
+  await activate(page.locator('#mp-signin-top'), isMobile);
+  await expect(page.locator('#auth-dialog')).toBeVisible();
+  await page.click('#auth-close');
+  await expect(page.locator('#auth-dialog')).toBeHidden();
+
+  // Theme picker: switching persists into the saved settings and survives a reload.
+  const before = await page.evaluate(() => localStorage.getItem('snake.settings.v1'));
+  await activate(page.locator('#mp-themes button[data-theme="terminal"]'), isMobile);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'terminal');
+  await expect(page.locator('#mp-themes button[data-theme="terminal"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#matrix-rain')).toBeVisible();
+
+  await activate(page.locator('#mp-themes button[data-theme="paper"]'), isMobile);
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
+  await expect(page.locator('#matrix-rain')).toBeHidden();
+  const saved = JSON.parse(await page.evaluate(() => localStorage.getItem('snake.settings.v1')));
+  expect(saved.theme).toBe('paper');
+  const beforeSettings = JSON.parse(before || '{}');
+  expect(saved.speedId).toEqual(beforeSettings.speedId ?? saved.speedId); // other keys untouched
+
+  await page.reload();
+  await expect(page.locator('html')).toHaveAttribute('data-theme', 'paper');
+  await expect(page.locator('#mp-themes button[data-theme="paper"]')).toHaveAttribute('aria-pressed', 'true');
+
+  // Theme carries to the main page too (same storage), verifying no drift.
+});
+test('invalid and disbanded codes explain themselves', async ({ page, request }) => {
+  await page.goto('/multiplayer');
+  await page.fill('#mp-code', 'ZZZZZZZZZZZZ');
+  await expect(page.locator('#mp-code-preview')).toContainText('does not exist');
+
+  await page.fill('#mp-name', 'Ada');
+  await page.click('#mp-join');
+  await expect(page.locator('#mp-flash')).toContainText('does not exist');
+  await expect(page.locator('#mp-entry')).toBeVisible();
+  expect((await request.get('/api/rooms/ZZZZZZZZZZZZ')).status()).toBe(404);
 });
 
 for (const theme of themes) {
