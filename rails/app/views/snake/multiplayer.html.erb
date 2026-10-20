@@ -1,0 +1,65 @@
+<% content_for :title, "Multiplayer — Next Level Snake" %>
+
+<div class="page-texture" aria-hidden="true"></div>
+<div class="page-scrim" aria-hidden="true"></div>
+<canvas id="matrix-rain" class="matrix-rain" aria-hidden="true"></canvas>
+
+<div class="spine" aria-hidden="true">
+  <span>Next Level Snake <b>/</b> Multiplayer</span>
+</div>
+
+<header class="masthead">
+  <div class="masthead__brand-group">
+    <div class="masthead__brand">
+      <span class="mark" aria-hidden="true"></span>
+      <span class="brand__text">
+        <span class="brand__eyebrow">Next Level</span>
+        <span class="wordmark">Snake</span>
+      </span>
+    </div>
+    <span class="brand__credit">Made almost entirely with <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a> ❤️</span>
+  </div>
+  <nav class="masthead__meta" aria-label="Main navigation">
+    <a class="btn btn--small btn--nav" href="<%= root_path %>">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7L8 5Z" /></svg>
+      Single Player
+    </a>
+    <a class="btn btn--small btn--nav" href="<%= root_path(anchor: "leaderboard") %>">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M6 2h12v2h4v4a5 5 0 0 1-5 5h-.5A6 6 0 0 1 13 15.9V18h3v4H8v-4h3v-2.1A6 6 0 0 1 7.5 13H7a5 5 0 0 1-5-5V4h4V2Zm-2 4v1a3 3 0 0 0 3 3V6H4Zm16 0h-3v4a3 3 0 0 0 3-3V6Z" /></svg>
+      Leaderboard
+    </a>
+    <a class="btn btn--small btn--nav" href="<%= root_path(anchor: "manual") %>">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M4 3h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1Zm1 3h2V5H5v1Zm0 2h2V7H5v1Zm12-3h-2v1h2V5Zm0 3h-2V7h2v1ZM4 12h16a1 1 0 0 1 1 1v4a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-4a1 1 0 0 1 1-1Zm1 3h2v-1H5v1Zm0 2h2v-1H5v1Zm12-3h-2v1h2v-1Zm0 3h-2v-1h2v1Z" /></svg>
+      Self Host
+    </a>
+    <a class="btn btn--small btn--nav" href="<%= profile_path %>">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M2 8h20v3H2Zm1 3h6v5H3v-5Zm13 0h6v5h-6v-5Z" /></svg>
+      Profile
+    </a>
+    <a class="btn btn--small btn--nav" href="https://github.com/HelloJesusBeloved/next-level-snake" target="_blank" rel="noreferrer">
+      <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.28-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.69.83.57A12.01 12.01 0 0 0 24 12c0-6.63-5.37-12-12-12Z" /></svg>
+      Open Source
+    </a>
+  </nav>
+</header>
+
+<main class="band" id="multiplayer-root" aria-labelledby="multiplayer-title">
+  <p class="band__eyebrow">A new way to play</p>
+  <h1 class="band__title" id="multiplayer-title">Multiplayer</h1>
+  <p class="band__lede" style="color: var(--text)">
+    Multiplayer is not available yet. For now, enjoy the original game in Single Player.
+  </p>
+  <div class="panel__actions" style="justify-content: flex-start; margin-top: 24px">
+    <a class="btn btn--primary" href="<%= root_path %>">Play single player</a>
+  </div>
+</main>
+
+<footer class="footer">
+  <span>Next Level Snake — wall-wrap arcade</span>
+  <span>Ruby on Rails <%= Rails.version %> · PostgreSQL · Puma · Podman/Docker</span>
+  <span>Multiplayer · in development</span>
+</footer>
+
+<% content_for :scripts do %>
+  <script type="module" src="/multiplayer/page.js?v=1"></script>
+<% end %>

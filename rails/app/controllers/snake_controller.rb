@@ -3,4 +3,7 @@ class SnakeController < ApplicationController
   # public/app.js wires the HUD, scoreboard, modifiers, accounts and the
   # leaderboards to the JSON API, so there is nothing to load here.
   def index; end
+
+  # Page shell only; multiplayer frontend modules are isolated from app.js.
+  def multiplayer; end
 end

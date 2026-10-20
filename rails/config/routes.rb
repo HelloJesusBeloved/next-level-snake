@@ -1,6 +1,7 @@
 Rails.application.routes.draw do
   root "snake#index"
   get "play", to: "snake#index"
+  get "multiplayer", to: "snake#multiplayer", as: :multiplayer
   get "profile", to: "profile#show"
   get "profile/:username", to: "profile#show", as: :user_profile
 
