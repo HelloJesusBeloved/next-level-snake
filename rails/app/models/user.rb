@@ -21,6 +21,15 @@ class User < ApplicationRecord
 
   has_many :scores, dependent: :delete_all
 
+  # Multiplayer (step 2): an account's room seats and any guest sessions
+  # it has claimed. Deleting an account removes its seats, like its runs;
+  # claimed guest sessions are kept (unlinked) as the audit trail.
+  has_many :room_memberships, dependent: :delete_all, inverse_of: :user
+  has_many :rooms, through: :room_memberships
+  has_many :claimed_guest_sessions, class_name: "GuestSession",
+           foreign_key: :claimed_by_user_id, inverse_of: :claimed_by_user,
+           dependent: :nullify
+
   # Preserve the exact casing typed by the user.
   normalizes :username, with: ->(name) { name.to_s.strip }
 
@@ -34,6 +43,12 @@ class User < ApplicationRecord
   def self.authenticate!(username, password)
     user = find_by("LOWER(username) = ?", username.to_s.strip.downcase)
     user&.authenticate(password) ? user : nil
+  end
+
+  # The one room this account is currently seated in, if any — the
+  # database guarantees at most one active membership per account.
+  def active_room_membership
+    room_memberships.active.first
   end
 
   private
