@@ -108,10 +108,23 @@ class RoomMembership < ApplicationRecord
     role == "host" && active?
   end
 
+  # Readiness votes go through the room lock so their ordering (and their
+  # broadcast) can never race a sweep or a host transfer. Every other tab and
+  # player sees the same ready count.
   def mark_ready!
     raise InvalidTransition, "only a joined member can ready up" unless state == "joined"
 
-    update!(state: "ready")
+    room.with_lock { update!(state: "ready") }
+    room.notify_events!([[:member_ready, { member: id, ready: true }]])
+    self
+  end
+
+  def mark_not_ready!
+    raise InvalidTransition, "only a ready member can un-ready" unless state == "ready"
+
+    room.with_lock { update!(state: "joined") }
+    room.notify_events!([[:member_ready, { member: id, ready: false }]])
+    self
   end
 
   def mark_not_ready!
@@ -199,14 +212,21 @@ class RoomMembership < ApplicationRecord
   def depart!(to_state)
     return self unless active?
 
+    events = [[:member_left, { member: id, name: display_name }]]
     room.with_lock do
       was_host = role == "host"
       update!(state: to_state, left_at: Time.current)
       next unless was_host
 
       successor = room.room_memberships.active.seated_first.first
-      room.transfer_host_to!(successor) if successor
+      if successor
+        room.transfer_host_to!(successor, emit: false)
+        events << [:host_changed, { host: successor.id }]
+      end
     end
+    # Leaving and the crown moving are one committed change -> one version,
+    # broadcast after the lock so a refetching subscriber sees both.
+    room.notify_events!(events)
     self
   end
 

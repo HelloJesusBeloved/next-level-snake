@@ -32,12 +32,32 @@ device (`snake.multiplayer.name.v1`), purely as a convenience default.
 
 ## Synchronization
 
-Step 3 is plain HTTP. `lobby.js` polls `/api/rooms/current` every
-`MULTIPLAYER_POLL_INTERVAL` seconds (pausing while the tab is hidden), which
-doubles as the presence heartbeat that keeps a seat and the host crown alive.
-Real-time event synchronization replaces the polling loop in the next step;
-rendering and actions are already written as pure functions of room state so
-that swap stays local to `refresh()`/`poll()`.
+Step 4 added Action Cable: `lobby.js` opens one socket per room
+(`RoomChannel`, vendored client in `actioncable.esm.js`) and the page updates
+instantly when anyone else joins, readies up, inherits the crown or disbands.
+Rules the client keeps (server details: `rails/docs/multiplayer-transport.md`):
+
+* every event is `{ code, event, v }` where `v` is the room's monotonic
+  version — `v <= version` is a stale replay and is dropped, `v > version`
+  triggers a snapshot refetch (coalesced);
+* after every (re)connect the **authoritative snapshot is fetched first**;
+  events that arrived meanwhile stay buffered until it lands;
+* the connection chip (Live / Reconnecting…(n) / Offline) reflects
+  `ConnectionMonitor`, which reconnects with exponential backoff + jitter;
+* while the socket is down the old `MULTIPLAYER_POLL_INTERVAL` HTTP poll runs
+  as the fallback (and presence heartbeat); while live it drops to a slow
+  safety net and the socket heartbeats every 25 s instead.
+
+Rendering and actions were already pure functions of room state, so the
+transport swap stayed inside `refresh()`/`connectCable()`.
+
+## Files
+
+- `page.js` — entry point (Terminal rain + mounts the lobby)
+- `lobby.js` — roster, actions, polling fallback and the Action Cable client
+- `actioncable.esm.js` — the official client, vendored from the actioncable
+  gem because this app has no asset pipeline (upgrade it with the gem)
+- `lobby.css` — lobby styling, incl. the connection-state chip
 
 ## Not built yet
 

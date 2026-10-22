@@ -2,7 +2,9 @@
 default: &default
   adapter: postgresql
   encoding: unicode
-  pool: <%= ENV.fetch("RAILS_MAX_THREADS") { 5 } %>
+  # Headroom for Action Cable's worker threads, which run beside Puma's
+  # threads (heartbeat writes, broadcasts).
+  pool: <%= ENV.fetch("RAILS_DB_POOL") { ENV.fetch("RAILS_MAX_THREADS") { 5 }.to_i + 4 } %>
   host: <%= ENV.fetch("DATABASE_HOST", "localhost") %>
   port: <%= ENV.fetch("DATABASE_PORT") { 5432 } %>
   username: <%= ENV.fetch("DATABASE_USER", "snake") %>

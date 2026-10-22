@@ -288,7 +288,11 @@ bare-metal reads `rails/.env` (see `rails/.env.example`).
 | `MULTIPLAYER_MEMBER_DROP` | `600` | seconds before a silent member's seat is released (identity kept) |
 | `MULTIPLAYER_ROOM_IDLE` | `1800` | seconds an empty room survives before it expires |
 | `MULTIPLAYER_MAX_ROOM_SIZE` | `64` | hard ceiling a room can expand into (rooms start at 8 and grow on their own) |
-| `MULTIPLAYER_POLL_INTERVAL` | `5` | lobby poll interval handed to the page (real-time sync replaces it) |
+| `MULTIPLAYER_POLL_INTERVAL` | `5` | lobby poll interval handed to the page (fallback while the socket is down) |
+| `ACTION_CABLE_URL` | — | absolute `wss://` URL for the socket when it is not same-origin |
+| `ACTION_CABLE_ALLOWED_ORIGINS` | same-origin | extra origins allowed to open a socket (proxies / tunnels) |
+| `ACTION_CABLE_WORKER_POOL` | `4` | Action Cable channel worker threads per process |
+| `RAILS_DB_POOL` | threads+4 | AR pool, sized for Puma threads **plus** cable workers |
 
 ## Accounts & the leaderboard
 
@@ -561,9 +565,21 @@ slider.
 * **Switching rooms is deliberate**: the server refuses with `409 in_other_room`
   and the page asks before leaving the room you are already in.
 
-Synchronization is plain HTTP polling in this step (`MULTIPLAYER_POLL_INTERVAL`),
-which also acts as the presence heartbeat; real-time updates come next. Duels,
-rankings, archives and QR invitations are not implemented yet.
+**Real-time (Action Cable).** Lobbies synchronize over a WebSocket at
+`/cable` (`RoomChannel`, stream `rooms:<code>`): joins, leaves, ready votes,
+host succession, disbanding and expiry arrive in every open tab immediately —
+no refresh. The socket authenticates with the *same* credentials as the API
+(the session cookie, or the encrypted guest cookie), subscription and channel
+actions are re-authorized server-side, and every event carries the room's
+monotonic `version` so clients drop stale updates and refetch the
+authoritative snapshot whenever they (re)connect or detect a gap. The
+broadcast backend is **PostgreSQL LISTEN/NOTIFY** (adapter `postgresql` in
+`config/cable.yml`) so multiple Puma workers or containers all share events —
+never process-local broadcasting. See
+`rails/docs/multiplayer-transport.md`. When the socket is down the page falls
+back to `MULTIPLAYER_POLL_INTERVAL` HTTP polling, which doubles as the
+presence heartbeat. Duels, rankings, archives and QR invitations are not
+implemented yet.
 
 ### Database access
 

@@ -16,7 +16,7 @@ test('Rails serves both original game routes and the separate multiplayer page',
     expect(html).toContain('name="csrf-token"'); // Rails layout, not a preview fallback.
     expect(html).toContain(path === '/multiplayer' ? 'id="multiplayer-root"' : 'id="snake-root"');
   }
-  for (const asset of ['/multiplayer/page.js', '/multiplayer/lobby.js']) {
+  for (const asset of ['/multiplayer/page.js', '/multiplayer/lobby.js', '/multiplayer/actioncable.esm.js']) {
     const module = await request.get(asset);
     expect(module.status()).toBe(200);
     expect(module.headers()['content-type']).toMatch(/javascript/);
@@ -86,7 +86,8 @@ test('the lobby is real, but no gameplay is faked', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Sign in' }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign in' }).last()).toBeVisible();
 
-  // No single-player engine, no canvas game, no sockets yet (step 4 adds them).
+  // No single-player engine and no canvas game anywhere on this page.
+  // No socket yet either: connections are opened only for seated members.
   await expect(page.locator('#snake-root, .snake-canvas, #btn-start')).toHaveCount(0);
   await expect(page.locator('script[src^="/game.js"], script[src^="/app.js"], script[src^="/profile.js"]')).toHaveCount(0);
   expect(await page.evaluate(() => typeof window.SnakeGame)).toBe('undefined');
@@ -150,6 +151,62 @@ test('a guest creates a room, wears the crown, and a friend joins by link', asyn
   await page.click('#mp-disband');
   await expect(page.locator('#mp-entry')).toBeVisible();
   await friendContext.close();
+});
+
+test('two clients and a second tab synchronize live over one socket each', async ({ browser }) => {
+  // Real WebSockets against a real server: this test needs a browser with
+  // ws:// support (it runs wherever the other browser tests run).
+  const ctxA = await browser.newContext();
+  const a = await ctxA.newPage();
+  const errors = [];
+  a.on('pageerror', (error) => errors.push(error.message));
+
+  // --- client A opens a room and its socket goes live ---
+  await a.goto('/multiplayer');
+  await a.fill('#mp-name', 'Ada');
+  await a.click('#mp-create');
+  await expect(a.locator('#mp-room')).toBeVisible();
+  const code = (await a.locator('#mp-room-code').textContent()).trim();
+  await expect(a.locator('#mp-conn')).toHaveAttribute('data-state', 'live', { timeout: 10_000 });
+
+  // --- a second TAB of the same player: same identity, same single seat ---
+  const tab2 = await ctxA.newPage();
+  await tab2.goto(`/multiplayer/${code}`);
+  await expect(tab2.locator('#mp-conn')).toHaveAttribute('data-state', 'live', { timeout: 10_000 });
+  await expect(tab2.locator('#mp-roster .mp-player')).toHaveCount(1);
+  await expect(a.locator('#mp-roster .mp-player')).toHaveCount(1);
+
+  // --- client B, a separate browser context (= separate guest cookie) ---
+  const ctxB = await browser.newContext();
+  const b = await ctxB.newPage();
+  await b.goto(`/multiplayer/${code}`);
+  await b.fill('#mp-name', 'Grace');
+  await b.click('#mp-join');
+  await expect(b.locator('#mp-conn')).toHaveAttribute('data-state', 'live', { timeout: 10_000 });
+
+  // A and its second tab both see B join — no reload, no manual refresh.
+  await expect(a.locator('#mp-roster .mp-player')).toHaveCount(2, { timeout: 10_000 });
+  await expect(a.locator('#mp-roster')).toContainText('Grace');
+  await expect(tab2.locator('#mp-roster .mp-player')).toHaveCount(2, { timeout: 10_000 });
+
+  // Ready vote from B reaches A live, with the counts.
+  await b.click('#mp-ready-toggle');
+  await expect(a.locator('#mp-ready-count')).toHaveText('1 ready', { timeout: 10_000 });
+  await expect(a.locator('#mp-roster')).toContainText('Ready');
+
+  // A (the host) leaves: the crown passes to B and B's page shows it live.
+  await a.click('#mp-leave');
+  await expect(b.locator('#mp-roster .mp-crown')).toHaveCount(1, { timeout: 10_000 });
+  await expect(b.locator('#mp-roster .mp-player')).toHaveCount(1);
+
+  // Disbanding reaches the other socket and the room closes for everyone.
+  b.once('dialog', (dialog) => dialog.accept());
+  await b.click('#mp-disband');
+  await expect(b.locator('#mp-entry')).toBeVisible({ timeout: 10_000 });
+  expect(errors).toEqual([]);
+
+  await ctxA.close();
+  await ctxB.close();
 });
 
 test('joining a second room asks before leaving the first', async ({ page, request }) => {

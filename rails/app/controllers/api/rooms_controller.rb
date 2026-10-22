@@ -197,6 +197,9 @@ module Api
       membership.claim_by!(current_user)
       forget_guest_session! # the token was revoked by the claim
       reset_current_membership!
+      # Same seat, new owner: roster (name, role, position) did not move, so
+      # other players only need to know the seat changed hands.
+      membership.room.notify_events!([[:member_updated, { member: membership.id }]])
       render json: state_payload(membership.room.reload, membership.reload)
     rescue RoomMembership::ClaimError => e
       render_error("claim_failed", e.message, :conflict)
@@ -315,6 +318,9 @@ module Api
       members = room.active_memberships.to_a
       {
         code: room.invitation_code,
+        # Monotonic state sequence: clients apply an event only when it is
+        # exactly one ahead of this, and refetch the snapshot otherwise.
+        version: room.version,
         name: room.name,
         mode: room.mode,
         state: room.state,

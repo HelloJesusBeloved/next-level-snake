@@ -142,6 +142,7 @@ class Room < ApplicationRecord
   # the last seat.
   def join!(user: nil, guest_session: nil, display_name: nil)
     membership = nil
+    events = []
     with_lock do
       raise NotJoinable, "room is not open for joining" unless joinable?
       if guest_session && !guest_session.usable?
@@ -168,10 +169,16 @@ class Room < ApplicationRecord
                                  display_name: display_name, role: "player")
         end
 
+      events << [:member_joined, { member: membership.id, name: membership.display_name }]
+
       # Walking into an emptied room makes you its host, so an invitation link
-      # that outlives its lobby still leads somewhere usable.
-      promote_host_if_vacant!(membership)
+      # that outlives its lobby still leads somewhere usable. The crown event
+      # rides along with the join (one transaction, one version bump).
+      events << [:host_changed, { host: membership.id }] if promote_host_if_vacant!(membership)
     end
+    # Broadcast only after the row lock has committed, so a subscriber that
+    # reacts by fetching the snapshot reads committed state.
+    notify_events!(events)
     membership
   end
 
@@ -199,19 +206,25 @@ class Room < ApplicationRecord
 
   # Hands hosting to another seated member. Demotes before promoting so
   # the one-active-host partial unique index never sees two hosts.
-  def transfer_host_to!(new_host)
+  # `emit: false` is for callers that already hold this room's lock and will
+  # broadcast the change themselves once they release it (join!, depart!,
+  # sweep!). Standalone callers use emit: true (the default).
+  def transfer_host_to!(new_host, emit: true)
+    promoted = false
     with_lock do
       unless new_host.room_id == id && new_host.active?
         raise InvalidTransition, "new host must be an active member of this room"
       end
 
       current = host_membership
-      next new_host if current&.id == new_host.id
+      next if current&.id == new_host.id
 
       current&.update!(role: "player")
       new_host.update!(role: "host")
-      new_host
+      promoted = true
     end
+    notify_events!([[:host_changed, { host: new_host.id }]]) if emit && promoted
+    new_host
   end
 
   def lobby?
@@ -283,6 +296,7 @@ class Room < ApplicationRecord
       players.update_all(state: "playing", updated_at: Time.current)
       update!(state: "in_match", started_at: Time.current, finished_at: nil)
     end
+    notify_events!([[:room_state, { state: state }]])
     self
   end
 
@@ -296,6 +310,7 @@ class Room < ApplicationRecord
                       .update_all(state: "joined", updated_at: Time.current)
       update!(state: "finished", finished_at: Time.current)
     end
+    notify_events!([[:room_state, { state: state }]])
     self
   end
 
@@ -305,21 +320,23 @@ class Room < ApplicationRecord
 
       update!(state: "lobby")
     end
+    notify_events!([[:room_state, { state: state }]])
     self
   end
 
   # Terminal for play: everyone is released (state -> left) so each
   # identity may immediately sit elsewhere. Idempotent once disbanded.
   # `reason` records who ended it: the host, or the inactivity sweeper.
-  def disband!(reason: "host_disbanded", at: Time.current)
+  def disband!(reason: "host_disbanded", at: Time.current, emit: true)
     return self if disbanded?
     raise InvalidTransition, "an archived room cannot be disbanded" if archived?
 
+    effective = CLOSED_REASONS.include?(reason.to_s) ? reason.to_s : "host_disbanded"
     with_lock do
       release_all_memberships!(at: at)
-      update!(state: "disbanded", disbanded_at: at,
-              closed_reason: CLOSED_REASONS.include?(reason.to_s) ? reason.to_s : "host_disbanded")
+      update!(state: "disbanded", disbanded_at: at, closed_reason: effective)
     end
+    notify_events!([[:room_closed, { reason: effective }]]) if emit
     self
   end
 
@@ -334,6 +351,7 @@ class Room < ApplicationRecord
       release_all_memberships!
       update!(state: "archived", archived_at: Time.current)
     end
+    notify_events!([[:room_state, { state: state, reason: "archived" }]])
     self
   end
 
@@ -362,11 +380,19 @@ class Room < ApplicationRecord
   def sweep!(at: Time.current)
     return self if closed?
 
+    events = []
     with_lock do
-      drop_silent_members!(at: at)
-      transfer_host_after_grace!(at: at)
-      expire_if_idle!(at: at)
+      dropped = drop_silent_members!(at: at)
+      events << [:members_dropped, { members: dropped }] if dropped.any?
+
+      successor = transfer_host_after_grace!(at: at)
+      events << [:host_changed, { host: successor.id }] if successor
+
+      events << [:room_closed, { reason: "expired" }] if expire_if_idle!(at: at)
     end
+    # Everything one sweep found shares a single version, so a subscriber
+    # refetches once and lands on the exact state the sweep produced.
+    notify_events!(events)
     self
   end
 
@@ -423,14 +449,40 @@ class Room < ApplicationRecord
     end
   end
 
+  # ---- live events (step 4) --------------------------------------------------
+  #
+  # The ONLY place rooms.version is bumped. Call it once per logical change,
+  # AFTER releasing the room lock (every caller above does), so subscribers
+  # that immediately fetch the snapshot read committed state. All events of
+  # one change share the new version: a client refetches once and catches up
+  # completely, which makes multi-event bursts (leave + host transfer) safe
+  # under the "exactly one ahead" version rule.
+  #
+  # Events must stay tiny — they travel through a PostgreSQL NOTIFY (8000-byte
+  # cap). Names are contract; see rails/docs/multiplayer-transport.md.
+  def notify_events!(*events)
+    events = events.flatten(1).compact
+    return nil if events.empty?
+
+    new_version = with_lock { update!(version: version + 1); version }
+    events.each do |event, fields|
+      RoomChannel.emit(self, event, fields)
+    end
+    new_version
+  end
+
   private
 
   # Keeps exactly one crown in a room that has any seated members.
+  # Runs under the caller's lock; the caller broadcasts the crown change.
   def promote_host_if_vacant!(preferred = nil)
-    return if host_membership
+    return false if host_membership
 
     successor = preferred&.reload&.active? ? preferred : room_memberships.active.seated_first.first
-    transfer_host_to!(successor) if successor
+    return false unless successor
+
+    transfer_host_to!(successor, emit: false)
+    true
   end
 
   # Silent for longer than `member_drop`: release the seat so the roster and
@@ -439,10 +491,12 @@ class Room < ApplicationRecord
   def drop_silent_members!(at: Time.current)
     cutoff = at - self.class.config.member_drop
     stale = room_memberships.active.select { |member| member.seen_at < cutoff }
-    return if stale.empty?
+    return [] if stale.empty?
 
-    room_memberships.where(id: stale.map(&:id))
+    ids = stale.map(&:id)
+    room_memberships.where(id: ids)
                     .update_all(state: "left", left_at: at, updated_at: at)
+    ids
   end
 
   # Predictable succession: the longest-seated member who is still online,
@@ -450,30 +504,28 @@ class Room < ApplicationRecord
   def transfer_host_after_grace!(at: Time.current)
     current = host_membership
     candidates = room_memberships.active.seated_first.to_a
+    successor =
+      if current.nil?
+        candidates.find { |member| member.online?(at: at) } || candidates.first
+      elsif current.seen_at <= at - self.class.config.host_grace
+        candidates.find { |member| member.id != current.id && member.online?(at: at) }
+      end
+    return nil unless successor && successor != current
 
-    if current.nil?
-      successor = candidates.find { |m| m.online?(at: at) } || candidates.first
-      return transfer_host_to!(successor) if successor
-
-      return
-    end
-
-    return if current.seen_at > at - self.class.config.host_grace
-
-    successor = candidates.find { |m| m.id != current.id && m.online?(at: at) }
-    transfer_host_to!(successor) if successor
+    transfer_host_to!(successor, emit: false)
+    successor
   end
 
   # "If everyone leaves, expire the unused room after a configurable
   # inactivity period." Only ever fires on a room with nobody seated.
   def expire_if_idle!(at: Time.current)
-    return if closed?
-    return if room_memberships.active.exists?
+    return false if closed? || room_memberships.active.exists?
 
     idle_since = last_activity_at || created_at
-    return if idle_since > at - self.class.config.room_idle
+    return false if idle_since > at - self.class.config.room_idle
 
-    disband!(reason: "expired", at: at)
+    disband!(reason: "expired", at: at, emit: false)
+    true
   end
 
   def release_all_memberships!(at: Time.current)

@@ -1,0 +1,19 @@
+# Action Cable backends (step 4 — real-time multiplayer lobby).
+#
+# The deployment is `compose.yaml = app + postgres`; there is no Redis. The
+# `postgresql` adapter (Rails-shipped, LISTEN/NOTIFY) reaches every Puma
+# process and every host that shares the database — unlike `async`, which
+# broadcasts only inside one process and would silently lose events under
+# WEB_CONCURRENCY > 1 or multiple containers.
+#
+# Payloads stay tiny ({ code, event, v }): PostgreSQL NOTIFY caps at 8000
+# bytes, so room events never carry a full roster. A client that falls behind
+# refetches the authoritative snapshot (GET /api/rooms/:code).
+test:
+  adapter: test
+
+development:
+  adapter: postgresql
+
+production:
+  adapter: postgresql

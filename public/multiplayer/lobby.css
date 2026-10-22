@@ -170,3 +170,57 @@
 
 /* Theme picker: the shared `.segmented` styles still apply; we only place it. */
 .mp-themes { margin-top: 20px; max-width: 640px; }
+
+/* Live connection state (Action Cable). The dot is decorative; the text is
+   the accessible indicator, announced politely on change. */
+.mp-conn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mp-conn .mp-dot { width: 7px; height: 7px; }
+
+.mp-conn[data-state='live'] {
+  border-color: color-mix(in srgb, var(--green) 55%, transparent);
+  color: var(--green);
+}
+.mp-conn[data-state='live'] .mp-dot {
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 22%, transparent);
+  animation: mp-pulse 2.4s ease-in-out infinite;
+}
+
+.mp-conn[data-state='connecting'],
+.mp-conn[data-state='reconnecting'] {
+  border-color: color-mix(in srgb, #ff9f1a 55%, transparent);
+  color: #ff9f1a;
+}
+.mp-conn[data-state='connecting'] .mp-dot,
+.mp-conn[data-state='reconnecting'] .mp-dot {
+  background: #ff9f1a;
+  box-shadow: 0 0 0 3px color-mix(in srgb, #ff9f1a 22%, transparent);
+}
+
+.mp-conn[data-state='offline'] {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  color: var(--red);
+}
+.mp-conn[data-state='offline'] .mp-dot {
+  background: var(--red);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--red) 22%, transparent);
+}
+
+@keyframes mp-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .mp-conn .mp-dot { animation: none; }
+}

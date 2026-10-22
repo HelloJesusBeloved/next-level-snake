@@ -1,15 +1,27 @@
 /*!
  * Multiplayer lobby (step 3) — plain HTTP against /api/rooms/*.
  *
- * Deliberately independent from app.js and the single-player engine: this
- * module owns the /multiplayer page only. Real-time synchronization arrives
- * in the next step and will replace the polling loop below; everything else
- * (rendering, confirmations, auth wiring) is written to survive that swap.
+ * Real-time over Action Cable (/cable): one socket per room, sharing the
+ * session / guest cookie the server already trusts. Rendering, confirmations
+ * and auth wiring survive the transport; the polling loop below is the
+ * fallback when the socket is down.
  *
  * Identity is never handled here. The server reads the signed-in session or
  * the httpOnly guest cookie it issued; the page only ever says what it wants
  * to do, never who it is.
  */
+
+import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
+
+// Action Cable's ConnectionMonitor already reconnects with exponential
+// backoff and jitter: each attempt waits
+// staleThreshold * (1 + rate)^attempts seconds, plus a random 0..rate
+// multiplier (0..1 on the first try). First retry lands ~4 s, ~1.35x growth
+// per attempt after, up to ~50 % extra jitter — a server restart is never
+// hammered, and a single tab gives up fast enough to notice. Attempts are
+// surfaced in the connection chip.
+ConnectionMonitor.staleThreshold = 4;
+ConnectionMonitor.reconnectionBackoffRate = 0.35;
 
 const NAME_KEY = 'snake.multiplayer.name.v1';
 const CODE_PATTERN = /[^A-Z0-9]/g;
@@ -64,6 +76,8 @@ export function mountLobby(root) {
     signInTop: $('mp-signin-top'),
     createTop: $('mp-create-top'),
     themes: $('mp-themes'),
+    conn: $('mp-conn'),
+    connText: $('mp-conn-text'),
     roomCode: $('mp-room-code'),
     roomState: $('mp-room-state'),
     copyCode: $('mp-copy-code'),
@@ -85,7 +99,21 @@ export function mountLobby(root) {
     authDialog: $('auth-dialog'),
   };
 
-  const state = { room: null, member: null, viewer: null, invite: '', pending: null, cancelled: null };
+  const state = {
+    room: null, member: null, viewer: null, invite: '', pending: null, cancelled: null,
+    // Live-transport state. `version` is the snapshot's sequence number;
+    // `synced` is false between a (re)connect and the first authoritative
+    // snapshot, during which incoming events are buffered, never applied.
+    version: 0,
+    synced: false,
+    buffered: [],
+    cable: { status: 'idle', reason: null },
+  };
+  let consumer = null;
+  let subscription = null;
+  let cableCode = null;
+  let heartbeatTimer = null;
+  let refreshTimer = null;
   const pollInterval = Math.max(2, parseInt(root.dataset.pollInterval, 10) || 5) * 1000;
   let timer = null;
 
@@ -191,10 +219,18 @@ export function mountLobby(root) {
     if (out.json && Object.prototype.hasOwnProperty.call(out.json, 'room')) {
       state.room = out.json.room && out.json.room.members ? out.json.room : null;
       state.member = out.json.member || null;
+      if (state.room && typeof out.json.room.version === 'number') {
+        // Snapshots are authoritative: adopting their version is what makes
+        // older buffered events stale (and therefore droppable) instantly.
+        state.version = out.json.room.version;
+      }
     }
     if (out.json && out.json.viewer) state.viewer = out.json.viewer;
     if (out.json && out.json.notice) flash(out.json.notice, 'info');
     render();
+    // One socket per room, closed the moment there is no room to watch.
+    if (state.room) connectCable(state.room.code);
+    else disconnectCable();
     return out;
   }
 
@@ -206,12 +242,21 @@ export function mountLobby(root) {
     }).catch(() => null);
   }
 
+  // While the socket is live it delivers events *and* presence (heartbeat),
+  // so HTTP polling drops to a slow safety net. While it is down, polling is
+  // the fallback that keeps the lobby correct without a refresh — and it still
+  // acts as the presence heartbeat through the HTTP API. When hidden and the
+  // socket is down there is nothing to do; skip until visible again.
   function poll() {
     window.clearTimeout(timer);
+    const live = state.cable.status === 'live';
     timer = window.setTimeout(function tick() {
-      if (document.visibilityState === 'hidden') { poll(); return; }
-      refresh().then(poll);
-    }, pollInterval);
+      const socketUp = state.cable.status === 'live';
+      if (document.visibilityState === 'hidden' && !socketUp) { poll(); return; }
+      refresh().then(drainBuffered);
+      if (state.cable.status === 'reconnecting') renderConn();
+      poll();
+    }, live ? 60000 : pollInterval);
   }
 
   // Requirement 12: never silently abandon a room. Ask, then retry.
@@ -382,7 +427,11 @@ export function mountLobby(root) {
     });
     if (!hadGuestRoom) return finish();
     return api('/api/rooms/claim', { method: 'POST' }).then((out) => {
-      if (out.ok) { apply(out); flash('Your seat is now linked to your account.', 'info'); }
+      if (out.ok) {
+        apply(out);
+        flash('Your seat is now linked to your account.', 'info');
+        reconnectCable(); // new credential (account session) carries the socket
+      }
       return finish();
     }).catch(finish);
   }
@@ -430,6 +479,168 @@ export function mountLobby(root) {
     try { window.localStorage.setItem('snake.settings.v1', JSON.stringify(settings)); } catch (err) { /* blocked */ }
     window.MatrixRain?.set(theme === 'terminal');
     markThemes();
+  }
+
+  // ---- Action Cable transport ---------------------------------------------------
+  //
+  // One socket per room. Protocol (server: RoomChannel, docs:
+  // rails/docs/multiplayer-transport.md):
+  //   * every event = { code, event, v } — never a roster; v is rooms.version
+  //   * apply an event only while snapshot-synced AND v > snapshot version;
+  //     anything older is a stale replay (other tab, out-of-order, our own
+  //     echo) and is dropped without touching the DOM
+  //   * on every (re)connect the authoritative snapshot is fetched FIRST and
+  //     events that arrived meanwhile stay buffered until it lands; the moment
+  //     the snapshot's version is adopted, buffered older events are droppable
+  //   * a gap (v > snapshot + 1) means we missed something -> snapshot again
+
+  function renderConn() {
+    const chip = el.conn;
+    if (!chip) return;
+    const attempts = (consumer && consumer.connection && consumer.connection.monitor)
+      ? (consumer.connection.monitor.reconnectAttempts || 0)
+      : 0;
+    const labels = {
+      idle: ['idle', ''],
+      connecting: ['connecting', 'Connecting\u2026'],
+      live: ['live', 'Live'],
+      reconnecting: ['reconnecting', attempts ? `Reconnecting\u2026 (${attempts})` : 'Reconnecting\u2026'],
+      rejected: ['offline', 'Disconnected'],
+    };
+    const [cls, text] = labels[state.cable.status] || labels.idle;
+    chip.setAttribute('data-state', cls);
+    if (el.connText) el.connText.textContent = text;
+  }
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    // Keeps last_seen_at moving while HTTP polling is throttled back, so
+    // presence (and the host's crown) survives a long-lived idle lobby.
+    heartbeatTimer = window.setInterval(() => {
+      if (state.cable.status === 'live' && subscription) subscription.perform('heartbeat');
+    }, 25000);
+  }
+
+  function stopHeartbeat() {
+    if (heartbeatTimer) { window.clearInterval(heartbeatTimer); heartbeatTimer = null; }
+  }
+
+  function connectCable(code) {
+    // Same room already attached (or rejected — never hammer a rejected
+    // subscription; the user's next join/leave re-arms it via disconnect).
+    if (consumer && cableCode === code) return;
+    disconnectCable();
+    cableCode = code;
+    state.cable.status = 'connecting';
+    state.cable.reason = null;
+    state.synced = false;
+    state.buffered = [];
+    renderConn();
+    consumer = createConsumer('/cable'); // relative -> wss:// behind any proxy
+    subscription = consumer.subscriptions.create(
+      { channel: 'RoomChannel', code: code },
+      {
+        connected() {
+          // Snapshot first, events second — always, on every reconnect.
+          state.synced = false;
+          state.buffered = [];
+          state.cable.status = 'live';
+          state.cable.reason = null;
+          renderConn();
+          refresh().then(drainBuffered);
+          startHeartbeat();
+        },
+        disconnected() {
+          stopHeartbeat();
+          if (state.cable.status === 'rejected') return;
+          state.cable.status = 'reconnecting';
+          state.synced = false;
+          renderConn();
+        },
+        rejected() {
+          stopHeartbeat();
+          state.cable.status = 'rejected';
+          renderConn();
+          explainRejection(code);
+        },
+        received(message) { onCableMessage(message); },
+      },
+    );
+  }
+
+  function disconnectCable() {
+    stopHeartbeat();
+    if (consumer) { try { consumer.disconnect(); } catch (err) { /* closing anyway */ } }
+    consumer = null;
+    subscription = null;
+    cableCode = null;
+    state.synced = false;
+    state.buffered = [];
+    if (state.cable.status !== 'rejected') state.cable.status = 'idle';
+    renderConn();
+  }
+
+  // After signing in (or claiming a seat) the cookie that identifies this
+  // socket has changed: reconnect so the server re-derives identity from the
+  // new credential instead of trusting the old one.
+  function reconnectCable() {
+    if (!state.room) { disconnectCable(); return; }
+    const code = state.room.code;
+    disconnectCable();
+    state.cable.status = 'idle';
+    connectCable(code);
+  }
+
+  function onCableMessage(message) {
+    if (!message) return;
+    if (typeof message.v !== 'number') {
+      // A pre-rejection explanation from RoomChannel#reject_with.
+      if (message.error) { state.cable.reason = message.message || message.error; }
+      return;
+    }
+    if (!state.synced) { // window between (re)connect and authoritative snapshot
+      state.buffered.push(message);
+      if (state.buffered.length > 50) state.buffered.shift();
+      return;
+    }
+    if (message.v <= state.version) return; // stale replay — rejected by version
+    scheduleRefresh(); // next event or a gap: snapshot is the source of truth
+  }
+
+  // One refresh at a time: a burst of events collapses into a single request.
+  function scheduleRefresh() {
+    if (refreshTimer) return;
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = null;
+      refresh().then(drainBuffered);
+    }, 100);
+  }
+
+  function drainBuffered() {
+    state.synced = true;
+    const buffered = state.buffered;
+    state.buffered = [];
+    const newer = buffered.filter((message) => message.v > state.version);
+    if (newer.length) scheduleRefresh(); // we were behind; the snapshot heals it
+  }
+
+  // The server refused this subscription (unknown code, disbanded room, seat
+  // gone). RoomChannel transmits the reason first; ask the HTTP API too so the
+  // message is right even if that transmit raced the rejection.
+  function explainRejection(code) {
+    api(`/api/rooms/${code}`).then((out) => {
+      const reason = state.cable.reason
+        || (out.json && out.json.error)
+        || 'This room is unavailable right now.';
+      const stillMember = out.ok && out.json.room && out.json.room.members;
+      if (stillMember) return; // race resolved in our favour; stay put
+      flash(reason, 'error');
+      state.room = null;
+      state.member = null;
+      state.version = 0;
+      render();
+      history.replaceState({}, '', '/multiplayer');
+    }).catch(() => flash('Lost contact with the room.', 'error'));
   }
 
   // ---- wiring -----------------------------------------------------------------

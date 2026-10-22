@@ -5,6 +5,8 @@ require "rails"
 require "active_record/railtie"
 require "action_controller/railtie"
 require "action_view/railtie"
+# Real-time lobby (step 4): Action Cable, auto-mounted at /cable by its engine.
+require "action_cable/engine"
 
 # Require the gems listed in Gemfile, including any gems
 # you've limited to :test, :development, or :production.
