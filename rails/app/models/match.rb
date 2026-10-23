@@ -43,14 +43,22 @@ class Match < ApplicationRecord
     speed_level = integer_setting(room.settings["speed_level"], 1..6, Simulation::Config::DEFAULT_SPEED_LEVEL)
     growth = integer_setting(room.settings["growth"], 0..100, Simulation::Config::DEFAULT_GROWTH)
     tick_ms = TICK_PRESET_MS.fetch(speed_level)
-    participants = Array(frozen["participants"]).filter_map do |entry|
-      membership = room.room_memberships.find_by(id: entry["membership_id"])
-      next unless membership
+    frozen_participants = Array(frozen["participants"])
+    raise ArgumentError, "room has no participants" if frozen_participants.empty?
+
+    # One query instead of one per player (up to 64) while the room row lock is
+    # held. A frozen participant whose membership vanished is a hard error: a
+    # silently smaller roster would start a different match than the one the
+    # host and players agreed to.
+    ids = frozen_participants.map { |entry| entry["membership_id"] }.compact
+    memberships = room.room_memberships.where(id: ids).index_by(&:id)
+    participants = frozen_participants.map do |entry|
+      membership = memberships[entry["membership_id"]]
+      raise ArgumentError, "frozen participant #{entry["membership_id"]} is no longer seated" unless membership
 
       { membership: membership, display_name: membership.display_name,
         color_slot: entry["color_slot"].to_i, color_hex: entry["color"].to_s }
     end
-    raise ArgumentError, "room has no participants" if participants.empty?
 
     transaction do
       match = create!(
@@ -168,10 +176,18 @@ class Match < ApplicationRecord
   def abandon!(reason:, now: Time.current)
     return self if completed? || abandoned?
 
+    # Only real progress is ranked. A match that never started (or never
+    # checkpointed) has no authoritative score; writing zero-point placements
+    # for it would fabricate a result that future ranking could surface.
     entries =
-      begin
-        build_world.standings
-      rescue StandardError
+      if checkpoint.present?
+        begin
+          build_world.standings
+        rescue StandardError => error
+          Rails.logger.warn("Match #{id} could not rebuild standings on abandon: #{error.class}: #{error.message}")
+          []
+        end
+      else
         []
       end
     transaction do

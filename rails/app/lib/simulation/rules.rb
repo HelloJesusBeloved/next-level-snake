@@ -12,24 +12,23 @@ module Simulation
   class Rules
     MODES = %i[brawl duel].freeze
 
-    attr_reader :mode, :solid_opponents, :food_policy, :shrink_every_ticks, :initial_food
+    attr_reader :mode, :food_policy, :shrink_every_ticks
 
     def self.for(mode)
       case mode.to_sym
       when :brawl then new(mode: :brawl, solid: false, food_policy: :per_player,
-                           shrink_every_ticks: nil, initial_food: nil)
+                           shrink_every_ticks: nil)
       when :duel then new(mode: :duel, solid: true, food_policy: :shared,
-                          shrink_every_ticks: 120, initial_food: :duel_supply)
+                          shrink_every_ticks: 120)
       else raise ConfigError, "unknown mode #{mode.inspect}"
       end
     end
 
-    def initialize(mode:, solid:, food_policy:, shrink_every_ticks:, initial_food:)
+    def initialize(mode:, solid:, food_policy:, shrink_every_ticks:)
       @mode = mode.to_sym
       @solid_opponents = solid
       @food_policy = food_policy.to_sym
       @shrink_every_ticks = shrink_every_ticks
-      @initial_food = initial_food
       freeze
     end
 

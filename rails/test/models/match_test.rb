@@ -24,6 +24,29 @@ class MatchTest < ActiveSupport::TestCase
     assert_nil match.started_at
   end
 
+  # Regression guard: a roster that silently shrinks would start a different
+  # match than the host froze. Missing frozen participants must fail loudly.
+  test "match creation refuses to silently drop a frozen participant" do
+    room = make_room_with_guest_host
+    room.join!(guest_session: make_guest.first, display_name: "Rival")
+    now = Time.current
+    room.update_columns(
+      state: "in_match", started_at: now,
+      match_configuration: {
+        "columns" => 24, "rows" => 18, "mobile_default" => true,
+        "locked_at" => now.iso8601(6),
+        "participants" => [
+          { "membership_id" => room.host_membership.id, "color_slot" => 0, "color" => "#F66B71" },
+          { "membership_id" => 999_999, "color_slot" => 1, "color" => "#0FB4BB" }
+        ]
+      }
+    )
+
+    error = assert_raises(ArgumentError) { Match.open_for_room!(room.reload) }
+    assert_match(/no longer seated/, error.message)
+    assert_equal 0, Match.where(room_id: room.id).count, "nothing is persisted on refusal"
+  end
+
   test "only one live match may exist per room" do
     room = started_room
     assert_raises(ActiveRecord::RecordNotUnique) { Match.open_for_room!(room.reload) }
@@ -129,6 +152,35 @@ class MatchTest < ActiveSupport::TestCase
     assert_equal "room_disbanded", match.end_reason
     assert_equal 6, match.match_participants.find(world.snakes.first.id).final_score
     assert_equal 1, match.match_participants.find(world.snakes.first.id).placement
+  end
+
+  # Regression: an abandoned match with no checkpoint used to spawn a fresh
+  # world and persist zero-point placements, fabricating a result.
+  test "abandonment without a checkpoint records no fabricated standings" do
+    match = started_room.live_match
+
+    match.abandon!(reason: "room_disbanded")
+
+    assert match.reload.abandoned?
+    assert_equal [0], match.match_participants.pluck(:final_score).uniq
+    assert_equal [nil], match.match_participants.pluck(:placement).uniq,
+                 "a match that never ran must not be ranked"
+    assert_nil match.winner_membership_id
+  end
+
+  test "abandonment from a real checkpoint still preserves points and placement" do
+    match = started_room.live_match
+    world = match.build_world
+    world.start!
+    world.snakes.first.score = 7
+    world.snakes.last.score = 2
+    match.update_columns(status: "running", checkpoint: world.to_state,
+                         checkpoint_tick: 0, tick: 0)
+
+    match.abandon!(reason: "room_disbanded")
+
+    assert_equal [7, 2], match.match_participants.order(:placement).pluck(:final_score)
+    assert_equal [1, 2], match.match_participants.order(:placement).pluck(:placement)
   end
 
   test "finishing or disbanding the room abandons its live match" do

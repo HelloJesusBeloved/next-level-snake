@@ -22,8 +22,14 @@ class MatchRunner
     end
 
     def supervisor
-      @supervisor ||= Simulation::Supervisor.new(ownership: Ownership.new(token: token),
-                                                 checkpoint_every: CHECKPOINT_EVERY_TICKS)
+      @supervisor ||= Simulation::Supervisor.new(
+        ownership: Ownership.new(token: token),
+        checkpoint_every: CHECKPOINT_EVERY_TICKS,
+        on_error: lambda do |match_id, error|
+          Rails.logger.error("Match #{match_id} detached after simulation error: " \
+                             "#{error.class}: #{error.message}")
+        end
+      )
     end
 
     def mutex
@@ -53,15 +59,31 @@ class MatchRunner
         next unless match.claim_lease!(token: token, ttl_seconds: LEASE_TTL_SECONDS, now: now)
 
         world = match.build_world
+        next if finish_from_checkpoint!(match, world, now: now)
+
         world.start! if world.pending?
-        match.save_progress!(world, token: token, now: now)
+        # If the fenced progress write is refused, we no longer hold the lease:
+        # attaching would simulate a match another process owns.
+        next unless match.save_progress!(world, token: token, now: now)
+
         supervisor.attach(world, now_ms: monotonic_ms)
         claimed << match.id
-      rescue Simulation::Error, ActiveRecord::RecordInvalid => error
+      rescue StandardError => error
+        # One corrupt/unclaimable match must never stop the claim loop.
         Rails.logger.warn("MatchRunner could not claim match=#{match.id}: #{error.class}: #{error.message}")
         match.abandon!(reason: "invalid_state") rescue nil
       end
       claimed
+    end
+
+    # A checkpoint whose world already finished (crash after the final tick,
+    # before the completion write) is finalized instead of being attached: a
+    # completed world would otherwise sit in memory forever.
+    def finish_from_checkpoint!(match, world, now:)
+      return false unless world.completed?
+
+      match.complete_from_world!(world, token: token, now: now)
+      true
     end
 
     # Test helper: forget in-process worlds (does not release database leases).
@@ -72,7 +94,14 @@ class MatchRunner
       true
     end
 
+    # Orderly cleanup: give our leases back so another process (or the next
+    # boot) can pick the matches up immediately instead of waiting for expiry.
     def shutdown!
+      supervisor.match_ids.each do |match_id|
+        supervisor.ownership.release!(match_id)
+      rescue StandardError => error
+        Rails.logger.warn("MatchRunner could not release match=#{match_id}: #{error.class}: #{error.message}")
+      end
       supervisor.shutdown!
     end
   end
@@ -98,6 +127,9 @@ class MatchRunner
       return false unless match
 
       match.save_progress!(world, token: @token)
+    rescue ActiveRecord::ActiveRecordError => error
+      Rails.logger.warn("MatchRunner checkpoint failed for match=#{world.id}: #{error.class}: #{error.message}")
+      false
     end
 
     def complete!(world)
@@ -105,6 +137,9 @@ class MatchRunner
       return false unless match
 
       match.complete_from_world!(world, token: @token)
+    rescue ActiveRecord::ActiveRecordError => error
+      Rails.logger.warn("MatchRunner completion failed for match=#{world.id}: #{error.class}: #{error.message}")
+      false
     end
 
     def release!(match_id)
@@ -112,6 +147,9 @@ class MatchRunner
       return false unless match
 
       match.release_lease!(token: @token)
+    rescue ActiveRecord::ActiveRecordError => error
+      Rails.logger.warn("MatchRunner release failed for match=#{match_id}: #{error.class}: #{error.message}")
+      false
     end
   end
 end

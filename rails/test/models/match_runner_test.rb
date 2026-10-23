@@ -8,7 +8,13 @@ class MatchRunnerTest < ActiveSupport::TestCase
     room
   end
 
-  setup { MatchRunner.reset! }
+  setup do
+    MatchRunner.reset!
+    # This suite claims every free match in the database. Ignore rows left
+    # behind by an operator-run simulator or a crashed previous run so results
+    # depend only on the matches each test creates (rolled back afterwards).
+    Match.live.delete_all
+  end
   teardown do
     MatchRunner.shutdown!
     MatchRunner.reset!
@@ -63,6 +69,67 @@ class MatchRunnerTest < ActiveSupport::TestCase
     assert_operator match.checkpoint_tick, :>, 0
   end
 
+  # End-to-end guard for the renewal bug: twenty passes over ten simulated
+  # seconds is longer than the six-second lease TTL, so a simulator that failed
+  # to renew would lose the match. Ownership must survive and stay unstealable.
+  test "keeps ownership across many scheduler passes past the lease TTL" do
+    match = started_room.live_match
+    MatchRunner.tick_once(monotonic_ms: 0)
+    assert_equal MatchRunner.token, match.reload.owner_token
+
+    20.times { |pass| MatchRunner.tick_once(monotonic_ms: 500 * (pass + 1)) }
+
+    match.reload
+    assert_equal MatchRunner.token, match.owner_token
+    assert MatchRunner.supervisor.attach?(match.id), "the match is still simulated by this process"
+    assert_operator match.lease_expires_at, :>, Time.current, "the lease was renewed, not left to expire"
+    refute match.claim_lease!(token: "thief", ttl_seconds: 30), "a renewed lease cannot be stolen"
+  end
+
+  test "shutdown releases leases so a takeover is immediate, not expiry-based" do
+    match = started_room.live_match
+    MatchRunner.tick_once(monotonic_ms: 0)
+    assert_equal MatchRunner.token, match.reload.owner_token
+
+    MatchRunner.shutdown!
+
+    assert_nil match.reload.owner_token, "orderly shutdown gives the lease back"
+    assert_nil match.lease_expires_at
+    assert_empty MatchRunner.supervisor.match_ids
+    assert match.claim_lease!(token: "next-process", ttl_seconds: 30)
+  end
+
+  test "a checkpoint that already completed is finalized instead of attached forever" do
+    match = started_room.live_match
+    world = match.build_world
+    world.start!
+    world.finish!(reason: :tick_limit)
+    match.update_columns(status: "running", checkpoint: world.to_state,
+                         checkpoint_tick: world.tick, tick: world.tick,
+                         owner_token: nil, lease_expires_at: nil)
+
+    MatchRunner.tick_once(monotonic_ms: 0)
+
+    match.reload
+    assert_equal "completed", match.status
+    assert_equal "tick_limit", match.end_reason
+    refute MatchRunner.supervisor.attach?(match.id)
+  end
+
+  test "one corrupt match does not block claiming a healthy match" do
+    healthy = started_room.live_match
+    bad = started_room.live_match
+    bad.update_columns(status: "running", checkpoint: { "snakes" => [{ "id" => 999_999 }] },
+                       checkpoint_tick: 1, tick: 1)
+
+    report = MatchRunner.tick_once(monotonic_ms: 0)
+
+    assert_includes report[:claimed], healthy.id
+    refute MatchRunner.supervisor.attach?(bad.id)
+    assert_equal "abandoned", bad.reload.status
+    assert_equal "invalid_state", bad.end_reason
+  end
+
   test "a match owned by another process is left untouched" do
     match = started_room.live_match
     assert match.claim_lease!(token: "someone-else", ttl_seconds: 60)
@@ -81,6 +148,8 @@ class MatchRunnerTest < ActiveSupport::TestCase
     match.reload
     assert_equal "abandoned", match.status
     assert_equal "owner_lost", match.end_reason
+    assert_equal [nil], match.match_participants.pluck(:placement).uniq,
+                 "an orphan with no checkpoint has no authoritative result"
   end
 
   test "an expired lease with a checkpoint is resumed by a new owner" do

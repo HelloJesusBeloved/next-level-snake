@@ -263,6 +263,18 @@ class WorldInputTest < Minitest::Test
     assert_equal :stale_sequence, @world.apply_input(player_id: @snake.id, direction: left, tick: 0, seq: 1)
   end
 
+  # A rejected turn must still consume its sequence number. Otherwise the same
+  # seq could be replayed with a different direction (input replay).
+  def test_a_rejected_turn_consumes_its_sequence_number
+    assert_equal :duplicate_direction, @world.apply_input(player_id: @snake.id,
+                                                          direction: Simulation::Direction.parse("right"),
+                                                          tick: 0, seq: 1)
+    assert_equal 1, @snake.last_seq
+    assert_equal :stale_sequence, @world.apply_input(player_id: @snake.id, direction: down, tick: 0, seq: 1)
+    assert_empty @snake.queue, "the replayed turn must not reach the queue"
+    assert_equal :accepted, @world.apply_input(player_id: @snake.id, direction: down, tick: 0, seq: 2)
+  end
+
   def test_rejects_input_for_stale_or_future_ticks
     @world.step!
     @world.step!

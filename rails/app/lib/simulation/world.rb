@@ -127,9 +127,11 @@ module Simulation
       return :invalid_tick unless tick.is_a?(Integer) && tick.between?(@tick - INPUT_TICK_WINDOW, @tick + 1)
       return :stale_sequence unless seq.is_a?(Integer) && seq.positive? && seq > snake.last_seq
 
-      outcome = snake.queue_direction(direction)
-      snake.last_seq = seq if outcome == :accepted
-      outcome
+      # A valid envelope consumes its sequence number even when the turn itself
+      # is ignored (duplicate/reversal/queue full). Otherwise one sequence could
+      # be replayed later with a different direction.
+      snake.last_seq = seq
+      snake.queue_direction(direction)
     end
 
     # Removes a participant from the simulation (left the room / grace expired).
@@ -363,14 +365,14 @@ module Simulation
       return false if cells.any? { |cell| taken.include?(cell) }
       return true unless avoid_adjacent
 
-      cells.any? do |cx, cy|
+      cells.none? do |cx, cy|
         (-1..1).any? do |dx|
           (-1..1).any? do |dy|
             neighbour = [cx + dx, cy + dy]
             neighbour != [cx, cy] && taken.include?(neighbour)
           end
         end
-      end ? false : true
+      end
     end
 
     def restore_state!(state, participants)

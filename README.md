@@ -555,8 +555,9 @@ longest snake, so an eliminated player can win.
 
 Matches are simulated by a single owner per match, enforced by a PostgreSQL
 lease (`matches.owner_token`) with fenced checkpoint writes and throttled
-renewal. Run exactly one simulator per deployment (or several — the lease
-arbitrates):
+renewal. The simulator is a **separate process from Puma** (it is not started
+by the container entrypoint yet); run one, or several — the lease arbitrates,
+and each match still has exactly one owner:
 
 ```sh
 cd rails
@@ -569,8 +570,10 @@ The engine is testable without Rails, a browser or a WebSocket:
 `ruby -Itest test/simulation/world_test.rb`. Full design, protocol (versioned
 snapshot + input messages), lifecycle, ownership/takeover policy and known
 limitations: [`rails/docs/multiplayer-step-07-server-engine.md`](rails/docs/multiplayer-step-07-server-engine.md).
-Frontend play and snapshot broadcasting remain for step 8; the HTTP Start action
-still reports eligibility only.
+Abandoned matches are ranked only from real checkpoints: a match that never ran
+records no invented placements or scores. Frontend play and snapshot
+broadcasting remain for step 8; the HTTP Start action still reports eligibility
+only.
 
 ## Multiplayer rooms
 

@@ -58,17 +58,89 @@ class SupervisorTest < Minitest::Test
     assert_equal [world.id], ownership.renewals.uniq
   end
 
-  def test_renews_the_lease_on_an_interval_instead_of_every_tick
+  # Regression: an earlier version refreshed the "last renewed" timestamp on
+  # every pass, so the interval never elapsed and the lease silently expired
+  # while this process kept simulating. Assert renewals actually happen, at
+  # roughly the configured interval, and that ownership survives past the TTL.
+  def test_renews_the_lease_on_an_interval_and_keeps_ownership_past_the_ttl
     ownership = FakeOwnership.new
     supervisor = Simulation::Supervisor.new(ownership: ownership, renew_interval_ms: 2_000)
     world = big_world
     supervisor.attach(world, now_ms: 0)
     tick = world.config.tick_ms
 
-    10.times { |call| supervisor.tick!(now_ms: tick * 3 * (call + 1)) }
-    assert_equal 30, world.tick
+    # Passes every 500 ms over 10 s: far longer than a 6 s lease TTL.
+    20.times { |call| supervisor.tick!(now_ms: 500 * (call + 1)) }
+
+    assert_operator world.tick, :>, 0
+    assert supervisor.attach?(world.id), "ownership must survive a long run"
+    assert_operator ownership.renewals.length, :>=, 4,
+                    "the lease must be renewed before it can expire"
     assert_operator ownership.renewals.length, :<=, 6,
-                    "lease renewal is a database write: throttle it well below the tick rate"
+                    "renewal stays throttled: one database write every ~2 s, not per pass"
+    assert_empty supervisor.tick!(now_ms: 10_500)[:lost]
+  end
+
+  def test_a_refused_checkpoint_stops_simulation_and_reports_the_match_lost
+    ownership = FakeOwnership.new
+    def ownership.checkpoint!(_world)
+      false
+    end
+    supervisor = Simulation::Supervisor.new(ownership: ownership, checkpoint_every: 1,
+                                            renew_interval_ms: 0)
+    world = big_world
+    supervisor.attach(world, now_ms: 0)
+
+    report = supervisor.tick!(now_ms: world.config.tick_ms)
+    assert_includes report[:lost], world.id
+    refute supervisor.attach?(world.id), "a refused fenced write means ownership is gone"
+  end
+
+  def test_a_failed_completion_is_reported_as_lost_not_completed
+    ownership = FakeOwnership.new
+    def ownership.complete!(_world)
+      false
+    end
+    supervisor = Simulation::Supervisor.new(ownership: ownership, renew_interval_ms: 0)
+    world = big_world(max_ticks: Simulation::Config::MIN_MAX_TICKS)
+    # One tick away from the cap: the next step completes the match.
+    world.instance_variable_set(:@tick, Simulation::Config::MIN_MAX_TICKS - 1)
+    supervisor.attach(world, now_ms: 0)
+
+    report = supervisor.tick!(now_ms: world.config.tick_ms)
+    assert_includes report[:lost], world.id
+    assert_empty report[:completed], "never claim a completion that was not persisted"
+    refute supervisor.attach?(world.id)
+  end
+
+  def test_one_failing_match_is_isolated_and_the_others_keep_running
+    ownership = FakeOwnership.new
+    failing_id = nil
+    def ownership.checkpoint!(world)
+      raise IOError, "storage went away" if world.id == 1
+
+      @checkpoints << [world.id, world.tick]
+      true
+    end
+    reported = []
+    supervisor = Simulation::Supervisor.new(ownership: ownership, checkpoint_every: 1,
+                                            renew_interval_ms: 0,
+                                            on_error: ->(id, error) { reported << [id, error.message] })
+    broken = big_world(id: 1)
+    healthy = big_world(id: 2)
+    supervisor.attach(broken, now_ms: 0)
+    supervisor.attach(healthy, now_ms: 0)
+
+    # Must not raise: a wedged match is detached, never allowed to stop the pass.
+    report = supervisor.tick!(now_ms: broken.config.tick_ms)
+
+    refute supervisor.attach?(broken.id), "the failing match is detached"
+    assert supervisor.attach?(healthy.id), "a healthy match keeps running"
+    assert_equal 1, report[:errors].length
+    assert_equal broken.id, report[:errors].first.first
+    assert_match(/storage went away/, report[:errors].first.last)
+    assert_equal [[broken.id, "storage went away"]], reported
+    assert_includes report[:checkpoints], healthy.id
   end
 
   def test_checkpoints_periodically_not_every_tick

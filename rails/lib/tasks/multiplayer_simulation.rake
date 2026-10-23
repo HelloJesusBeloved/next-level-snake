@@ -4,7 +4,7 @@ namespace :multiplayer do
     report = MatchRunner.tick_once
     puts "claimed=#{report[:claimed].inspect} steps=#{report[:steps]} " \
          "completed=#{report[:completed].inspect} lost=#{report[:lost].inspect} " \
-         "checkpoints=#{report[:checkpoints].inspect}"
+         "checkpoints=#{report[:checkpoints].inspect} errors=#{report[:errors].inspect}"
   end
 
   desc "Run the authoritative simulator until interrupted (one owner per match)"
@@ -13,9 +13,18 @@ namespace :multiplayer do
     %w[INT TERM].each { |signal| trap(signal) { stopping = true } }
     puts "Simulating matches as owner token #{MatchRunner.token}. Ctrl-C to stop."
     until stopping
-      report = MatchRunner.tick_once
-      if report[:steps].positive? || report[:completed].any?
-        puts "steps=#{report[:steps]} completed=#{report[:completed].inspect} claimed=#{report[:claimed].inspect}"
+      begin
+        report = MatchRunner.tick_once
+        if report[:steps].positive? || report[:completed].any? || report[:claimed].any? ||
+           report[:lost].any? || report[:errors].any?
+          puts "steps=#{report[:steps]} claimed=#{report[:claimed].inspect} " \
+               "completed=#{report[:completed].inspect} lost=#{report[:lost].inspect} " \
+               "errors=#{report[:errors].inspect}"
+        end
+      rescue StandardError => error
+        # Transient database/network trouble must not kill the only simulator.
+        # Leases expire on their own and are re-claimed on the next iteration.
+        warn "tick failed: #{error.class}: #{error.message}"
       end
       sleep 0.05
     end
@@ -39,7 +48,7 @@ namespace :multiplayer do
       next if match.checkpoint.present?
 
       match.abandon!(reason: "owner_lost")
-      puts "abandoned match=#{match.id}"
+      puts "abandoned match=#{match.id} (no checkpoint; no standings were invented)"
     end
   end
 end
