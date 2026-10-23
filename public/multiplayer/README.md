@@ -84,6 +84,15 @@ use the room API and existing versioned room events; live palettes are shared
 by every tab. Spectators are named/colored but cannot change a running match.
 See `rails/docs/multiplayer-step-06-colors-and-boards.md` for details and tests.
 
+## Simulation is not in the browser (step 7)
+
+Multiplayer movement, food, growth, collisions and scoring are decided by the
+Rails-side engine in `rails/app/lib/simulation/`. The browser will only send
+`dir` inputs and render authoritative snapshots; it never computes a position,
+score or winner. `game.js` remains the single-player renderer and is not used
+as a multiplayer authority. See
+`rails/docs/multiplayer-step-07-server-engine.md`.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)

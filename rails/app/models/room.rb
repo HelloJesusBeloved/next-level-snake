@@ -55,6 +55,9 @@ class Room < ApplicationRecord
   class NotJoinable < StandardError; end
 
   has_many :room_memberships, dependent: :delete_all, inverse_of: :room
+  has_many :matches, dependent: :delete_all, inverse_of: :room
+  has_one :live_match, -> { where(status: Match::LIVE_STATUSES).order(:id) },
+          class_name: "Match", inverse_of: :room
   has_many :active_memberships,
            -> { where(state: RoomMembership::ACTIVE_STATES).order(:joined_at, :id) },
            class_name: "RoomMembership", inverse_of: :room
@@ -304,6 +307,9 @@ class Room < ApplicationRecord
       room_memberships.active.update_all(spectator: true, updated_at: now)
       room_memberships.where(id: players.map(&:id)).update_all(state: "playing", spectator: false, updated_at: now)
       update!(state: "in_match", started_at: now, finished_at: nil, match_configuration: frozen_config)
+      # Durable match + frozen participants. Rules execute in Simulation::World;
+      # this row is the ownership/checkpoint/results shell.
+      Match.open_for_room!(self, now: now)
       configuration_changed!("room_state", state: state)
     end
     self
@@ -318,6 +324,7 @@ class Room < ApplicationRecord
       room_memberships.where(state: "playing")
                       .update_all(state: "joined", updated_at: Time.current)
       room_memberships.active.update_all(spectator: false)
+      matches.live.find_each { |match| match.abandon!(reason: "room_finished") }
       update!(state: "finished", finished_at: Time.current)
     end
     notify_events!([[:room_state, { state: state }]])
@@ -344,6 +351,7 @@ class Room < ApplicationRecord
 
     effective = CLOSED_REASONS.include?(reason.to_s) ? reason.to_s : "host_disbanded"
     with_lock do
+      matches.live.find_each { |match| match.abandon!(reason: "room_disbanded") }
       release_all_memberships!(at: at)
       update!(state: "disbanded", disbanded_at: at, closed_reason: effective)
     end
@@ -359,6 +367,7 @@ class Room < ApplicationRecord
         raise InvalidTransition, "only a finished or disbanded room can be archived"
       end
 
+      matches.live.find_each { |match| match.abandon!(reason: "room_archived") }
       release_all_memberships!
       update!(state: "archived", archived_at: Time.current)
     end

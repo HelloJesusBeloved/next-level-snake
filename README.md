@@ -525,6 +525,7 @@ show "no snapshot". Data model: `scores.end_state` (jsonb) and `users.favorite_t
 | `POST` | `/api/rooms/:code/color` | `{ color_slot }` | reserve own color; `409` claimed/locked, `422` invalid |
 | `POST` | `/api/rooms/:code/capabilities` | `{ client_id, capabilities }` | report own tab; server classifies conservative device policy |
 | `POST` | `/api/rooms/:code/board` | `{ columns, rows }` | host only, desktop-only lobby; frozen during a match |
+| — | `Simulation::Protocol` | `{ v, type: "input", match, tick, seq, dir }` | engine-level contract for step 8; identity comes from the session, never the payload |
 | `POST` | `/api/rooms/:code/leave` | `{}` | `{ room: null, left: CODE }` — the guest identity is kept for reconnecting |
 | `POST` | `/api/rooms/:code/start` | `{}` | **host only.** `200 { start: { eligible … }, started: false }`; `422 not_eligible`; `403` otherwise |
 | `POST` | `/api/rooms/:code/disband` | `{}` | **host only.** `{ room: null, disbanded: CODE }`; `403` otherwise |
@@ -541,6 +542,35 @@ globally. Filter values are `all`, a preset number (speed `1`–`6`, growth `1`�
 `c` (any custom value) or `cNN` (exactly that custom value, `0`–`100`). Standard
 only ever contains preset runs; Custom contains runs with at least one custom
 slider.
+
+## Multiplayer simulation (server-authoritative, step 7)
+
+The multiplayer rules engine lives in `rails/app/lib/simulation/` as plain Ruby:
+discrete ticks on a monotonic clock, wrapped movement, a two-turn direction
+queue, growth and food identical in spirit to `public/game.js`, plus explicit
+Brawl (non-solid) and Duel (solid, shrinking food) rule objects. Clients may
+only submit directions; identity, positions, scores and winners are always
+server-owned. Standings rank by **final points first**, then survival and
+longest snake, so an eliminated player can win.
+
+Matches are simulated by a single owner per match, enforced by a PostgreSQL
+lease (`matches.owner_token`) with fenced checkpoint writes and throttled
+renewal. Run exactly one simulator per deployment (or several — the lease
+arbitrates):
+
+```sh
+cd rails
+bundle exec rails multiplayer:simulate   # authoritative loop
+bundle exec rails multiplayer:status     # owners + checkpoints
+bundle exec rails multiplayer:tick       # one pass
+```
+
+The engine is testable without Rails, a browser or a WebSocket:
+`ruby -Itest test/simulation/world_test.rb`. Full design, protocol (versioned
+snapshot + input messages), lifecycle, ownership/takeover policy and known
+limitations: [`rails/docs/multiplayer-step-07-server-engine.md`](rails/docs/multiplayer-step-07-server-engine.md).
+Frontend play and snapshot broadcasting remain for step 8; the HTTP Start action
+still reports eligibility only.
 
 ## Multiplayer rooms
 

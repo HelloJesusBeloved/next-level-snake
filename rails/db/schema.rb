@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_10_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_11_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -28,6 +28,61 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_10_000000) do
     t.index ["public_id"], name: "guest_sessions_public_id_idx", unique: true
     t.index ["token_digest"], name: "guest_sessions_token_digest_idx", unique: true
     t.check_constraint "claimed_by_user_id IS NULL AND claimed_at IS NULL OR claimed_by_user_id IS NOT NULL AND claimed_at IS NOT NULL", name: "guest_sessions_claimed_pair_check"
+  end
+
+  create_table "match_participants", force: :cascade do |t|
+    t.bigint "match_id", null: false
+    t.bigint "room_membership_id"
+    t.string "display_name", null: false
+    t.integer "color_slot", null: false
+    t.string "color_hex", null: false
+    t.string "status", default: "alive", null: false
+    t.integer "final_score", default: 0, null: false
+    t.integer "longest_length", default: 0, null: false
+    t.bigint "survived_ticks", default: 0, null: false
+    t.bigint "eliminated_at_tick"
+    t.integer "placement"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["match_id", "placement"], name: "match_participants_placement_idx"
+    t.index ["match_id", "room_membership_id"], name: "match_participants_identity_idx", unique: true
+    t.index ["room_membership_id"], name: "index_match_participants_on_room_membership_id"
+    t.check_constraint "color_slot >= 0 AND color_slot <= 95", name: "match_participants_color_check"
+    t.check_constraint "final_score >= 0 AND longest_length >= 0 AND survived_ticks >= 0", name: "match_participants_counters_check"
+    t.check_constraint "status::text = ANY (ARRAY['alive'::character varying, 'eliminated'::character varying, 'left'::character varying]::text[])", name: "match_participants_status_check"
+  end
+
+  create_table "matches", force: :cascade do |t|
+    t.bigint "room_id", null: false
+    t.string "mode", default: "brawl", null: false
+    t.string "status", default: "pending", null: false
+    t.integer "columns", null: false
+    t.integer "rows", null: false
+    t.integer "tick_ms", null: false
+    t.integer "speed_level"
+    t.integer "growth", default: 1, null: false
+    t.bigint "seed", null: false
+    t.bigint "tick", default: 0, null: false
+    t.integer "max_ticks", null: false
+    t.jsonb "checkpoint", default: {}, null: false
+    t.bigint "checkpoint_tick", default: 0, null: false
+    t.string "owner_token"
+    t.datetime "lease_expires_at"
+    t.datetime "started_at"
+    t.datetime "ended_at"
+    t.string "end_reason"
+    t.bigint "winner_membership_id"
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["room_id", "created_at"], name: "matches_room_created_idx"
+    t.index ["room_id"], name: "matches_one_live_per_room_idx", unique: true, where: "((status)::text = ANY ((ARRAY['pending'::character varying, 'running'::character varying, 'paused'::character varying])::text[]))"
+    t.index ["status", "lease_expires_at"], name: "matches_claimable_idx"
+    t.check_constraint "columns >= 24 AND columns <= 96 AND rows >= 18 AND rows <= 72", name: "matches_board_check"
+    t.check_constraint "growth >= 0 AND growth <= 100", name: "matches_growth_check"
+    t.check_constraint "mode::text = ANY (ARRAY['brawl'::character varying, 'duel'::character varying]::text[])", name: "matches_mode_check"
+    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying, 'running'::character varying, 'paused'::character varying, 'completed'::character varying, 'abandoned'::character varying]::text[])", name: "matches_status_check"
+    t.check_constraint "tick >= 0 AND checkpoint_tick >= 0", name: "matches_ticks_check"
+    t.check_constraint "tick_ms >= 40 AND tick_ms <= 1000", name: "matches_tick_ms_check"
   end
 
   create_table "room_memberships", force: :cascade do |t|
@@ -48,7 +103,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_10_000000) do
     t.index "room_id, lower((display_name)::text)", name: "room_memberships_active_name_idx", unique: true, where: "((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text]))"
     t.index ["guest_session_id"], name: "index_room_memberships_on_guest_session_id"
     t.index ["guest_session_id"], name: "room_memberships_one_active_guest_idx", unique: true, where: "((guest_session_id IS NOT NULL) AND ((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text])))"
-    t.index ["room_id", "color_slot"], name: "memberships_active_color_idx", unique: true, where: "((state)::text = ANY ((ARRAY['joined'::character varying, 'ready'::character varying, 'playing'::character varying])::text[]))"
+    t.index ["room_id", "color_slot"], name: "memberships_active_color_idx", unique: true, where: "((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text]))"
     t.index ["room_id", "guest_session_id"], name: "room_memberships_room_guest_idx", unique: true, where: "(guest_session_id IS NOT NULL)"
     t.index ["room_id", "state"], name: "room_memberships_room_state_idx"
     t.index ["room_id", "user_id"], name: "room_memberships_room_user_idx", unique: true, where: "(user_id IS NOT NULL)"
@@ -118,6 +173,10 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_10_000000) do
   end
 
   add_foreign_key "guest_sessions", "users", column: "claimed_by_user_id", on_delete: :nullify
+  add_foreign_key "match_participants", "matches", on_delete: :cascade
+  add_foreign_key "match_participants", "room_memberships", on_delete: :nullify
+  add_foreign_key "matches", "room_memberships", column: "winner_membership_id", on_delete: :nullify
+  add_foreign_key "matches", "rooms", on_delete: :cascade
   add_foreign_key "room_memberships", "guest_sessions", on_delete: :cascade
   add_foreign_key "room_memberships", "rooms", on_delete: :cascade
   add_foreign_key "room_memberships", "users", on_delete: :cascade
