@@ -51,13 +51,38 @@ Rules the client keeps (server details: `rails/docs/multiplayer-transport.md`):
 Rendering and actions were already pure functions of room state, so the
 transport swap stayed inside `refresh()`/`connectCable()`.
 
+## Sharing & the QR scanner (step 5)
+
+The in-room sharing panel shows the invitation code, the direct join URL and
+three actions: **Share Room** (`navigator.share`, hidden where unsupported),
+**Copy Link** (always available; both the Clipboard API and a selection
+fallback, with visible success *and* failure feedback in the panel), and
+**Show QR** — a canvas QR drawn in-page from `window.qrcode`.
+
+**Scan QR Code** (landing card and sharing panel) opens `<dialog id="mp-scan">`:
+`getUserMedia` → `<video>` → decode with native `BarcodeDetector` if the browser
+has it, otherwise the vendored `jsQR` — both run locally. Accepted payloads must
+be `http(s)` on the page's origin or the server's configured public origin
+(`config.origin` payload) **and** match `/multiplayer` or `/multiplayer/<code>`;
+everything else is rejected with a message and scanning continues. A valid scan
+navigates with `location.assign` — the SAME tab, never `window.open`. Every
+exit path (success, decode failure, Cancel, Escape via the dialog's `close`
+event) funnels through `stopScanner()`, which stops every `MediaStreamTrack`
+and detaches the video. Unsupported `mediaDevices`, denied permission, missing
+cameras and non-secure contexts are reported in `#mp-scan-status` with the
+code-entry fallback.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)
-- `lobby.js` — roster, actions, polling fallback and the Action Cable client
-- `actioncable.esm.js` — the official client, vendored from the actioncable
-  gem because this app has no asset pipeline (upgrade it with the gem)
-- `lobby.css` — lobby styling, incl. the connection-state chip
+- `lobby.js` — roster, actions, polling fallback, Action Cable client,
+  sharing panel, QR drawing and the camera scanner
+- `actioncable.esm.js` — official Action Cable client, vendored from the gem
+  (no asset pipeline; upgrade it with the gem)
+- `vendor/qrcode.min.js` — qrcode-generator v1.4.4 (drawing; license file
+  alongside) and `vendor/jsqr.min.js` — jsQR v1.4.0 (Apache-2.0, fallback
+  decoder), both vendored from npm and fully offline
+- `lobby.css` — lobby styling: connection chip, sharing panel, QR, scanner
 
 ## Not built yet
 

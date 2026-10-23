@@ -79,7 +79,8 @@ test('the lobby is real, but no gameplay is faked', async ({ page }) => {
   await page.goto('/multiplayer');
   await expect(page.locator('#mp-entry')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create room' })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Join room' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Join with Code' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Scan QR Code' })).toBeVisible();
   // Sign In / Create Account: in the header AND under the display name.
   await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(2);
   await expect(page.getByRole('button', { name: 'Create account' })).toHaveCount(2);
@@ -288,6 +289,226 @@ test('invalid and disbanded codes explain themselves', async ({ page, request })
   await expect(page.locator('#mp-flash')).toContainText('does not exist');
   await expect(page.locator('#mp-entry')).toBeVisible();
   expect((await request.get('/api/rooms/ZZZZZZZZZZZZ')).status()).toBe(404);
+});
+
+// ---- invitations: sharing panel & QR scanning (step 5) --------------------
+
+async function createRoomVia(request, displayName = 'Ada') {
+  const res = await request.post('/api/rooms', {
+    headers: { 'Content-Type': 'application/json' },
+    data: { display_name: displayName },
+  });
+  expect(res.status()).toBe(201);
+  const { room } = await res.json();
+  return room;
+}
+
+test('sharing panel shows the invite URL, encodes a scannable QR, and shares/copies with feedback', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await page.addInitScript(() => {
+    // Deterministic Web Share: the real API needs OS integration.
+    navigator.share = async (data) => { window.__shared = data; };
+  });
+  await page.goto('/multiplayer');
+  await page.fill('#mp-name', 'Ada');
+  await page.click('#mp-create');
+  await expect(page.locator('#mp-room')).toBeVisible();
+
+  // Direct join URL is displayed, from the server, carrying this page's origin.
+  const invite = await page.locator('#mp-invite-url').textContent();
+  const origin = new URL(page.url()).origin;
+  const roomCode = (await page.locator('#mp-room-code').textContent()).trim();
+  expect(roomCode).toMatch(/^[A-Z0-9]{12}$/);
+  expect(invite).toBe(`${origin}/multiplayer/${roomCode}`);
+
+  // Share Room appears (navigator.share stubbed in) and shares the URL.
+  const shareBtn = page.locator('#mp-share-room');
+  await expect(shareBtn).toBeVisible();
+  await shareBtn.click();
+  expect(await page.evaluate(() => window.__shared)).toMatchObject({ url: invite });
+  await expect(page.locator('#mp-share-feedback')).toContainText('Shared');
+
+  // Copy Link always works, with visible success feedback.
+  await page.locator('#mp-copy-link').click();
+  await expect(page.locator('#mp-share-feedback')).toContainText('copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(invite);
+
+  // The QR code renders locally AND round-trips: decode our own canvas with
+  // the vendored jsQR — the exact payload a phone camera would see.
+  await page.locator('#mp-qr-toggle').click();
+  await expect(page.locator('#mp-qr')).toBeVisible();
+  await expect(page.locator('#mp-qr-toggle')).toHaveAttribute('aria-expanded', 'true');
+  const decoded = await page.evaluate(() => {
+    const canvas = document.getElementById('mp-qr-canvas');
+    const frame = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    const found = window.jsQR(frame.data, canvas.width, canvas.height);
+    return found ? found.data : null;
+  });
+  expect(decoded).toBe(invite);
+});
+
+test('copy failure is reported visibly with the link to copy by hand', async ({ page, request }) => {
+  await createRoomVia(request);
+  await page.goto('/multiplayer');
+  await page.fill('#mp-name', 'Ada');
+  await page.click('#mp-create');
+  await expect(page.locator('#mp-room')).toBeVisible();
+
+  await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    document.execCommand = () => false; // both copy paths fail on purpose
+  });
+  await page.locator('#mp-copy-link').click();
+  await expect(page.locator('#mp-share-feedback')).toContainText('Automatic copy failed');
+  await expect(page.locator('#mp-share-feedback')).toContainText('/multiplayer/');
+});
+
+test('without Web Share the Share Room button stays hidden while Copy Link remains', async ({ page, request }) => {
+  await createRoomVia(request);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'share', { value: undefined, configurable: true });
+  });
+  await page.goto('/multiplayer');
+  await page.fill('#mp-name', 'Ada');
+  await page.click('#mp-create');
+  await expect(page.locator('#mp-room')).toBeVisible();
+  await expect(page.locator('#mp-share-room')).toBeHidden();
+  await expect(page.locator('#mp-copy-link')).toBeVisible();
+});
+
+test.describe('QR scanner', () => {
+  test.use({ permissions: ['camera'] });
+
+  test('a scanned invitation navigates in the SAME tab and joins through the real backend', async ({ page, context, request }) => {
+    const room = await createRoomVia(request, 'Ada');
+    // addInitScript must be registered BEFORE goto — it applies to documents
+    // created afterwards, so ordering here decides whether the stub exists.
+    const target = new URL(`/multiplayer/${room.code}`, test.info().project.use.baseURL).href;
+    await page.addInitScript((url) => {
+      // Native-BarcodeDetector path: report the invitation on the first frame.
+      window.BarcodeDetector = class {
+        async detect() { return [{ rawValue: url }]; }
+      };
+    }, target);
+    await page.goto('/multiplayer');
+
+    await page.locator('#mp-scan-open').click();
+    await expect(page.locator('#mp-scan')).toBeVisible();
+    // Same tab means the page itself navigated — never a popup/tab window.open.
+    await page.waitForURL(`**/multiplayer/${room.code}`);
+    expect(context.pages().length).toBe(1);
+
+    // The invitation route is the normal join flow: name + Join with Code.
+    // The room already seats its API-created host, so Grace makes two.
+    await page.fill('#mp-name', 'Grace');
+    await page.click('#mp-join');
+    await expect(page.locator('#mp-roster .mp-player')).toHaveCount(2);
+    await expect(page.locator('#mp-roster')).toContainText('Grace');
+    await expect(page.locator('#mp-roster')).toContainText('Ada');
+  });
+
+  test('a foreign URL is rejected and the camera is released on cancel', async ({ page, request }) => {
+    await createRoomVia(request);
+    await page.addInitScript(() => {
+      // Wrap the REAL implementation first — assigning after the wrapper
+      // would make the wrapper call itself forever (RangeError).
+      const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+      navigator.mediaDevices.getUserMedia = async (constraints) => {
+        const stream = await original(constraints);
+        window.__cam = stream;
+        return stream;
+      };
+      window.BarcodeDetector = class {
+        async detect() { return [{ rawValue: 'https://evil.example/multiplayer/NOTOURS' }]; }
+      };
+    });
+
+    await page.goto('/multiplayer');
+    await page.locator('#mp-scan-open').click();
+    await expect(page.locator('#mp-scan-status')).toContainText("isn't a Next Level Snake invitation");
+    await page.waitForTimeout(400);
+    expect(page.url()).toContain('/multiplayer'); // stayed put — no navigation
+
+    await page.locator('#mp-scan-cancel').click();
+    await expect(page.locator('#mp-scan')).toBeHidden();
+    const released = await page.evaluate(() => (
+      window.__cam && window.__cam.getTracks().every((track) => track.readyState === 'ended')
+    ));
+    expect(released).toBe(true);
+  });
+
+  test('the jsQR fallback decodes a real QR frame locally', async ({ page, context, request }) => {
+    const room = await createRoomVia(request, 'Ada');
+    const target = new URL(`/multiplayer/${room.code}`, test.info().project.use.baseURL).href;
+    // addInitScript before goto: it only applies to documents created after.
+    await page.addInitScript((url) => {
+      // No native detector: force the vendored jsQR fallback, and feed the
+      // camera a genuine QR drawn on a canvas — real pixels, real decode.
+      Object.defineProperty(window, 'BarcodeDetector', { value: undefined, configurable: true });
+      navigator.mediaDevices.getUserMedia = async () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 480;
+        canvas.height = 480;
+        const ctx = canvas.getContext('2d');
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(0, 0, 480, 480);
+        const qr = window.qrcode(0, 'M');
+        qr.addData(url);
+        qr.make();
+        const quiet = 4;
+        const count = qr.getModuleCount();
+        const cell = Math.floor(480 / (count + quiet * 2));
+        const offset = Math.floor((480 - cell * count) / 2);
+        ctx.fillStyle = '#000000';
+        for (let row = 0; row < count; row += 1) {
+          for (let col = 0; col < count; col += 1) {
+            if (qr.isDark(row, col)) ctx.fillRect(offset + col * cell, offset + row * cell, cell, cell);
+          }
+        }
+        window.__cam = canvas.captureStream(10);
+        return window.__cam;
+      };
+    }, target);
+    await page.goto('/multiplayer');
+
+    await page.locator('#mp-scan-open').click();
+    // No visibility/status assertion: with a real QR in frame the decode and
+    // the same-tab navigation can complete before the first poll. waitForURL
+    // passes either way (immediately if the navigation already landed).
+    await page.waitForURL(`**/multiplayer/${room.code}`);
+    expect(context.pages().length).toBe(1);
+  });
+
+  test('camera permission denial is reported and recoverable', async ({ page }) => {
+    await page.addInitScript(() => {
+      navigator.mediaDevices.getUserMedia = async () => {
+        throw new DOMException('User dismissed the prompt', 'NotAllowedError');
+      };
+    });
+    await page.goto('/multiplayer');
+    await page.locator('#mp-scan-open').click();
+    await expect(page.locator('#mp-scan-status')).toContainText('Camera permission denied');
+    await expect(page.locator('#mp-scan-stage')).toBeHidden();
+    await page.locator('#mp-scan-cancel').click();
+    await expect(page.locator('#mp-scan')).toBeHidden();
+    // Camera still works for a later attempt: nothing was acquired to leak.
+    expect(await page.evaluate(() => !window.__cam)).toBe(true);
+  });
+
+  test('browsers without mediaDevices are told plainly, and Escape releases everything', async ({ page }) => {
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, 'mediaDevices', { value: undefined, configurable: true });
+    });
+    await page.goto('/multiplayer');
+    await page.locator('#mp-scan-open').click();
+    await expect(page.locator('#mp-scan-status')).toContainText("can't open a camera");
+    // Escape is the dialog's native dismissal — close event must clean up.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#mp-scan')).toBeHidden();
+    // Reopening after an unsupported attempt still shows an honest status.
+    await page.locator('#mp-scan-open').click();
+    await expect(page.locator('#mp-scan-status')).toContainText("can't open a camera");
+  });
 });
 
 for (const theme of themes) {

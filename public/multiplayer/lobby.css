@@ -76,7 +76,6 @@
   color: var(--green);
   word-break: break-all;
 }
-.mp-room__share { display: flex; flex-wrap: wrap; gap: 8px; }
 .mp-room__meta {
   display: flex;
   flex-wrap: wrap;
@@ -223,4 +222,109 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .mp-conn .mp-dot { animation: none; }
+}
+
+/* ---- invitation sharing panel (step 5) --------------------------------- */
+.mp-share {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px 24px;
+}
+.mp-share__ident { min-width: min(100%, 300px); flex: 1 1 300px; }
+.mp-share__panel { flex: 1 1 260px; display: flex; flex-direction: column; gap: 10px; }
+
+.mp-share__url { margin: 10px 0 0; display: flex; flex-direction: column; gap: 4px; }
+.mp-share__label {
+  font-size: 10.5px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.mp-share__link {
+  display: block;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 45%, transparent);
+  color: var(--accent-2);
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-size: 12.5px;
+  word-break: break-all;
+  user-select: all; /* a failed automatic copy still takes one click to take */
+  cursor: text;
+}
+
+.mp-share__buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.mp-share__feedback {
+  min-height: 1.2em;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.mp-share__feedback[data-kind='ok'] { color: var(--green); }
+.mp-share__feedback[data-kind='error'] {
+  color: color-mix(in srgb, var(--red) 85%, var(--text));
+}
+.mp-share__feedback:empty { min-height: 0; }
+
+.mp-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff; /* the QR itself needs a guaranteed white ground */
+}
+.mp-qr canvas { display: block; border-radius: 6px; image-rendering: pixelated; max-width: 100%; height: auto; }
+.mp-qr__caption { margin: 0; font-size: 12px; color: #444; text-align: center; }
+
+/* ---- built-in QR scanner (step 5) -------------------------------------- */
+.mp-scan__stage {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #000;
+  aspect-ratio: 4 / 3;
+}
+.mp-scan__stage[hidden] { display: none; }
+.mp-scan__video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.mp-scan__reticle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: min(58%, 220px);
+  aspect-ratio: 1;
+  transform: translate(-50%, -50%);
+  border: 2px solid color-mix(in srgb, var(--accent-2) 85%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.mp-scan__status {
+  margin: 12px 0 4px;
+  font-size: 14px;
+  color: var(--text);
+}
+.mp-scan__status[data-kind='error'] {
+  color: color-mix(in srgb, var(--red) 85%, var(--text));
+}
+.mp-scan__status[data-kind='info'] { color: var(--accent-2); }
+
+@media (max-width: 560px) {
+  .mp-share { flex-direction: column; }
+  .mp-share__panel { width: 100%; }
+  .mp-share__buttons .btn { flex: 1 1 auto; }
 }

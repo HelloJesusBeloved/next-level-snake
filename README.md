@@ -293,6 +293,7 @@ bare-metal reads `rails/.env` (see `rails/.env.example`).
 | `ACTION_CABLE_ALLOWED_ORIGINS` | same-origin | extra origins allowed to open a socket (proxies / tunnels) |
 | `ACTION_CABLE_WORKER_POOL` | `4` | Action Cable channel worker threads per process |
 | `RAILS_DB_POOL` | threads+4 | AR pool, sized for Puma threads **plus** cable workers |
+| `MULTIPLAYER_PUBLIC_ORIGIN` | request origin | canonical origin for share links & QR codes (e.g. `https://play.example.com`) — set it on real deployments |
 
 ## Accounts & the leaderboard
 
@@ -564,6 +565,20 @@ slider.
   outright; invalid, disbanded and expired codes each say so (`404` / `410`).
 * **Switching rooms is deliberate**: the server refuses with `409 in_other_room`
   and the page asks before leaving the room you are already in.
+* **Invitations & QR (step 5).** The lobby's sharing panel shows the code and
+  the direct join URL, with **Share Room** (native Web Share API when the
+  browser has it), **Copy Link** (always present, with visible success/failure
+  feedback) and a **QR code drawn locally** from vendored open-source tooling
+  (`qrcode-generator` for drawing, `jsQR` as the decoder fallback — no frame
+  ever leaves the device). **Scan QR Code** opens the built-in camera scanner
+  (entry card or sharing panel): it requests camera access, decodes in-page
+  via native `BarcodeDetector` when available, validates the payload against
+  this application's own room routes and the configured public origin before
+  navigating **in the same tab**, and releases the camera on success, failure,
+  cancel or Escape. Denied permissions, missing cameras, insecure (non-https)
+  contexts and unsupported browsers each get a plain-language message and the
+  paste-the-code fallback. Invitation URLs use `MULTIPLAYER_PUBLIC_ORIGIN`
+  when set, never a hardcoded host.
 
 **Real-time (Action Cable).** Lobbies synchronize over a WebSocket at
 `/cable` (`RoomChannel`, stream `rooms:<code>`): joins, leaves, ready votes,

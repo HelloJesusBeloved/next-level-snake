@@ -7,7 +7,13 @@ import { defineConfig, devices } from '@playwright/test';
 // origin from framing the app on another. Production never serves a frame from
 // loopback, so the check is switched off for the test browser only.
 const launchOptions = {
-  args: ['--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights'],
+  args: [
+    '--disable-features=LocalNetworkAccessChecks,BlockInsecurePrivateNetworkRequests,PrivateNetworkAccessSendPreflights',
+    // Fake camera so the QR scanner tests can exercise getUserMedia without
+    // real hardware (permission is still requested and granted per test).
+    '--use-fake-ui-for-media-stream',
+    '--use-fake-device-for-media-stream',
+  ],
 };
 
 export default defineConfig({

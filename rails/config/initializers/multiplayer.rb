@@ -32,6 +32,20 @@ Rails.application.config.x.multiplayer = ActiveSupport::OrderedOptions.new.tap d
   # never asked for a size); this is the hard ceiling they can expand into.
   cfg.max_capacity = cfg.seconds("MULTIPLAYER_MAX_ROOM_SIZE", 64)
 
+  # Canonical origin for shareable invitations (share links, QR codes):
+  # e.g. "https://play.example.com" — no path, no trailing slash. Set it on
+  # real deployments so a share never points at an internal host; unset (or
+  # invalid) falls back to the origin the request itself arrived on, which
+  # keeps plain localhost development working. Never a hardcoded URL.
+  # The parser is a lambda so tests can exercise exactly what production runs.
+  cfg.origin_from_env = lambda do |raw|
+    value = raw.to_s.strip.chomp("/")
+    # scheme + host[:port] only — reject anything that could carry a path,
+    # credentials or whitespace into an invitation link.
+    value.match?(%r{\Ahttps?://[A-Za-z0-9.-]+(:[0-9]+)?\z}) ? value : nil
+  end
+  cfg.public_origin = cfg.origin_from_env.call(ENV["MULTIPLAYER_PUBLIC_ORIGIN"])
+
   # Client poll interval handed to the page (real-time replaces it next step).
   cfg.poll_interval = cfg.seconds("MULTIPLAYER_POLL_INTERVAL", 5)
 

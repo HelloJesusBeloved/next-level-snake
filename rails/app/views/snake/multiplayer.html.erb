@@ -129,21 +129,39 @@
       </label>
       <p class="mp-card__hint" id="mp-code-preview" hidden></p>
       <div class="mp-actions">
-        <button class="btn btn--primary" id="mp-join" type="button">Join room</button>
+        <button class="btn btn--primary" id="mp-join" type="button">Join with Code</button>
+        <button class="btn" id="mp-scan-open" type="button">
+          <svg class="nav-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M3 12h18" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Scan QR Code
+        </button>
       </div>
     </article>
   </section>
 
   <%# ---- inside a room ---------------------------------------------------- %>
   <section class="mp-room" id="mp-room" hidden>
-    <header class="mp-room__head">
-      <div>
+    <header class="mp-room__head mp-share" aria-label="Share this room">
+      <div class="mp-share__ident">
         <p class="mp-room__eyebrow">Brawl lobby · <span id="mp-room-state">lobby</span></p>
         <h2 class="mp-room__code" id="mp-room-code">————————————</h2>
+        <p class="mp-share__url">
+          <span class="mp-share__label">Invitation link</span>
+          <code class="mp-share__link" id="mp-invite-url"></code>
+        </p>
       </div>
-      <div class="mp-room__share">
-        <button class="btn btn--small" id="mp-copy-code" type="button">Copy code</button>
-        <button class="btn btn--small" id="mp-copy-link" type="button">Copy invite link</button>
+      <div class="mp-share__panel">
+        <div class="mp-share__buttons">
+          <button class="btn btn--small btn--primary" id="mp-share-room" type="button" hidden>Share Room</button>
+          <button class="btn btn--small" id="mp-copy-link" type="button">Copy Link</button>
+          <button class="btn btn--small" id="mp-copy-code" type="button">Copy code</button>
+          <button class="btn btn--small" id="mp-qr-toggle" type="button" aria-expanded="false" aria-controls="mp-qr">Show QR</button>
+          <button class="btn btn--small" id="mp-scan-open-room" type="button">Scan QR Code</button>
+        </div>
+        <p class="mp-share__feedback" id="mp-share-feedback" role="status" aria-live="polite"></p>
+        <div class="mp-qr" id="mp-qr" hidden>
+          <canvas id="mp-qr-canvas" role="img" aria-label="QR code for this room's invitation link"></canvas>
+          <p class="mp-qr__caption">Scan with a camera to open this invitation on another device.</p>
+        </div>
       </div>
     </header>
 
@@ -195,8 +213,37 @@
   </div>
 </dialog>
 
+<%# Built-in QR scanner (step 5). Decoding runs entirely in this page — native
+    BarcodeDetector when available, vendored jsQR otherwise — so no camera
+    frame ever leaves the device. Every exit path (success, failure, cancel,
+    Escape) releases the camera: see stopScanner() in lobby.js. %>
+<dialog class="dialog mp-scan" id="mp-scan" aria-labelledby="mp-scan-title">
+  <div class="dialog__inner">
+    <div class="dialog__head">
+      <h2 class="dialog__title" id="mp-scan-title">Scan an invitation QR code</h2>
+      <button class="dialog__close" id="mp-scan-close" type="button" aria-label="Close">✕</button>
+    </div>
+    <div class="mp-scan__stage" id="mp-scan-stage" hidden>
+      <video id="mp-scan-video" class="mp-scan__video" playsinline autoplay muted
+             aria-label="Camera preview for scanning a QR code"></video>
+      <div class="mp-scan__reticle" aria-hidden="true"></div>
+    </div>
+    <p class="mp-scan__status" id="mp-scan-status" role="status" aria-live="polite">Starting camera…</p>
+    <p class="mp-card__hint">Decoded locally, on this device. Point the camera at a Next Level Snake invitation.</p>
+    <div class="mp-actions">
+      <button class="btn btn--small" id="mp-scan-cancel" type="button">Cancel scanning</button>
+    </div>
+  </div>
+</dialog>
+
 <%= render "shared/auth_dialog" %>
 
 <% content_for :scripts do %>
-  <script type="module" src="/multiplayer/page.js?v=2026-10-20.1"></script>
+  <%# Vendored open-source QR tooling (licenses alongside): qrcode-generator
+      draws the invitation QR, jsQR is the decoder fallback. Classic scripts
+      expose window.qrcode / window.jsQR to the module below; both work fully
+      offline — nothing here phones home. %>
+  <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
+  <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
+  <script type="module" src="/multiplayer/page.js?v=2026-10-23.1"></script>
 <% end %>

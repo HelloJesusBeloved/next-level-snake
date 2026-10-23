@@ -82,6 +82,20 @@ export function mountLobby(root) {
     roomState: $('mp-room-state'),
     copyCode: $('mp-copy-code'),
     copyLink: $('mp-copy-link'),
+    inviteUrl: $('mp-invite-url'),
+    shareBtn: $('mp-share-room'),
+    shareFeedback: $('mp-share-feedback'),
+    qrToggle: $('mp-qr-toggle'),
+    qrBox: $('mp-qr'),
+    qrCanvas: $('mp-qr-canvas'),
+    scanOpen: $('mp-scan-open'),
+    scanOpenRoom: $('mp-scan-open-room'),
+    scanDlg: $('mp-scan'),
+    scanStage: $('mp-scan-stage'),
+    scanVideo: $('mp-scan-video'),
+    scanStatus: $('mp-scan-status'),
+    scanCancel: $('mp-scan-cancel'),
+    scanClose: $('mp-scan-close'),
     count: $('mp-count'),
     readyCount: $('mp-ready-count'),
     startState: $('mp-start-state'),
@@ -106,6 +120,9 @@ export function mountLobby(root) {
     // snapshot, during which incoming events are buffered, never applied.
     version: 0,
     synced: false,
+    // Server-configured public origin (config.origin): one half of the
+    // scanned-QR allowlist; the page's own origin is the other.
+    configOrigin: null,
     buffered: [],
     cable: { status: 'idle', reason: null },
   };
@@ -211,6 +228,9 @@ export function mountLobby(root) {
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
+    if (el.inviteUrl) el.inviteUrl.textContent = state.invite;
+    // Web Share is progressive enhancement; Copy Link is always present.
+    if (el.shareBtn) el.shareBtn.hidden = !(state.invite && typeof navigator.share === 'function');
   }
 
   // ---- server conversation ---------------------------------------------------
@@ -226,6 +246,7 @@ export function mountLobby(root) {
       }
     }
     if (out.json && out.json.viewer) state.viewer = out.json.viewer;
+    if (out.json && out.json.config && out.json.config.origin) state.configOrigin = out.json.config.origin;
     if (out.json && out.json.notice) flash(out.json.notice, 'info');
     render();
     // One socket per room, closed the moment there is no room to watch.
@@ -367,35 +388,44 @@ export function mountLobby(root) {
   // navigator.clipboard only exists in secure contexts, so on a plain HTTP
   // self-host it must fall back to the selection trick — which is why "Copy"
   // used to look dead before this existed.
-  function copy(text, button, label) {
-    if (!text) return;
-    const done = () => {
-      if (!button) return;
-      const original = button.textContent;
-      button.textContent = label;
-      window.setTimeout(() => { button.textContent = original; }, 1500);
-    };
-    const legacy = () => {
+  // Clipboard with honest, visible feedback (step 5): the sharing panel's
+  // status line reports success, and on failure shows exactly what to copy by
+  // hand instead of failing silently. Two paths: the async Clipboard API in
+  // secure contexts, then the selection trick for plain-HTTP self-hosts.
+  async function copyText(text) {
+    if (!text) return false;
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
       try {
-        const area = document.createElement('textarea');
-        area.value = text;
-        area.setAttribute('readonly', '');
-        area.style.position = 'fixed';
-        area.style.left = '-9999px';
-        document.body.appendChild(area);
-        area.select();
-        document.execCommand('copy');
-        document.body.removeChild(area);
-        done();
-      } catch (err) {
-        flash(`Copy failed — it is: ${text}`, 'info');
-      }
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText && window.isSecureContext) {
-      navigator.clipboard.writeText(text).then(done, legacy);
-    } else {
-      legacy();
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) { /* fall through to the selection trick */ }
     }
+    try {
+      const area = document.createElement('textarea');
+      area.value = text;
+      area.setAttribute('readonly', '');
+      area.style.position = 'fixed';
+      area.style.left = '-9999px';
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(area);
+      return ok === true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function copyWithFeedback(text, button, label) {
+    copyText(text).then((ok) => {
+      if (button) {
+        const original = button.textContent;
+        button.textContent = ok ? label : 'Copy failed';
+        window.setTimeout(() => { button.textContent = original; }, 1800);
+      }
+      if (ok) shareFeedback(`${label} — copied to the clipboard.`, 'ok');
+      else shareFeedback(`Automatic copy failed — select and copy: ${text}`, 'error');
+    });
   }
 
   // ---- accounts (reuses the shared auth dialog markup) ------------------------
@@ -643,6 +673,276 @@ export function mountLobby(root) {
     }).catch(() => flash('Lost contact with the room.', 'error'));
   }
 
+  // ---- sharing panel: share, copy, locally drawn QR (step 5) ------------------
+
+  function shareFeedback(message, kind) {
+    if (!el.shareFeedback) return;
+    el.shareFeedback.textContent = message || '';
+    el.shareFeedback.setAttribute('data-kind', kind || 'info');
+  }
+
+  // Native Web Share (progressive enhancement — the button only shows when
+  // the browser offers it). Copy Link remains for everyone else.
+  async function shareRoom() {
+    if (!state.invite) return;
+    try {
+      await navigator.share({
+        title: 'Join my Next Level Snake room',
+        text: state.room ? `Room ${state.room.code}` : 'Next Level Snake',
+        url: state.invite,
+      });
+      shareFeedback('Shared — choose where to send it.', 'ok');
+    } catch (err) {
+      if (err && err.name === 'AbortError') shareFeedback('Share canceled.', 'info');
+      else shareFeedback("Couldn't open the share sheet — use Copy Link instead.", 'error');
+    }
+  }
+
+  // Draws the invitation QR straight onto a canvas with window.qrcode
+  // (qrcode-generator, vendored). Fully local: the URL never leaves the page.
+  // White ground and near-black modules are deliberate — scanners need that
+  // contrast, so the QR stays theme-independent while the rest of the panel
+  // follows the active theme.
+  function renderQr() {
+    const url = state.invite;
+    if (!url || !el.qrCanvas) return false;
+    if (typeof window.qrcode !== 'function') {
+      shareFeedback('The QR generator is unavailable — use Copy Link instead.', 'error');
+      return false;
+    }
+    try {
+      const qr = window.qrcode(0, 'M'); // 0 = pick the smallest version that fits
+      qr.addData(url);
+      qr.make();
+      const quiet = 4;                  // QR-spec quiet zone, in modules
+      const count = qr.getModuleCount();
+      const cell = Math.max(2, Math.floor(224 / (count + quiet * 2)));
+      const size = cell * (count + quiet * 2);
+      const dpr = Math.min(window.devicePixelRatio || 1, 3);
+      const canvas = el.qrCanvas;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return false;
+      canvas.width = size * dpr;
+      canvas.height = size * dpr;
+      canvas.style.width = `${size}px`;
+      canvas.style.height = `${size}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      ctx.fillStyle = '#0b0d0f';
+      for (let row = 0; row < count; row += 1) {
+        for (let col = 0; col < count; col += 1) {
+          if (qr.isDark(row, col)) {
+            ctx.fillRect((col + quiet) * cell, (row + quiet) * cell, cell, cell);
+          }
+        }
+      }
+      return true;
+    } catch (err) {
+      shareFeedback('Could not draw the QR code — the link is still copyable.', 'error');
+      return false;
+    }
+  }
+
+  function toggleQr() {
+    if (!el.qrBox || !el.qrToggle) return;
+    const showing = el.qrBox.hidden;
+    if (showing && !renderQr()) return;
+    el.qrBox.hidden = !showing;
+    el.qrToggle.setAttribute('aria-expanded', String(showing));
+    el.qrToggle.textContent = showing ? 'Hide QR' : 'Show QR';
+    shareFeedback(showing ? 'QR code ready — scan it with a camera.' : '', showing ? 'info' : '');
+  }
+
+  // ---- built-in QR scanner (step 5) ------------------------------------------
+  //
+  // Camera frames are decoded on this device: native BarcodeDetector when the
+  // browser has it, the vendored jsQR fallback otherwise. Nothing is uploaded.
+  //
+  // Every exit path releases the camera: success (before navigating), decode
+  // failures keep scanning until the user cancels, and cancel/close/Escape all
+  // funnel through the dialog's close event -> stopScanner().
+  const scanner = { stream: null, raf: 0, last: 0, busy: false, closed: true, decoder: null, canvas: null, ctx: null };
+
+  function scanStatus(message, kind) {
+    if (!el.scanStatus) return;
+    el.scanStatus.textContent = message;
+    el.scanStatus.setAttribute('data-kind', kind || 'info');
+  }
+
+  function openScanner() {
+    if (!el.scanDlg) return;
+    stopScanner(); // never stack a second camera session
+    scanStatus('Starting camera…', 'info');
+    if (el.scanStage) el.scanStage.hidden = true;
+    if (el.scanDlg.showModal && !el.scanDlg.open) el.scanDlg.showModal();
+    startCamera();
+  }
+
+  function closeScanner() {
+    // Release synchronously: a dialog's close event fires asynchronously, and
+    // a camera should die the instant the user cancels. The 'close' listener
+    // below still covers Escape (which never goes through here) — stopScanner
+    // is idempotent, so running twice is intended.
+    stopScanner();
+    if (el.scanDlg && el.scanDlg.open) el.scanDlg.close();
+  }
+
+  function stopScanner() {
+    scanner.closed = true;
+    if (scanner.raf) { window.cancelAnimationFrame(scanner.raf); scanner.raf = 0; }
+    if (scanner.stream) {
+      scanner.stream.getTracks().forEach((track) => {
+        try { track.stop(); } catch (err) { /* already ended */ }
+      });
+      scanner.stream = null;
+    }
+    if (el.scanVideo) {
+      try { el.scanVideo.srcObject = null; } catch (err) { /* detached */ }
+    }
+    if (el.scanStage) el.scanStage.hidden = true;
+    scanner.busy = false;
+    scanner.decoder = null;
+  }
+
+  async function startCamera() {
+    if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+      scanStatus(window.isSecureContext === false
+        ? 'The camera needs a secure (https) connection. Open this page over https, or paste the code instead.'
+        : "This browser can't open a camera from this page. Paste the invitation code instead.", 'error');
+      return;
+    }
+    try {
+      scanner.stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+    } catch (err) {
+      scanner.stream = null;
+      const name = err && err.name;
+      if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+        scanStatus('Camera permission denied. Allow camera access in your browser settings, or paste the invitation code instead.', 'error');
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError' || name === 'DevicesNotFoundError') {
+        scanStatus('No camera found on this device. Paste the invitation code instead.', 'error');
+      } else {
+        scanStatus("Couldn't open the camera. Paste the invitation code instead.", 'error');
+      }
+      return;
+    }
+    pickDecoder();
+    if (!scanner.decoder) return; // status already set by pickDecoder
+
+    el.scanVideo.srcObject = scanner.stream;
+    try { await el.scanVideo.play(); } catch (err) { /* autoplay muted video is allowed; if not, frames still flow once playing */ }
+    if (el.scanStage) el.scanStage.hidden = false;
+    scanStatus('Point the camera at a QR code…', 'info');
+    scanner.closed = false;
+    scanner.last = 0;
+    scanner.raf = window.requestAnimationFrame(scanLoop);
+  }
+
+  function pickDecoder() {
+    if (typeof window.BarcodeDetector === 'function') {
+      try {
+        scanner.decoder = { kind: 'native', api: new window.BarcodeDetector({ formats: ['qr_code'] }) };
+        return;
+      } catch (err) { /* partial implementation -> fall through to jsQR */ }
+    }
+    if (typeof window.jsQR === 'function') {
+      scanner.canvas = scanner.canvas || document.createElement('canvas');
+      scanner.ctx = scanner.canvas.getContext('2d', { willReadFrequently: true });
+      if (scanner.ctx) {
+        scanner.decoder = { kind: 'jsqr' };
+        scanStatus('Point the camera at a QR code…', 'info');
+        return;
+      }
+    }
+    scanner.decoder = null;
+    scanStatus('No QR reader is available in this browser. Paste the invitation code instead.', 'error');
+  }
+
+  function scanLoop(now) {
+    if (scanner.closed) return;
+    scanner.raf = window.requestAnimationFrame(scanLoop);
+    if (!scanner.decoder || scanner.busy) return;
+    if (now - scanner.last < 120) return; // ~8 checks per second is plenty
+    scanner.last = now;
+    const video = el.scanVideo;
+    if (!video || video.readyState < 2) return;
+    scanner.busy = true;
+    decodeFrame(video).then((raw) => {
+      scanner.busy = false;
+      if (raw) handleScanned(raw);
+    }).catch(() => { scanner.busy = false; });
+  }
+
+  async function decodeFrame(video) {
+    if (scanner.decoder.kind === 'native') {
+      try {
+        const codes = await scanner.decoder.api.detect(video);
+        return codes && codes.length ? (codes[0].rawValue || null) : null;
+      } catch (err) {
+        // This browser advertises the API but refuses to use it: degrade to jsQR.
+        pickDecoder();
+        if (scanner.decoder && scanner.decoder.kind === 'jsqr') return decodeFrame(video);
+        throw err;
+      }
+    }
+    const width = video.videoWidth;
+    const height = video.videoHeight;
+    if (!width || !height) return null;
+    const scale = Math.min(1, 640 / width); // cap decode cost on phones
+    const w = Math.max(1, Math.round(width * scale));
+    const h = Math.max(1, Math.round(height * scale));
+    scanner.canvas.width = w;
+    scanner.canvas.height = h;
+    scanner.ctx.drawImage(video, 0, 0, w, h);
+    const frame = scanner.ctx.getImageData(0, 0, w, h);
+    const found = window.jsQR(frame.data, w, h);
+    return found ? found.data : null;
+  }
+
+  // Allowlist for scanned payloads: only this application's room routes on the
+  // page's own origin or the server's configured public origin. Anything else
+  // (other sites, javascript:, data:, look-alike paths) is rejected outright.
+  function roomUrlFor(raw) {
+    if (typeof raw !== 'string') return null;
+    let url;
+    try { url = new URL(raw.trim()); } catch (err) { return null; }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
+
+    const allowed = new Set([window.location.origin]);
+    if (state.configOrigin && /^https?:\/\//.test(state.configOrigin)) {
+      allowed.add(state.configOrigin.replace(/\/+$/, ''));
+    }
+    const origin = url.origin;
+    if (!allowed.has(origin)) return null;
+
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path === '/multiplayer') return origin === window.location.origin ? path : origin + path;
+    if (/^\/multiplayer\/[A-Za-z0-9-]{4,24}$/.test(path)) {
+      return origin === window.location.origin ? path : origin + path;
+    }
+    return null;
+  }
+
+  function handleScanned(raw) {
+    const target = roomUrlFor(raw);
+    if (!target) {
+      scanStatus("That QR code isn't a Next Level Snake invitation.", 'error');
+      return; // keep the camera running so they can aim at the right code
+    }
+    const here = window.location.pathname.replace(/\/+$/, '') || '/';
+    if (target === window.location.origin + here || target === here) {
+      closeScanner();
+      shareFeedback("That's this room's own code.", 'info');
+      return;
+    }
+    stopScanner(); // release the camera before navigating away
+    if (el.scanDlg && el.scanDlg.open) el.scanDlg.close();
+    window.location.assign(target); // SAME tab, never window.open
+  }
+
   // ---- wiring -----------------------------------------------------------------
 
   function on(node, event, handler) { if (node) node.addEventListener(event, handler); }
@@ -669,8 +969,32 @@ export function mountLobby(root) {
     });
   });
 
-  on(el.copyCode, 'click', () => copy(state.room && state.room.code, el.copyCode, 'Copied'));
-  on(el.copyLink, 'click', () => copy(state.invite, el.copyLink, 'Copied'));
+  // Sharing panel (step 5): native share, always-available copy with visible
+  // feedback, and a locally drawn QR code.
+  on(el.shareBtn, 'click', () => shareRoom());
+  on(el.copyCode, 'click', () => {
+    if (state.room) copyWithFeedback(state.room.code, el.copyCode, 'Code copied.');
+  });
+  on(el.copyLink, 'click', () => {
+    if (state.invite) copyWithFeedback(state.invite, el.copyLink, 'Link copied.');
+  });
+  on(el.qrToggle, 'click', () => toggleQr());
+
+  // QR scanner: both entry points (landing card and share panel).
+  on(el.scanOpen, 'click', () => openScanner());
+  on(el.scanOpenRoom, 'click', () => openScanner());
+  on(el.scanCancel, 'click', () => closeScanner());
+  on(el.scanClose, 'click', () => closeScanner());
+  if (el.scanDlg) {
+    // Escape / any programmatic close releases the camera — this single event
+    // covers every dismiss path the dialog offers.
+    el.scanDlg.addEventListener('close', () => stopScanner());
+  }
+
+  // Typing a code and pressing Enter joins, like every other form on the site.
+  on(el.code, 'keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); joinRoom(false); }
+  });
 
   on(el.code, 'input', () => {
     const cleaned = cleanCode(el.code.value);

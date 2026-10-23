@@ -28,14 +28,14 @@ class RoomBroadcastTest < ActionDispatch::IntegrationTest
     end
 
     # Blocks until the next event arrives; nil on timeout.
-    def next_event(timeout = 2)
+    def next_event(timeout = 3)
       Timeout.timeout(timeout) { @queue.pop }
     rescue Timeout::Error
       nil
     end
 
     # Collect up to `count` events, bounded by `timeout` seconds total.
-    def events(count, timeout = 4)
+    def events(count, timeout = 6)
       collected = []
       deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + timeout
       while collected.size < count

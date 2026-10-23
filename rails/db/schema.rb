@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_08_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_09_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -72,6 +72,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_08_000000) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.string "closed_reason"
+    t.bigint "version", default: 1, null: false
     t.index ["invitation_code"], name: "rooms_invitation_code_idx", unique: true
     t.index ["state", "created_at"], name: "rooms_state_created_idx"
     t.check_constraint "closed_reason IS NULL OR (closed_reason::text = ANY (ARRAY['host_disbanded'::character varying::text, 'expired'::character varying::text]))", name: "rooms_closed_reason_check"

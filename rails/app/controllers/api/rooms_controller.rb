@@ -382,11 +382,24 @@ module Api
     end
 
     def config_payload
-      { poll_interval: Room.config.poll_interval, min_players: Room::MIN_PLAYERS_TO_START }
+      { poll_interval: Room.config.poll_interval,
+        min_players: Room::MIN_PLAYERS_TO_START,
+        # The page needs the trusted origin to decide whether a scanned QR
+        # URL is one of this application's room routes (see lobby.js).
+        origin: public_origin }
+    end
+
+    # Where shareable invitations point. A deployment's configured public
+    # origin (MULTIPLAYER_PUBLIC_ORIGIN) always wins, so share links and QR
+    # codes carry the address outsiders can reach — never an internal or
+    # localhost host — and never trust a spoofable Host header. Without the
+    # config we fall back to the request's own origin (dev convenience).
+    def public_origin
+      Room.config.public_origin.presence || request.base_url
     end
 
     def invite_url_for(room)
-      "#{request.base_url}/multiplayer/#{room.invitation_code}"
+      "#{public_origin}/multiplayer/#{room.invitation_code}"
     end
 
     # A member whose room vanished under them (host disbanded it, or it
