@@ -168,26 +168,31 @@ module Api
                      viewer: viewer_payload, config: config_payload }
     end
 
-    # POST /api/rooms/:code/start — host-only. Answers "may this Brawl start?"
-    # and deliberately starts nothing: the game engine arrives in a later step,
-    # so the room stays in the lobby instead of pretending to play.
+    # POST /api/rooms/:code/start — the current host starts a real,
+    # server-authoritative Brawl. Ready votes are advisory; the room model
+    # rechecks host/eligibility under its lock and freezes board + colors.
     def start
       membership = require_host!
       return unless membership
 
-      eligibility = @room.start_eligibility
-      unless eligibility[:eligible]
-        return render json: { error: start_blocker_message(eligibility),
-                              code: "not_eligible", start: eligibility,
-                              room: room_payload(@room, membership) },
-                      status: :unprocessable_entity
-      end
-
-      render json: state_payload(@room, membership).merge(
-        start: eligibility,
-        started: false,
-        notice: "Everything checks out — the Brawl engine arrives in a later step."
-      )
+      @room.start_match!(actor: membership)
+      @room.reload
+      match = @room.live_match
+      participant = match&.match_participants&.find_by(room_membership_id: membership.id)
+      render json: state_payload(@room, membership.reload).merge(
+        started: true,
+        engine_ready: true,
+        match: match&.client_summary(participant_id: participant&.id),
+        notice: "Brawl started — points decide the winner."
+      ), status: :created
+    rescue Room::InvalidTransition => error
+      eligibility = @room&.start_eligibility || {}
+      status = eligibility[:eligible] ? :conflict : :unprocessable_entity
+      render json: { error: error.message,
+                     code: eligibility[:eligible] ? "invalid_transition" : "not_eligible",
+                     start: eligibility }, status: status
+    rescue ActiveRecord::RecordInvalid, ActiveRecord::RecordNotUnique => error
+      render_error("start_conflict", error.message, :conflict)
     end
 
     # POST /api/rooms/:code/disband — host-only. Ends the room for everybody.
@@ -346,9 +351,13 @@ module Api
     def state_payload(room, membership)
       room.with_lock do
         membership&.reload
+        current_match = room.matches.order(id: :desc).first
+        participant = current_match&.match_participants&.find_by(room_membership_id: membership&.id)
         {
           room: room_payload(room, membership),
-          member: membership && member_payload(membership, membership),
+          member: membership && member_payload(membership, membership,
+                                                match_participant_id: participant&.id,
+                                                last_input_seq: participant&.last_input_seq),
           viewer: viewer_payload,
           config: config_payload
         }
@@ -357,6 +366,8 @@ module Api
 
     def room_payload(room, viewer_membership = nil, at: Time.current)
       members = room.active_memberships.to_a
+      match = room.matches.order(id: :desc).first
+      participants_by_membership = match ? match.match_participants.index_by(&:room_membership_id) : {}
       {
         code: room.invitation_code,
         # Monotonic state sequence: clients apply an event only when it is
@@ -370,9 +381,15 @@ module Api
         colors: room.palette_payload,
         board: room.board_payload(at: at).then { |policy| policy.merge(editable: room.host?(viewer_membership) && policy[:custom_allowed]) },
         match_configuration: room.match_configuration,
+        match: match&.client_summary,
         invite_url: invite_url_for(room),
         created_at: room.created_at,
-        members: members.map { |member| member_payload(member, viewer_membership, at: at) },
+        members: members.map do |member|
+          participant = participants_by_membership[member.id]
+          member_payload(member, viewer_membership, at: at,
+                         match_participant_id: participant&.id,
+                         last_input_seq: participant&.last_input_seq)
+        end,
         counts: {
           members: members.size,
           online: members.count { |member| member.online?(at: at) },
@@ -387,13 +404,16 @@ module Api
 
     # Deliberately small: ids are per-room and opaque, and no account names,
     # guest tokens or public ids are exposed to other players.
-    def member_payload(member, viewer_membership = nil, at: Time.current)
+    def member_payload(member, viewer_membership = nil, at: Time.current,
+                       match_participant_id: nil, last_input_seq: nil)
       {
         id: member.id,
         display_name: member.display_name,
         color: member.identity_color,
         spectator: member.spectator?,
         device: member.device_kind(at: at),
+        match_participant_id: match_participant_id,
+        last_input_seq: last_input_seq,
         host: member.host?,
         ready: member.ready?,
         state: member.state,

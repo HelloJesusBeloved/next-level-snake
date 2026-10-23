@@ -13,6 +13,7 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step6';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step8';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -101,6 +102,12 @@ export function mountLobby(root) {
     readyCount: $('mp-ready-count'),
     startState: $('mp-start-state'),
     roster: $('mp-roster'),
+    game: $('mp-game'),
+    gameCanvas: $('mp-game-canvas'),
+    gameScores: $('mp-game-scores'),
+    gameStatus: $('mp-game-status'),
+    gameTick: $('mp-game-tick'),
+    gameInputStatus: $('mp-game-input-status'),
     readyToggle: $('mp-ready-toggle'),
     start: $('mp-start'),
     disband: $('mp-disband'),
@@ -124,17 +131,28 @@ export function mountLobby(root) {
     // Server-configured public origin (config.origin): one half of the
     // scanned-QR allowlist; the page's own origin is the other.
     configOrigin: null,
+    match: null,
+    gameSnapshot: null,
+    inputSeq: 0,
     buffered: [],
     cable: { status: 'idle', reason: null },
   };
   let consumer = null;
   let subscription = null;
   let cableCode = null;
+  let matchSubscription = null;
+  let matchSubscriptionId = null;
   let heartbeatTimer = null;
   let refreshTimer = null;
   const pollInterval = Math.max(2, parseInt(root.dataset.pollInterval, 10) || 5) * 1000;
   let timer = null;
   const configuration = mountConfiguration({ api, apply, getState: () => state });
+  const gameRenderer = el.gameCanvas ? new MultiplayerGameRenderer({
+    canvas: el.gameCanvas,
+    scoreboard: el.gameScores,
+    status: el.gameStatus,
+    ownParticipantId: null,
+  }) : null;
 
   // ---- helpers --------------------------------------------------------------
 
@@ -168,6 +186,7 @@ export function mountLobby(root) {
     if (el.room) el.room.hidden = !inRoom;
     renderViewer();
     if (inRoom) renderRoom();
+    renderGame();
     configuration.render(state.room, state.member);
   }
 
@@ -232,13 +251,29 @@ export function mountLobby(root) {
       el.readyToggle.textContent = me.spectator ? 'Spectating this match' : me.ready ? 'Not ready' : "I'm ready";
       el.readyToggle.disabled = !!me.spectator || room.state === 'in_match';
     }
-    if (el.start) el.start.hidden = !amHost;
+    if (el.start) el.start.hidden = !amHost || room.state !== 'lobby';
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
     if (el.inviteUrl) el.inviteUrl.textContent = state.invite;
     // Web Share is progressive enhancement; Copy Link is always present.
     if (el.shareBtn) el.shareBtn.hidden = !(state.invite && typeof navigator.share === 'function');
+    connectMatchCable(state.match);
+  }
+
+  function renderGame() {
+    const match = state.match;
+    const participantId = state.member?.match_participant_id;
+    const relevant = match && participantId &&
+      ['pending', 'running', 'paused', 'completed'].includes(match.status);
+    if (el.game) el.game.hidden = !relevant;
+    if (!relevant) {
+      gameRenderer?.setOwnParticipant(null);
+      if (el.gameInputStatus) el.gameInputStatus.textContent = '';
+      return;
+    }
+    gameRenderer?.setOwnParticipant(participantId);
+    if (el.gameTick && state.gameSnapshot) el.gameTick.textContent = `Tick ${state.gameSnapshot.t}`;
   }
 
   // ---- server conversation ---------------------------------------------------
@@ -249,8 +284,19 @@ export function mountLobby(root) {
     // snapshot backwards. Version numbers apply to HTTP snapshots too.
     if (incoming?.code === state.room?.code && typeof incoming?.version === 'number' && incoming.version < state.version) return out;
     if (out.json && Object.prototype.hasOwnProperty.call(out.json, 'room')) {
+      const previousCode = state.room?.code;
+      const previousMatchId = state.match?.id;
       state.room = out.json.room && out.json.room.members ? out.json.room : null;
       state.member = out.json.member || null;
+      state.match = out.json.match || state.room?.match || null;
+      if (!state.room || state.room.code !== previousCode) {
+        state.gameSnapshot = null;
+        state.inputSeq = 0;
+      }
+      if (state.match && state.match.id !== previousMatchId) {
+        state.gameSnapshot = null;
+        state.inputSeq = Number(state.member?.last_input_seq || 0);
+      }
       if (state.room && typeof out.json.room.version === 'number') {
         // Snapshots are authoritative: adopting their version is what makes
         // older buffered events stale (and therefore droppable) instantly.
@@ -611,6 +657,7 @@ export function mountLobby(root) {
   }
 
   function disconnectCable() {
+    disconnectMatchCable();
     stopHeartbeat();
     if (consumer) { try { consumer.disconnect(); } catch (err) { /* closing anyway */ } }
     consumer = null;
@@ -631,6 +678,108 @@ export function mountLobby(root) {
     disconnectCable();
     state.cable.status = 'idle';
     connectCable(code);
+  }
+
+  function connectMatchCable(match) {
+    const matchId = match && match.id;
+    const participantId = state.member && state.member.match_participant_id;
+    if (!matchId || !participantId || !consumer || !state.room) {
+      disconnectMatchCable();
+      return;
+    }
+    if (matchSubscription && matchSubscriptionId === matchId) return;
+    disconnectMatchCable();
+    matchSubscriptionId = matchId;
+    matchSubscription = consumer.subscriptions.create(
+      { channel: 'MatchChannel', match: matchId },
+      {
+        connected() { renderGame(); },
+        disconnected() { if (el.gameStatus) el.gameStatus.textContent = 'Reconnecting to Brawl…'; },
+        rejected() { if (el.gameStatus) el.gameStatus.textContent = 'This Brawl is no longer available.'; },
+        received(message) { onMatchMessage(message); },
+      },
+    );
+  }
+
+  function disconnectMatchCable() {
+    if (matchSubscription) {
+      try { matchSubscription.unsubscribe(); } catch (err) { /* room teardown */ }
+    }
+    matchSubscription = null;
+    matchSubscriptionId = null;
+  }
+
+  function onMatchMessage(message) {
+    if (!message || Number(message.m || message.match) !== Number(state.match && state.match.id)) return;
+    if (message.type === 'snapshot') {
+      const prior = state.gameSnapshot;
+      if (prior && Number(message.t) < Number(prior.t)) return; // stale frame after reconnect
+      if (!gameRenderer || !gameRenderer.accept(message)) return;
+      state.gameSnapshot = message;
+      state.match = { ...(state.match || {}), id: Number(message.m), status: message.s,
+                      tick: message.t, columns: message.b?.c, rows: message.b?.r };
+      if (el.gameTick) el.gameTick.textContent = `Tick ${message.t}`;
+      if (el.game) el.game.hidden = false;
+      if (el.gameStatus && message.s === 'completed') {
+        const placement = message.q?.find((entry) => entry.i === state.member?.match_participant_id)?.p;
+        el.gameStatus.textContent = placement ? `Brawl finished · place ${placement}` : 'Brawl finished';
+      }
+      return;
+    }
+    if (message.type === 'waiting') {
+      if (el.gameStatus) el.gameStatus.textContent = 'Starting the authoritative Brawl…';
+      return;
+    }
+    if (message.type === 'input_ack') {
+      if (Number(message.participant) !== Number(state.member?.match_participant_id)) return;
+      if (message.accepted) {
+        if (el.gameInputStatus) { el.gameInputStatus.textContent = ''; el.gameInputStatus.removeAttribute('data-kind'); }
+      } else if (el.gameInputStatus) {
+        el.gameInputStatus.textContent = `Direction not accepted (${message.reason || 'resync'}).`;
+        el.gameInputStatus.dataset.kind = 'error';
+      }
+      return;
+    }
+    if (message.type === 'input_rejected' &&
+        Number(message.participant) === Number(state.member?.match_participant_id)) {
+      if (Number.isInteger(message.seq)) state.inputSeq = Math.max(state.inputSeq, message.seq);
+      if (el.gameInputStatus) {
+        el.gameInputStatus.textContent = `Direction not accepted (${message.reason}).`;
+        el.gameInputStatus.dataset.kind = 'error';
+      }
+    }
+  }
+
+  // Only a direction name leaves the browser. The server resolves identity,
+  // validates the tick/seq envelope, and the simulator applies it before a tick.
+  function sendDirection(direction) {
+    const snapshot = state.gameSnapshot;
+    const ownId = state.member?.match_participant_id;
+    const own = snapshot?.p?.find((player) => player.i === ownId);
+    if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.a) return;
+    state.inputSeq = Math.max(state.inputSeq, Number(state.member.last_input_seq || 0)) + 1;
+    matchSubscription.perform('input', {
+      v: 1, type: 'input', match: state.match.id,
+      tick: Number(snapshot.t), seq: state.inputSeq, dir: direction,
+    });
+  }
+
+  function onGameKeydown(event) {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (target?.closest?.('input,textarea,select,button,[contenteditable="true"],dialog,[role="dialog"]')) return;
+    const directions = { ArrowUp: 'up', w: 'up', W: 'up', ArrowDown: 'down', s: 'down', S: 'down',
+                         ArrowLeft: 'left', a: 'left', A: 'left', ArrowRight: 'right', d: 'right', D: 'right' };
+    const direction = directions[event.key];
+    if (!direction || !state.match || state.match.status !== 'running') return;
+    event.preventDefault();
+    sendDirection(direction);
+  }
+
+  function steerBySwipe(start, end) {
+    const dx = end.x - start.x; const dy = end.y - start.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
+    sendDirection(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
   }
 
   function onCableMessage(message) {
@@ -958,6 +1107,21 @@ export function mountLobby(root) {
   // ---- wiring -----------------------------------------------------------------
 
   function on(node, event, handler) { if (node) node.addEventListener(event, handler); }
+
+  document.addEventListener('keydown', onGameKeydown);
+  let swipeStart = null;
+  on(el.gameCanvas, 'pointerdown', (event) => {
+    if (event.pointerType === 'mouse') return;
+    swipeStart = { x: event.clientX, y: event.clientY };
+  });
+  on(el.gameCanvas, 'pointerup', (event) => {
+    if (swipeStart) steerBySwipe(swipeStart, { x: event.clientX, y: event.clientY });
+    swipeStart = null;
+  });
+  on(el.gameCanvas, 'pointercancel', () => { swipeStart = null; });
+  document.querySelectorAll('[data-game-dir]').forEach((button) => {
+    button.addEventListener('click', () => sendDirection(button.dataset.gameDir));
+  });
 
   on(el.create, 'click', () => createRoom(false));
   on(el.join, 'click', () => joinRoom(false));

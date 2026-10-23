@@ -22,15 +22,17 @@ module Simulation
     # Renewal is intentionally throttled: the lease is a database write, and the
     # requirement is to keep PostgreSQL out of the tick path. It is still much
     # shorter than the lease TTL, so ownership is refreshed well before it lapses.
-    def initialize(ownership:, checkpoint_every: 20, renew_interval_ms: 2_000, on_error: nil)
+    def initialize(ownership:, checkpoint_every: 20, renew_interval_ms: 2_000, on_error: nil, before_step: nil)
       raise ArgumentError, "checkpoint_every must be positive" unless checkpoint_every.is_a?(Integer) && checkpoint_every.positive?
       raise ArgumentError, "renew_interval_ms must not be negative" unless renew_interval_ms.is_a?(Integer) && renew_interval_ms >= 0
       raise ArgumentError, "on_error must respond to #call" if on_error && !on_error.respond_to?(:call)
+      raise ArgumentError, "before_step must respond to #call" if before_step && !before_step.respond_to?(:call)
 
       @ownership = ownership
       @checkpoint_every = checkpoint_every
       @renew_interval_ms = renew_interval_ms
       @on_error = on_error
+      @before_step = before_step
       @entries = {}
     end
 
@@ -98,6 +100,13 @@ module Simulation
       report[:dropped][match_id] = entry.scheduler.dropped_ticks if entry.scheduler.dropped_ticks.positive?
       steps.times do
         break unless entry.world.running?
+        # Inputs are drained by the owner immediately before each logical tick,
+        # never driven by Action Cable arrival timing. Returning false means the
+        # database lease disappeared; do not take another simulation step.
+        if @before_step && !@before_step.call(entry.world)
+          report[:lost] << match_id
+          return detach(match_id)
+        end
 
         entry.world.step!
         report[:steps] += 1
@@ -105,6 +114,13 @@ module Simulation
 
         # Report a completion only when the fenced write actually persisted it.
         # Otherwise another owner must finish from the last checkpoint.
+        persisted = @ownership.complete!(entry.world)
+        (persisted ? report[:completed] : report[:lost]) << match_id
+        return detach(match_id)
+      end
+      # A world can already be completed when the pass begins (e.g. restored
+      # from a final checkpoint). Finalize it even when no step runs this pass.
+      if entry.world.completed? && @entries.key?(match_id)
         persisted = @ownership.complete!(entry.world)
         (persisted ? report[:completed] : report[:lost]) << match_id
         return detach(match_id)

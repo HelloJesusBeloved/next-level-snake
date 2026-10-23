@@ -283,17 +283,25 @@ class Room < ApplicationRecord
     true
   end
 
-  # Backend preparation hook, NOT called by the unfinished HTTP Start action.
-  # Re-evaluate capabilities and eligibility inside the same room lock that
-  # protects joins/reports/settings. Freeze the grid + participant colors once.
-  def start_match!
+  # Starts a server-authoritative Brawl. Ready votes are advisory. The actor
+  # and eligibility are rechecked inside the room lock that serializes joins,
+  # colors, board settings and device reports; board + participant colors are
+  # frozen before the durable Match is created.
+  def start_match!(actor: nil)
     with_lock do
-      raise InvalidTransition, "only a lobby can start a match" unless lobby?
+      raise InvalidTransition, "only a lobby can start a Brawl" unless lobby?
+      raise InvalidTransition, "only Brawls are available in this step" unless mode == "brawl"
+      host_id = room_memberships.active.where(role: "host").pick(:id)
+      raise InvalidTransition, "Only the current host can start a Brawl." if actor && actor.id != host_id
 
-      players = eligible_players
-      if players.size < MIN_PLAYERS_TO_START
-        raise InvalidTransition, "a match needs at least #{MIN_PLAYERS_TO_START} eligible players"
+      eligibility = start_eligibility
+      unless eligibility[:eligible]
+        raise InvalidTransition, eligibility[:blockers].include?("needs_#{MIN_PLAYERS_TO_START}_players") ?
+          "A Brawl needs at least #{MIN_PLAYERS_TO_START} eligible players." :
+          "This room is not eligible to start a Brawl."
       end
+      players = eligible_players
+      raise InvalidTransition, "a Brawl needs at least #{MIN_PLAYERS_TO_START} eligible players" if players.size < MIN_PLAYERS_TO_START
       board = board_payload
       now = Time.current
       frozen_config = {

@@ -366,3 +366,27 @@
 .mp-config-status { min-height: 1em; color: var(--green); font-size: 13px; line-height: 1.45; }
 .mp-config-status[data-kind='error'] { color: var(--red); }
 @media (max-width: 760px) { .mp-config-grid { grid-template-columns: 1fr; } }
+
+/* Dedicated multiplayer renderer: this surface only reflects the latest
+   versioned server snapshot. It never advances or predicts the snake. */
+.mp-game { margin: 18px 0; padding: 14px; border: 1px solid var(--line); border-radius: 16px; background: var(--panel); }
+.mp-game__heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 9px; }
+.mp-game__status, .mp-game__tick, .mp-game__input-status, .mp-game__hint { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
+.mp-game__tick { font: 11px 'IBM Plex Mono', monospace; }
+.mp-game__canvas { display: block; width: 100%; max-height: min(60vh, 720px); aspect-ratio: 4 / 3; border: 1px solid var(--line); border-radius: 10px; background: var(--ink); touch-action: none; outline: none; }
+.mp-game__canvas:focus-visible { outline: 2px solid var(--green); outline-offset: 3px; }
+.mp-game-scores { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 6px; list-style: none; padding: 10px 0 0; margin: 0; }
+.mp-game-score { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 6px 8px; border: 1px solid var(--line); border-radius: 9px; color: var(--text); font-size: 12px; }
+.mp-game-score.is-you { border-color: var(--green); }
+.mp-game-score__place { color: var(--muted); font: 11px 'IBM Plex Mono', monospace; }
+.mp-game-score__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.mp-game-score__points { color: var(--green); white-space: nowrap; font: 600 11px 'IBM Plex Mono', monospace; }
+.mp-game-score__tag { color: var(--red); font: 10px 'IBM Plex Mono', monospace; text-transform: uppercase; }
+.mp-game-controls { display: grid; justify-items: center; gap: 5px; margin: 12px auto 4px; }
+.mp-game-controls > div { display: flex; gap: 5px; }
+.mp-game-controls button { width: 48px; height: 42px; border: 1px solid var(--line); border-radius: 10px; background: var(--ink); color: var(--text); font-size: 21px; touch-action: manipulation; }
+.mp-game-controls button:active { border-color: var(--green); background: color-mix(in srgb, var(--green) 15%, var(--ink)); }
+.mp-game__hint { text-align: center; }
+.mp-game__input-status { min-height: 1.4em; text-align: center; }
+.mp-game__input-status[data-kind='error'] { color: var(--red); }
+@media (min-width: 900px) { .mp-game-controls { display: none; } }

@@ -137,10 +137,13 @@ test('a guest creates a room, wears the crown, and a friend joins by link', asyn
     .toBe('1 ready');
   await expect.poll(async () => page.locator('#mp-roster .mp-player').count()).toBe(2);
 
-  // The host may start without unanimity — and nothing pretends to play.
+  // The host starts a real server-authoritative Brawl without unanimity.
   await page.click('#mp-start');
-  await expect(page.locator('#mp-flash')).toContainText('later step');
-  await expect(page.locator('#mp-room-state')).toHaveText('lobby');
+  await expect(page.locator('#mp-flash')).toContainText('Brawl started');
+  await expect(page.locator('#mp-room-state')).toHaveText('in_match');
+  await expect(page.locator('#mp-game')).toBeVisible();
+  await expect(page.locator('#mp-game-canvas')).toBeVisible();
+  await expect(page.locator('#mp-start')).toBeHidden();
 
   // Leaving puts the friend back on the entry screen.
   await friend.click('#mp-leave');

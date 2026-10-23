@@ -129,7 +129,7 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     assert_not payload.dig(:member, :ready)
   end
 
-  # ---- start eligibility (no engine yet) ------------------------------------
+  # ---- start eligibility + real authoritative match creation (step 8) -------
 
   test "a lone host cannot start a Brawl" do
     host = browser
@@ -140,21 +140,44 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "not_eligible", payload[:code]
     assert_includes payload.dig(:start, :blockers), "needs_2_players"
     assert_equal "lobby", Room.find_by_invitation_code(code).state
+    assert_nil Room.find_by_invitation_code(code).live_match
   end
 
-  test "the host may start with two players even when nobody voted ready" do
+  test "the host starts a real Brawl without unanimous ready votes" do
     host = browser
     code = post_json(host, "/api/rooms", display_name: "Ada").dig(:room, :code)
     guest = browser
     post_json(guest, "/api/rooms/#{code}/join", display_name: "Grace")
 
     payload = post_json(host, "/api/rooms/#{code}/start")
-    assert_equal 200, status(host)
-    assert payload.dig(:start, :eligible), "ready votes are advisory, not mandatory"
+    assert_equal 201, status(host)
+    assert_equal true, payload[:started], "ready votes are advisory, not mandatory"
     assert_equal 0, payload.dig(:room, :counts, :ready)
-    assert_equal false, payload[:started], "there is no game engine yet"
-    assert_equal false, payload.dig(:start, :engine_ready)
-    assert_equal "lobby", Room.find_by_invitation_code(code).state, "the room must not pretend to play"
+    assert_equal true, payload[:engine_ready]
+    assert payload.dig(:room, :start).present?, "the room snapshot still reports start policy"
+
+    room = Room.find_by_invitation_code(code)
+    assert_equal "in_match", room.state
+    match = room.live_match
+    assert match, "the durable match exists"
+    assert_equal "pending", match.status
+    assert_equal 2, match.match_participants.count
+    assert_not_nil payload.dig(:member, :match_participant_id)
+    assert_equal match.id, payload.dig(:match, :id)
+    assert_equal match.columns, payload.dig(:room, :match_configuration, :columns)
+  end
+
+  test "a second start is refused while the Brawl is live" do
+    host = browser
+    code = post_json(host, "/api/rooms", display_name: "Ada").dig(:room, :code)
+    post_json(browser, "/api/rooms/#{code}/join", display_name: "Grace")
+
+    first = post_json(host, "/api/rooms/#{code}/start")
+    assert_equal 201, status(host)
+    payload = post_json(host, "/api/rooms/#{code}/start")
+    assert_equal 422, status(host)
+    assert_equal "not_eligible", payload[:code]
+    assert_equal 1, Room.find_by_invitation_code(code).matches.count
   end
 
   # ---- permissions ----------------------------------------------------------

@@ -37,7 +37,7 @@ module SimulationTestSupport
     snake.eliminated_at_tick = nil
     snake.survived_ticks = 0
     snake.longest_length = snake.body.length
-    world.snakes.each { |candidate| candidate.food = nil }
+    snake.food = nil
     snake
   end
 

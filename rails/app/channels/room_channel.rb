@@ -54,6 +54,36 @@ class RoomChannel < ApplicationCable::Channel
 
   # ---- channel actions (re-authorized on every call) --------------------------
 
+  # Accept only a direction command. Identity is resolved from the connection
+  # and the existing active membership; positions, scores and participant ids
+  # remain server-owned. The command is queued durably and applied by the
+  # match's single leased simulator owner.
+  def input(data)
+    membership = current_membership(@room)
+    return transmit({ type: "input_ack", accepted: false, reason: "not_a_member" }) unless membership
+
+    match = @room.live_match
+    return transmit({ type: "input_ack", accepted: false, reason: "no_live_match" }) unless match
+
+    input = Simulation::Protocol.parse_input(data.to_h.except("action", :action))
+    unless input.match_id == match.id
+      return transmit({ type: "input_ack", match: match.id, seq: input.seq,
+                        accepted: false, reason: "wrong_match" })
+    end
+
+    outcome = match.accept_direction!(membership: membership, input: input)
+    participant = match.match_participants.find_by(room_membership_id: membership.id)
+    transmit({ type: "input_ack", match: match.id, participant: participant&.id,
+               seq: input.seq, accepted: outcome == :queued, reason: outcome.to_s })
+  rescue Simulation::InvalidInput => error
+    transmit({ type: "input_ack", accepted: false, reason: error.reason.to_s,
+               message: error.message })
+  rescue ActiveRecord::RecordNotUnique
+    transmit({ type: "input_ack", accepted: false, reason: "stale_sequence" })
+  rescue ActiveRecord::RecordNotFound
+    transmit({ type: "input_ack", accepted: false, reason: "match_unavailable" })
+  end
+
   # The client's heartbeat: keeps presence (and therefore seat and crown
   # stability) alive while the socket is the primary transport. If the seat is
   # gone — kicked, expired, disbanded — the client is told to re-sync through

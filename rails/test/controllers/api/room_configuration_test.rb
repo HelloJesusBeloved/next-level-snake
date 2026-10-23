@@ -66,14 +66,14 @@ class Api::RoomConfigurationTest < ActionDispatch::IntegrationTest
     assert_not out.dig(:room, :board, :custom_allowed)
   end
 
-  test "start is still only eligibility, while late join and telemetry cannot mutate a frozen match" do
+  test "start creates the match; late join and telemetry cannot mutate the frozen configuration" do
     report(@host); report(@guest)
+    post_json(@host, "/api/rooms/#{@code}/board", columns: 64, rows: 48)
     out = post_json(@host, "/api/rooms/#{@code}/start")
-    assert_equal false, out[:started]
-    assert_nil Room.find_by_invitation_code(@code).match_configuration
+    assert_equal 201, status(@host)
+    assert_equal true, out[:started]
     room = Room.find_by_invitation_code(@code)
-    room.update_board!(room.host_membership, columns: 64, rows: 48)
-    room.start_match! # model hook only, no gameplay endpoint
+    assert_equal [64, 48], room.match_configuration.values_at("columns", "rows")
     config = room.match_configuration.deep_dup
     late = browser
     out = post_json(late, "/api/rooms/#{@code}/join", display_name: "Spectator")

@@ -543,6 +543,25 @@ globally. Filter values are `all`, a preset number (speed `1`–`6`, growth `1`�
 only ever contains preset runs; Custom contains runs with at least one custom
 slider.
 
+## Playable Brawls (step 8)
+
+Brawls are playable between separate browsers. The host presses **Start Brawl**
+(ready votes are advisory); the server freezes the board, participants and
+their solid colors, then simulates the round authoritatively — discrete ticks
+on a monotonic clock, one leased owner per match, no browser positions/scores.
+
+* Every player gets their own color snake **and** their own food object in
+  that color. Eating it scores a point, grows the snake and respawns it.
+  Brawl snakes are non-solid: passing through another snake or over their food
+  has no effect. Only self-collision eliminates.
+* Standings are **final points first**, then survival time, then longest
+  snake — an eliminated player can win.
+* A dedicated canvas renderer draws only versioned server snapshots broadcast
+  at 10 Hz over `/cable` (`MatchChannel`); keyboard (arrows/WASD), swipe and an
+  on-screen steering pad send directions only. Refreshing reconnects to the
+  same authoritative simulation.
+* Details: [`rails/docs/multiplayer-step-08-brawl-gameplay.md`](rails/docs/multiplayer-step-08-brawl-gameplay.md).
+
 ## Multiplayer simulation (server-authoritative, step 7)
 
 The multiplayer rules engine lives in `rails/app/lib/simulation/` as plain Ruby:

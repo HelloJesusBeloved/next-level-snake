@@ -93,6 +93,17 @@ score or winner. `game.js` remains the single-player renderer and is not used
 as a multiplayer authority. See
 `rails/docs/multiplayer-step-07-server-engine.md`.
 
+## Playable Brawls (step 8)
+
+`game-renderer.js` is a canvas-only renderer for the server's versioned
+snapshots; it never advances a snake. `lobby.js` subscribes to `MatchChannel`
+once the caller is a frozen participant, paints snapshots/standings, and sends
+only direction intents (`{v,type,match,tick,seq,dir}`) from the keyboard
+(arrows/WASD), a canvas swipe, or the mobile steering pad. The simulator runs in
+the Puma master (`config/puma.rb`) under the step-7 database lease; set
+`MULTIPLAYER_SIMULATOR=false` to run `bundle exec rails multiplayer:simulate`
+separately instead. See `rails/docs/multiplayer-step-08-brawl-gameplay.md`.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)
@@ -104,11 +115,12 @@ as a multiplayer authority. See
 - `vendor/qrcode.min.js` — qrcode-generator v1.4.4 (drawing; license file
   alongside) and `vendor/jsqr.min.js` — jsQR v1.4.0 (Apache-2.0, fallback
   decoder), both vendored from npm and fully offline
-- `lobby.css` — lobby styling: connection chip, sharing panel, QR, scanner
+- `game-renderer.js` — canvas renderer for authoritative snapshots (never predicts)
+- `lobby.css` — lobby styling: connection chip, sharing panel, QR, scanner, arena
 
 ## Not built yet
 
-Snake gameplay, Duels, rankings and permanent archives. The Start
+Duels, advanced death animations, spectator UI, persistent room leaderboards and rankings archives. The Start
 control asks the server whether a Brawl *could* start and says so; it never
 pretends to run a match.
 

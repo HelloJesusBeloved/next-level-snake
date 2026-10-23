@@ -177,6 +177,30 @@
       <span id="mp-start-state">Waiting for players</span>
     </p>
 
+    <%# Dedicated multiplayer canvas: it paints only authoritative MatchChannel snapshots. %>
+    <section class="mp-game" id="mp-game" hidden aria-label="Live Brawl">
+      <div class="mp-game__heading">
+        <div>
+          <p class="mp-room__eyebrow">Server-authoritative Brawl</p>
+          <p class="mp-game__status" id="mp-game-status" role="status" aria-live="polite">Waiting for the simulation…</p>
+        </div>
+        <span class="mp-game__tick" id="mp-game-tick"></span>
+      </div>
+      <canvas id="mp-game-canvas" class="mp-game__canvas" tabindex="0" role="application"
+              aria-label="Multiplayer Snake arena. Use arrow keys or WASD, swipe the arena, or use the direction buttons."></canvas>
+      <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
+      <nav class="mp-game-controls" aria-label="Touch steering">
+        <button type="button" data-game-dir="up" aria-label="Steer up">↑</button>
+        <div>
+          <button type="button" data-game-dir="left" aria-label="Steer left">←</button>
+          <button type="button" data-game-dir="down" aria-label="Steer down">↓</button>
+          <button type="button" data-game-dir="right" aria-label="Steer right">→</button>
+        </div>
+      </nav>
+      <p class="mp-game__hint">Keyboard: arrows / WASD. Touch: swipe or use the steering pad. Only your direction is sent; positions, food and scores come from the server.</p>
+      <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite"></p>
+    </section>
+
     <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
 
     <div class="mp-config-grid">
@@ -223,7 +247,7 @@
 <footer class="footer">
   <span>Next Level Snake — wall-wrap arcade</span>
   <span>Ruby on Rails <%= Rails.version %> · PostgreSQL · Puma · Podman/Docker</span>
-  <span>Multiplayer · lobbies live, Brawl engine in development</span>
+  <span>Multiplayer · server-authoritative Brawls</span>
 </footer>
 
 <%# Confirmation before leaving a room you are already in (requirement 12). %>

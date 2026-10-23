@@ -16,6 +16,7 @@ class Match < ApplicationRecord
   belongs_to :room, inverse_of: :matches
   belongs_to :winner_membership, class_name: "RoomMembership", optional: true
   has_many :match_participants, dependent: :delete_all, inverse_of: :match
+  has_many :match_inputs, dependent: :delete_all, inverse_of: :match
 
   validates :mode, inclusion: { in: MODES }
   validates :status, inclusion: { in: STATUSES }
@@ -102,6 +103,103 @@ class Match < ApplicationRecord
     match_participants.order(:id).map(&:engine_identity)
   end
 
+  MAX_PENDING_INPUTS_PER_PARTICIPANT = MatchInput::MAX_PENDING_PER_PARTICIPANT
+  # A client may aim at a bounded future checkpoint window; the owner validates
+  # against its exact in-memory tick when it consumes the queued command.
+  INPUT_FUTURE_WINDOW = MatchRunner::CHECKPOINT_EVERY_TICKS + Simulation::Config::MAX_CATCHUP_TICKS + 1
+
+  def client_summary(participant_id: nil)
+    { id: id, mode: mode, status: status, tick: tick, tick_ms: tick_ms,
+      columns: columns, rows: rows, protocol_version: Simulation::Protocol::SNAPSHOT_VERSION,
+      participant_id: participant_id }
+  end
+
+  # Queue a direction from a channel that authenticated the connection and
+  # resolved the actor's active RoomMembership. No player id is accepted from
+  # the wire payload. The match row serializes sequence allocation and caps.
+  def accept_direction!(membership:, input:, now: Time.current)
+    outcome = nil
+    with_lock do
+      unless LIVE_STATUSES.include?(status) && %w[pending running].include?(status)
+        outcome = :match_not_running
+        next
+      end
+      participant = match_participants.lock.find_by(room_membership_id: membership.id)
+      unless participant
+        outcome = :not_a_participant
+        next
+      end
+      unless participant.status == "alive"
+        outcome = :eliminated
+        next
+      end
+      unless input.seq.is_a?(Integer) && input.seq > participant.last_input_seq
+        outcome = :stale_sequence
+        next
+      end
+      earliest = [checkpoint_tick - Simulation::World::INPUT_TICK_WINDOW, 0].max
+      latest = checkpoint_tick + INPUT_FUTURE_WINDOW
+      unless input.tick.is_a?(Integer) && input.tick.between?(earliest, latest)
+        outcome = :invalid_tick
+        next
+      end
+      if MatchInput.where(match_participant_id: participant.id).count >= MAX_PENDING_INPUTS_PER_PARTICIPANT
+        outcome = :queue_full
+        next
+      end
+
+      match_inputs.create!(match_participant: participant, input_seq: input.seq,
+                           client_tick: input.tick, direction: input.direction.name,
+                           received_at: now)
+      participant.update_columns(last_input_seq: input.seq, updated_at: now)
+      outcome = :queued
+    end
+    outcome
+  rescue ActiveRecord::RecordNotUnique
+    :stale_sequence
+  end
+
+  # The sole owner drains durable commands immediately before a logical step.
+  # Applied rows stay until the checkpoint that includes their sequence
+  # commits, so a crash replays them from the previous checkpoint.
+  def apply_queued_inputs!(world:, token:, now: Time.current, limit: 128)
+    rejected = []
+    owned = false
+    with_lock do
+      unless owner_token == token && lease_expires_at && lease_expires_at > now && live?
+        next
+      end
+      owned = true
+      match_inputs.order(:id).limit(limit).each do |entry|
+        snake = world.player(entry.match_participant_id)
+        next if snake && snake.last_seq >= entry.input_seq
+
+        outcome = world.apply_input(
+          player_id: entry.match_participant_id,
+          direction: Simulation::Direction.parse(entry.direction),
+          tick: entry.client_tick,
+          seq: entry.input_seq
+        )
+        unless %i[accepted duplicate_direction reversal queue_full].include?(outcome)
+          rejected << { participant: entry.match_participant_id, seq: entry.input_seq, reason: outcome }
+          match_inputs.where(id: entry.id).delete_all
+        end
+      end
+    end
+    owned ? rejected : nil
+  end
+
+  # Persist the latest complete frame at the independent broadcast cadence (not
+  # per movement tick), fenced on the lease, so a reconnecting channel on any
+  # Puma worker can bootstrap from a whole authoritative snapshot.
+  def publish_snapshot!(world, token:, now: Time.current)
+    payload = Simulation::Protocol.encode(world).merge("type" => "snapshot")
+    updated = self.class.where(id: id, owner_token: token).where(status: LIVE_STATUSES)
+                .update_all(live_snapshot: payload, snapshot_tick: world.tick, updated_at: now) == 1
+    reload if updated
+    updated
+  end
+
   # Rebuilds the in-memory world. A checkpoint (written every N ticks) is the
   # only recovery source after a lease hand-over; participants are re-read from
   # the database so names/colors cannot be altered through a checkpoint.
@@ -141,15 +239,24 @@ class Match < ApplicationRecord
     owner_token == token
   end
 
-  # Periodic durable progress. Fenced: a process that lost its lease cannot
-  # overwrite a newer checkpoint.
+  # Periodic durable progress. Checkpoint and consumed-input acknowledgements
+  # commit atomically, fenced on owner_token: a process that lost its lease
+  # cannot overwrite a newer checkpoint or acknowledge inputs it did not apply.
   def save_progress!(world, token:, now: Time.current)
-    attrs = { status: world.status.to_s, tick: world.tick, checkpoint: world.to_state,
-              checkpoint_tick: world.tick, updated_at: now }
-    attrs[:started_at] = now if started_at.nil? && !world.pending?
-    updated = self.class.where(id: id, owner_token: token).update_all(attrs) == 1
-    reload if updated
-    updated
+    self.class.transaction do
+      attrs = { status: world.status.to_s, tick: world.tick, checkpoint: world.to_state,
+                checkpoint_tick: world.tick, started_at: (started_at || now), updated_at: now }
+      updated = self.class.where(id: id, owner_token: token).where(status: LIVE_STATUSES)
+                  .update_all(attrs) == 1
+      next false unless updated
+
+      world.snakes.each do |snake|
+        match_inputs.where(match_participant_id: snake.id)
+                    .where("input_seq <= ?", snake.last_seq).delete_all
+      end
+      reload
+      true
+    end
   end
 
   def complete_from_world!(world, token:, now: Time.current)
@@ -158,7 +265,9 @@ class Match < ApplicationRecord
     transaction do
       updated = self.class.where(id: id, owner_token: token).update_all(
         status: "completed", tick: world.tick, checkpoint: world.to_state,
-        checkpoint_tick: world.tick, ended_at: now,
+        checkpoint_tick: world.tick,
+        live_snapshot: Simulation::Protocol.encode(world).merge("type" => "snapshot"),
+        snapshot_tick: world.tick, ended_at: now,
         end_reason: world.end_reason.to_s, winner_membership_id: membership_id_for(entries.first&.id),
         owner_token: nil, lease_expires_at: nil, updated_at: now
       ) == 1

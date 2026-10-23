@@ -24,6 +24,10 @@ module Simulation
         "r" => world.rules.mode.to_s,
         "b" => { "c" => world.columns, "r" => world.rows },
         "e" => world.end_reason&.to_s,
+        "w" => world.winner&.id,
+        "q" => world.standings.map { |entry| { "i" => entry.id, "p" => entry.placement,
+                                                "sc" => entry.score, "sv" => entry.survived_ticks,
+                                                "lg" => entry.longest_length } },
         "p" => world.snakes.map { |snake| encode_player(snake, world.columns) },
         "f" => world.foods.map { |food| encode_food(food, world.columns) }
       }
