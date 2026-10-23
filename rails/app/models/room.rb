@@ -12,7 +12,7 @@
 #     any unarchived state ──disband!──▶ disbanded ──archive!──▶ archived
 #     finished ──archive!──▶ archived
 #
-# Only a room in `lobby` accepts joins. Disbanding or archiving releases
+# Lobby joins are participants; joins during `in_match` are spectators. Disbanding or archiving releases
 # every seated membership (state -> left) so those identities are free to
 # sit in another room — see the one-active-seat partial unique indexes in
 # the migration.
@@ -33,6 +33,7 @@
 # guest must be able to host a room without creating an account, and
 # because hosting can then be transferred when the host leaves.
 class Room < ApplicationRecord
+  include RoomConfiguration
   MODES = %w[brawl duel].freeze
   STATES = %w[lobby in_match finished disbanded archived].freeze
   CLOSED_STATES = %w[disbanded archived].freeze
@@ -166,7 +167,7 @@ class Room < ApplicationRecord
           membership.rejoin!(display_name: display_name.presence || membership.display_name)
         else
           RoomMembership.create!(room: self, user: user, guest_session: guest_session,
-                                 display_name: display_name, role: "player")
+                                 display_name: display_name, role: "player", spectator: in_match?)
         end
 
       events << [:member_joined, { member: membership.id, name: membership.display_name }]
@@ -252,7 +253,7 @@ class Room < ApplicationRecord
   end
 
   def joinable?
-    lobby?
+    lobby? || in_match?
   end
 
   def full?
@@ -279,24 +280,32 @@ class Room < ApplicationRecord
     true
   end
 
-  # Lobby -> match. Every seated member plays (later steps add recorded
-  # match/participant rows; selecting a subset will live there, not here).
+  # Backend preparation hook, NOT called by the unfinished HTTP Start action.
+  # Re-evaluate capabilities and eligibility inside the same room lock that
+  # protects joins/reports/settings. Freeze the grid + participant colors once.
   def start_match!
     with_lock do
       raise InvalidTransition, "only a lobby can start a match" unless lobby?
 
-      players = room_memberships.where(state: RoomMembership::ACTIVE_STATES)
-      if players.count < MIN_PLAYERS_TO_START
-        raise InvalidTransition, "a match needs at least #{MIN_PLAYERS_TO_START} players"
+      players = eligible_players
+      if players.size < MIN_PLAYERS_TO_START
+        raise InvalidTransition, "a match needs at least #{MIN_PLAYERS_TO_START} eligible players"
       end
-
-      # Bulk state flip: validations are per-row guards for API writes;
-      # the DB CHECKs still constrain the result, and `playing` is inside
-      # the active set, so the one-active-seat indexes are unaffected.
-      players.update_all(state: "playing", updated_at: Time.current)
-      update!(state: "in_match", started_at: Time.current, finished_at: nil)
+      board = board_payload
+      now = Time.current
+      frozen_config = {
+        "columns" => board[:columns], "rows" => board[:rows],
+        "mobile_default" => board[:mobile_required], "locked_at" => now.iso8601(6),
+        "participants" => players.map do |member|
+          { "membership_id" => member.id, "color_slot" => member.color_slot,
+            "color" => RoomPalette.color(member.color_slot)[:hex] }
+        end
+      }
+      room_memberships.active.update_all(spectator: true, updated_at: now)
+      room_memberships.where(id: players.map(&:id)).update_all(state: "playing", spectator: false, updated_at: now)
+      update!(state: "in_match", started_at: now, finished_at: nil, match_configuration: frozen_config)
+      configuration_changed!("room_state", state: state)
     end
-    notify_events!([[:room_state, { state: state }]])
     self
   end
 
@@ -308,6 +317,7 @@ class Room < ApplicationRecord
 
       room_memberships.where(state: "playing")
                       .update_all(state: "joined", updated_at: Time.current)
+      room_memberships.active.update_all(spectator: false)
       update!(state: "finished", finished_at: Time.current)
     end
     notify_events!([[:room_state, { state: state }]])
@@ -318,6 +328,7 @@ class Room < ApplicationRecord
     with_lock do
       raise InvalidTransition, "only a finished room can return to the lobby" unless finished?
 
+      room_memberships.active.update_all(spectator: false)
       update!(state: "lobby")
     end
     notify_events!([[:room_state, { state: state }]])
@@ -413,13 +424,16 @@ class Room < ApplicationRecord
   end
 
   def members_online(at: Time.current)
-    active_memberships.select { |member| member.online?(at: at) }
+    # Capability/presence reports may have changed another instance since an
+    # earlier snapshot in this request. Never decide eligibility from a cached
+    # has_many collection (especially before/after a capabilities mutation).
+    room_memberships.active.order(:joined_at, :id).select { |member| member.online?(at: at) }
   end
 
   # Who could actually play right now. Ready votes are deliberately NOT part
   # of this: the host decides, readiness is advisory (step 3 requirement 6).
   def eligible_players(at: Time.current)
-    members_online(at: at)
+    members_online(at: at).reject(&:spectator?)
   end
 
   # Everything the host's Start control needs, as data. Note `engine_ready`

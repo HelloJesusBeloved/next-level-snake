@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start disband transfer_host]
+    before_action :load_room!, only: %i[show join ready leave start disband transfer_host color capabilities board]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -116,6 +116,44 @@ module Api
       render json: state_payload(@room.reload, membership.reload)
     rescue RoomMembership::InvalidTransition => e
       render_error("invalid_transition", e.message, :conflict)
+    end
+
+    # These writes derive the actor solely from RoomIdentity. member_id,
+    # user_id and guest_session_id in request bodies cannot move another seat.
+    def color
+      member = require_membership!
+      return unless member
+
+      member = @room.choose_color!(member, params[:color_slot])
+      render json: state_payload(@room, member)
+    rescue ArgumentError => e
+      render_error("invalid_color", e.message, :unprocessable_entity)
+    rescue Room::InvalidTransition, ActiveRecord::RecordNotUnique => e
+      render_error("color_conflict", e.message, :conflict)
+    end
+
+    def capabilities
+      member = require_membership!
+      return unless member
+
+      member = @room.report_capabilities!(member, client_id: params[:client_id], capabilities: params[:capabilities])
+      render json: state_payload(@room, member)
+    rescue ArgumentError => e
+      render_error("invalid_capabilities", e.message, :unprocessable_entity)
+    rescue Room::InvalidTransition => e
+      render_error("not_a_member", e.message, :forbidden)
+    end
+
+    def board
+      member = require_host!
+      return unless member
+
+      @room.update_board!(member, columns: params[:columns], rows: params[:rows])
+      render json: state_payload(@room, member)
+    rescue ArgumentError => e
+      render_error("invalid_board", e.message, :unprocessable_entity)
+    rescue Room::InvalidTransition => e
+      render_error("board_locked", e.message, :conflict)
     end
 
     # POST /api/rooms/:code/leave — give up the seat. The guest cookie is
@@ -306,12 +344,15 @@ module Api
     # ---- payloads -----------------------------------------------------------
 
     def state_payload(room, membership)
-      {
-        room: room_payload(room, membership),
-        member: membership && member_payload(membership, membership),
-        viewer: viewer_payload,
-        config: config_payload
-      }
+      room.with_lock do
+        membership&.reload
+        {
+          room: room_payload(room, membership),
+          member: membership && member_payload(membership, membership),
+          viewer: viewer_payload,
+          config: config_payload
+        }
+      end
     end
 
     def room_payload(room, viewer_membership = nil, at: Time.current)
@@ -326,13 +367,16 @@ module Api
         state: room.state,
         max_members: room.max_members,
         settings: room.settings,
+        colors: room.palette_payload,
+        board: room.board_payload(at: at).then { |policy| policy.merge(editable: room.host?(viewer_membership) && policy[:custom_allowed]) },
+        match_configuration: room.match_configuration,
         invite_url: invite_url_for(room),
         created_at: room.created_at,
         members: members.map { |member| member_payload(member, viewer_membership, at: at) },
         counts: {
           members: members.size,
           online: members.count { |member| member.online?(at: at) },
-          ready: members.count(&:ready?),
+          ready: members.count { |member| member.ready? && !member.spectator? },
           capacity: room.max_members
         },
         start: room.start_eligibility(at: at),
@@ -347,6 +391,9 @@ module Api
       {
         id: member.id,
         display_name: member.display_name,
+        color: member.identity_color,
+        spectator: member.spectator?,
+        device: member.device_kind(at: at),
         host: member.host?,
         ready: member.ready?,
         state: member.state,
@@ -436,6 +483,7 @@ module Api
       message = error.message
       code =
         case message
+        when /color capacity/i then "color_capacity"
         when /full/ then "room_full"
         when /removed/ then "removed"
         when /guest session/ then "identity_expired"

@@ -141,10 +141,12 @@ class RoomTest < ActiveSupport::TestCase
     assert_equal "playing", guest_seat.reload.state
     assert_equal "playing", room.host_membership.reload.state
 
-    # Nobody new sits down mid-match.
-    assert_raises(Room::NotJoinable) do
-      room.join!(guest_session: make_guest.first, display_name: "Latecomer")
-    end
+    # Step 6: new arrivals spectate, without touching the frozen grid/roster.
+    frozen = room.match_configuration.deep_dup
+    latecomer = room.join!(guest_session: make_guest.first, display_name: "Latecomer")
+    assert latecomer.spectator?
+    assert_equal "joined", latecomer.state
+    assert_equal frozen, room.reload.match_configuration
 
     room.finish_match!
     assert room.finished?

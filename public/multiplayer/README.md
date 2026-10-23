@@ -72,9 +72,22 @@ and detaches the video. Unsupported `mediaDevices`, denied permission, missing
 cameras and non-secure contexts are reported in `#mp-scan-status` with the
 code-entry fallback.
 
+## Colors and board policy (step 6)
+
+`configuration.js` renders server-owned color reservations and the host's
+pre-Brawl board controls. It reports viewport/screen dimensions, touch,
+pointer and hover capabilities per tab on entry and every 25 seconds, including
+after resize/orientation/visibility changes. Missing/stale/unknown or mobile
+reports require 24×18 — the actual canonical single-player default. No UA-only
+classification or client-owned grid is used. Color selection and board changes
+use the room API and existing versioned room events; live palettes are shared
+by every tab. Spectators are named/colored but cannot change a running match.
+See `rails/docs/multiplayer-step-06-colors-and-boards.md` for details and tests.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)
+- `configuration.js` — identity palette, host board controls and per-tab capability reports
 - `lobby.js` — roster, actions, polling fallback, Action Cable client,
   sharing panel, QR drawing and the camera scanner
 - `actioncable.esm.js` — official Action Cable client, vendored from the gem
@@ -86,7 +99,7 @@ code-entry fallback.
 
 ## Not built yet
 
-Snake gameplay, Duels, rankings, permanent archives and QR scanning. The Start
+Snake gameplay, Duels, rankings and permanent archives. The Start
 control asks the server whether a Brawl *could* start and says so; it never
 pretends to run a match.
 

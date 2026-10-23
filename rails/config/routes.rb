@@ -28,6 +28,9 @@ Rails.application.routes.draw do
     get "rooms/:code", to: "rooms#show", constraints: { code: ROOM_CODE }
     post "rooms/:code/join", to: "rooms#join", constraints: { code: ROOM_CODE }
     post "rooms/:code/ready", to: "rooms#ready", constraints: { code: ROOM_CODE }
+    post "rooms/:code/color", to: "rooms#color", constraints: { code: ROOM_CODE }
+    post "rooms/:code/capabilities", to: "rooms#capabilities", constraints: { code: ROOM_CODE }
+    post "rooms/:code/board", to: "rooms#board", constraints: { code: ROOM_CODE }
     post "rooms/:code/leave", to: "rooms#leave", constraints: { code: ROOM_CODE }
     post "rooms/:code/start", to: "rooms#start", constraints: { code: ROOM_CODE }
     post "rooms/:code/disband", to: "rooms#disband", constraints: { code: ROOM_CODE }

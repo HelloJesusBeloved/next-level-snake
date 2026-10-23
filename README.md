@@ -522,6 +522,9 @@ show "no snapshot". Data model: `scores.end_state` (jsonb) and `users.favorite_t
 | `GET` | `/api/rooms/:code` | — | member → full state; anyone else → a join preview; `404` unknown code; `410` disbanded/expired |
 | `POST` | `/api/rooms/:code/join` | `{ display_name?, leave_current? }` | room state; `409 room_full` / `in_other_room`; `403` if removed; `410` closed |
 | `POST` | `/api/rooms/:code/ready` | `{ ready: true\|false }` | room state with updated ready counts (advisory vote) |
+| `POST` | `/api/rooms/:code/color` | `{ color_slot }` | reserve own color; `409` claimed/locked, `422` invalid |
+| `POST` | `/api/rooms/:code/capabilities` | `{ client_id, capabilities }` | report own tab; server classifies conservative device policy |
+| `POST` | `/api/rooms/:code/board` | `{ columns, rows }` | host only, desktop-only lobby; frozen during a match |
 | `POST` | `/api/rooms/:code/leave` | `{}` | `{ room: null, left: CODE }` — the guest identity is kept for reconnecting |
 | `POST` | `/api/rooms/:code/start` | `{}` | **host only.** `200 { start: { eligible … }, started: false }`; `422 not_eligible`; `403` otherwise |
 | `POST` | `/api/rooms/:code/disband` | `{}` | **host only.** `{ room: null, disbanded: CODE }`; `403` otherwise |
@@ -579,6 +582,22 @@ slider.
   contexts and unsupported browsers each get a plain-language message and the
   paste-the-code fallback. Invitation URLs use `MULTIPLAYER_PUBLIC_ORIGIN`
   when set, never a hardcoded host.
+
+**Player colors and Brawl board settings (step 6).** Guests and accounts get
+unique solid identity colors on entry. The lobby color picker reserves another
+available option atomically and broadcasts the change. Its server-generated
+OKLCH palette grows hue-first, then adds light/dark bands, keeping at least six
+spare choices within a finite 96-color budget. Names and high-contrast marker
+edges supplement color in every theme.
+
+The host may choose presets or custom dimensions (24–96 columns, 18–72 rows)
+when every eligible participant has fresh desktop viewport/input capabilities.
+Any mobile or unverified participant requires the **24×18 single-player default**.
+The server keeps multi-tab reports conservatively and freezes grid dimensions
+and participant colors in the model's match-preparation hook; later arrivals
+spectate. Start remains an eligibility check only — no gameplay yet. See
+[`rails/docs/multiplayer-step-06-colors-and-boards.md`](rails/docs/multiplayer-step-06-colors-and-boards.md)
+for API contracts, limits, migration safeguards, review and tests.
 
 **Real-time (Action Cable).** Lobbies synchronize over a WebSocket at
 `/cable` (`RoomChannel`, stream `rooms:<code>`): joins, leaves, ready votes,

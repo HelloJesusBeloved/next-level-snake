@@ -12,6 +12,7 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
+import { mountConfiguration } from './configuration.js?v=step6';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -133,6 +134,7 @@ export function mountLobby(root) {
   let refreshTimer = null;
   const pollInterval = Math.max(2, parseInt(root.dataset.pollInterval, 10) || 5) * 1000;
   let timer = null;
+  const configuration = mountConfiguration({ api, apply, getState: () => state });
 
   // ---- helpers --------------------------------------------------------------
 
@@ -166,6 +168,7 @@ export function mountLobby(root) {
     if (el.room) el.room.hidden = !inRoom;
     renderViewer();
     if (inRoom) renderRoom();
+    configuration.render(state.room, state.member);
   }
 
   function renderViewer() {
@@ -208,8 +211,10 @@ export function mountLobby(root) {
         const tags = [];
         if (member.you) tags.push('<span class="mp-player__tag">you</span>');
         if (!member.online) tags.push('<span class="mp-player__tag">away</span>');
+        if (member.spectator) tags.push('<span class="mp-player__tag">spectating</span>');
         return [
-          `<li class="mp-player${member.you ? ' is-you' : ''}">`,
+          `<li class="mp-player${member.you ? ' is-you' : ''}" data-member-id="${member.id}">`,
+          `<span class="mp-identity-color" style="--player-color:${/^#[0-9A-F]{6}$/i.test(member.color?.hex) ? member.color.hex : '#808080'}" role="img" aria-label="${esc(member.color?.label || 'Player color')}"></span>`,
           `<span class="mp-dot${member.online ? ' is-online' : ''}" aria-hidden="true"></span>`,
           member.host
             ? '<span class="mp-crown" role="img" aria-label="Host">👑</span>'
@@ -223,7 +228,10 @@ export function mountLobby(root) {
       }).join('');
     }
 
-    if (el.readyToggle) el.readyToggle.textContent = me.ready ? 'Not ready' : "I'm ready";
+    if (el.readyToggle) {
+      el.readyToggle.textContent = me.spectator ? 'Spectating this match' : me.ready ? 'Not ready' : "I'm ready";
+      el.readyToggle.disabled = !!me.spectator || room.state === 'in_match';
+    }
     if (el.start) el.start.hidden = !amHost;
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
@@ -236,6 +244,10 @@ export function mountLobby(root) {
   // ---- server conversation ---------------------------------------------------
 
   function apply(out) {
+    const incoming = out.json?.room;
+    // A slow capabilities/settings response must not roll a newer live
+    // snapshot backwards. Version numbers apply to HTTP snapshots too.
+    if (incoming?.code === state.room?.code && typeof incoming?.version === 'number' && incoming.version < state.version) return out;
     if (out.json && Object.prototype.hasOwnProperty.call(out.json, 'room')) {
       state.room = out.json.room && out.json.room.members ? out.json.room : null;
       state.member = out.json.member || null;
@@ -380,7 +392,7 @@ export function mountLobby(root) {
       const preview = out.json.room || {};
       const counts = preview.counts || {};
       el.codePreview.textContent = preview.joinable
-        ? `${preview.host_name || 'Someone'}'s room · ${counts.members}/${counts.capacity} players`
+        ? `${preview.state === 'in_match' ? 'Spectate this Brawl · ' : ''}${preview.host_name || 'Someone'}'s room · ${counts.members}/${counts.capacity} players`
         : 'That room is not open for joining right now.';
     }).catch(() => { el.codePreview.hidden = true; });
   }

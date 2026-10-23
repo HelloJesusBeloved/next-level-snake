@@ -54,6 +54,8 @@ class RoomMembership < ApplicationRecord
   validates :role, inclusion: { in: ROLES }
   validates :state, inclusion: { in: STATES }
   validates :joined_at, presence: true
+  validates :color_slot, inclusion: { in: 0...RoomPalette::CAPACITY }
+  validate :validate_color_reservation!
   validate :validate_display_name_chars!
   validate :validate_exactly_one_identity!
   validate :validate_one_active_membership_per_identity!
@@ -63,6 +65,8 @@ class RoomMembership < ApplicationRecord
 
   normalizes :display_name, with: ->(name) { name.to_s.strip }
 
+  before_validation :reserve_initial_color!
+  before_save :reserve_initial_color! # also covers internal save(validate: false)
   before_validation :assign_joined_at, on: :create
   before_validation :default_display_name_from_account, on: :create
 
@@ -94,6 +98,15 @@ class RoomMembership < ApplicationRecord
     seen_at <= at - seconds
   end
 
+  # Same persisted solid color is the contract for later snake/food modes.
+  def identity_color
+    RoomPalette.color(color_slot)
+  end
+
+  def device_kind(at: Time.current)
+    RoomBoard.device_kind(device_reports, at: at)
+  end
+
   def guest?
     guest_session_id.present?
   end
@@ -114,7 +127,11 @@ class RoomMembership < ApplicationRecord
   def mark_ready!
     raise InvalidTransition, "only a joined member can ready up" unless state == "joined"
 
-    room.with_lock { update!(state: "ready") }
+    room.with_lock do
+      reload
+      raise InvalidTransition, "Spectators cannot ready up during a match." if spectator? || room.in_match?
+      update!(state: "ready")
+    end
     room.notify_events!([[:member_ready, { member: id, ready: true }]])
     self
   end
@@ -122,15 +139,13 @@ class RoomMembership < ApplicationRecord
   def mark_not_ready!
     raise InvalidTransition, "only a ready member can un-ready" unless state == "ready"
 
-    room.with_lock { update!(state: "joined") }
+    room.with_lock do
+      reload
+      raise InvalidTransition, "Readiness is locked during a match." if room.in_match?
+      update!(state: "joined")
+    end
     room.notify_events!([[:member_ready, { member: id, ready: false }]])
     self
-  end
-
-  def mark_not_ready!
-    raise InvalidTransition, "only a ready member can un-ready" unless state == "ready"
-
-    update!(state: "joined")
   end
 
   # Presence heartbeat; deliberately skips validations/callbacks (and the
@@ -159,7 +174,8 @@ class RoomMembership < ApplicationRecord
     raise InvalidTransition, "removed members cannot rejoin this room" if state == "removed"
 
     update!(state: "joined", display_name: display_name, role: "player",
-            joined_at: Time.current, left_at: nil)
+            spectator: room.in_match?, device_reports: {},
+            joined_at: Time.current, left_at: nil, last_seen_at: Time.current)
     self
   end
 
@@ -228,6 +244,27 @@ class RoomMembership < ApplicationRecord
     # broadcast after the lock so a refetching subscriber sees both.
     room.notify_events!(events)
     self
+  end
+
+  # Save validations already run in a transaction; the room lock therefore
+  # stays held through INSERT/UPDATE (including direct model creation). Public
+  # joins also hold that same lock. A partial unique index is the DB backstop.
+  def reserve_initial_color!
+    return unless room&.persisted? && active?
+    reactivating = persisted? && state_in_database.in?(INACTIVE_STATES)
+    return unless color_slot.nil? || @automatic_color || reactivating
+
+    room.with_lock do
+      self.color_slot = room.available_color_for!(self)
+      @automatic_color = true
+    end
+  end
+
+  def validate_color_reservation!
+    return unless active? && color_slot.present? && room
+    if self.class.active.where(room_id: room_id, color_slot: color_slot).where.not(id: id).exists?
+      errors.add(:color_slot, "is already claimed in this room")
+    end
   end
 
   def assign_joined_at

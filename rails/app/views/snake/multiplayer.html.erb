@@ -179,6 +179,34 @@
 
     <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
 
+    <div class="mp-config-grid">
+      <section class="mp-card mp-color-card" aria-labelledby="mp-color-title">
+        <p class="mp-room__eyebrow">Your multiplayer identity</p>
+        <h3 class="mp-card__title" id="mp-color-title">Choose your color</h3>
+        <p class="mp-my-color" id="mp-my-color"></p>
+        <div class="mp-color-options" id="mp-color-options" role="group" aria-label="Player colors"></div>
+        <p class="mp-card__hint" id="mp-color-note"></p>
+        <p class="mp-config-status" id="mp-color-status" role="status" aria-live="polite"></p>
+      </section>
+      <section class="mp-card mp-board-card" aria-labelledby="mp-board-title">
+        <p class="mp-room__eyebrow" id="mp-board-host-label">Host controls · next Brawl</p>
+        <h3 class="mp-card__title" id="mp-board-title">Brawl board <span id="mp-board-current">24 × 18</span></h3>
+        <p class="mp-card__hint" id="mp-board-reason" role="status" aria-live="polite"></p>
+        <p class="mp-card__hint" id="mp-board-recommendation"></p>
+        <form id="mp-board-form" class="mp-board-form">
+          <label for="mp-board-preset">Size preset</label>
+          <select id="mp-board-preset" disabled></select>
+          <div class="mp-board-dimensions">
+            <label for="mp-board-columns">Columns <input id="mp-board-columns" type="number" min="24" max="96" step="1" value="24" required disabled></label>
+            <label for="mp-board-rows">Rows <input id="mp-board-rows" type="number" min="18" max="72" step="1" value="18" required disabled></label>
+          </div>
+          <button id="mp-board-save" type="submit" class="btn btn--small" disabled>Save board</button>
+        </form>
+        <p class="mp-config-status" id="mp-board-status" role="status" aria-live="polite"></p>
+        <p class="mp-card__hint">Settings only: the Brawl simulation is not available yet.</p>
+      </section>
+    </div>
+
     <div class="mp-actions mp-actions--room">
       <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
       <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
@@ -245,5 +273,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=2026-10-23.1"></script>
+  <script type="module" src="/multiplayer/page.js?v=step6"></script>
 <% end %>

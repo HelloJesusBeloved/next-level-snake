@@ -328,3 +328,41 @@
   .mp-share__panel { width: 100%; }
   .mp-share__buttons .btn { flex: 1 1 auto; }
 }
+
+/* Step 6. Color is a solid identity accent, NOT the sole label. Neutral text
+   and a dual black/white edge keep it identifiable in all seven themes. */
+.mp-identity-color {
+  display: inline-block; flex: 0 0 auto; width: 18px; height: 18px;
+  background: var(--player-color, #808080); border: 2px solid #111;
+  border-radius: 5px; box-shadow: 0 0 0 1px #fff;
+}
+.mp-config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+.mp-config-grid .mp-card { min-width: 0; }
+.mp-color-options { display: flex; flex-wrap: wrap; gap: 9px; margin: 8px 0; }
+.mp-color-option {
+  display: grid; place-items: center; position: relative; width: 44px; height: 44px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel);
+  color: var(--text); cursor: pointer; padding: 7px;
+}
+.mp-color-option .mp-identity-color { width: 23px; height: 23px; }
+.mp-color-option[aria-pressed='true'] { outline: 2px solid var(--text); outline-offset: 2px; }
+.mp-color-option:focus-visible { outline: 3px solid var(--green); outline-offset: 3px; }
+.mp-color-option:disabled { cursor: not-allowed; }
+.mp-color-option:disabled .mp-identity-color { width: 15px; height: 15px; }
+.mp-color-option__label { position: absolute; right: -3px; bottom: -5px; padding: 0 2px; border-radius: 3px; background: var(--panel); font-size: 12px; }
+.mp-my-color { display: flex; gap: 10px; align-items: center; font: 12px 'IBM Plex Mono', monospace; color: var(--text); }
+.mp-my-color::before { content: ''; width: 18px; height: 18px; flex: 0 0 auto; background: var(--player-color, #808080); border: 2px solid #111; border-radius: 5px; box-shadow: 0 0 0 1px #fff; }
+.mp-board-card #mp-board-current { float: right; color: var(--green); font-family: 'IBM Plex Mono', monospace; }
+.mp-board-form { display: grid; gap: 9px; margin-top: 4px; }
+.mp-board-form label { color: var(--text); font-size: 12px; }
+.mp-board-form select, .mp-board-form input {
+  width: 100%; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--panel); color: var(--text); font: inherit;
+}
+.mp-board-form select:focus-visible, .mp-board-form input:focus-visible { outline: 2px solid var(--green); }
+.mp-board-form :disabled { opacity: 0.65; cursor: not-allowed; }
+.mp-board-dimensions { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.mp-board-dimensions label { display: grid; gap: 6px; }
+.mp-config-status { min-height: 1em; color: var(--green); font-size: 13px; line-height: 1.45; }
+.mp-config-status[data-kind='error'] { color: var(--red); }
+@media (max-width: 760px) { .mp-config-grid { grid-template-columns: 1fr; } }
