@@ -37,15 +37,21 @@ class MatchChannelTest < ActionCable::Channel::TestCase
     assert_includes %w[waiting snapshot], message["type"]
   end
 
-  test "a room member who did not enter the Brawl is rejected" do
+  test "a room member who joined late watches as a spectator but cannot steer" do
     late, _raw = GuestSession.issue
     @room.join!(guest_session: late, display_name: "Late")
     stub_connection(current_user: nil, current_guest_session: late)
 
     subscribe(match: @match.id)
 
-    assert subscription.rejected?
-    assert_equal "not_a_participant", transmissions.last["error"]
+    assert subscription.confirmed?
+    assert_has_stream(MatchChannel.stream_for(@match.id))
+    assert_equal true, transmissions.last["spectator"]
+
+    perform :input, "v" => 1, "type" => "input", "match" => @match.id,
+                    "tick" => 0, "seq" => 1, "dir" => "up"
+    assert_equal false, transmissions.last["accepted"]
+    assert_equal "spectator", transmissions.last["reason"]
   end
 
   test "a stranger is rejected" do

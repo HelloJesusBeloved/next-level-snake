@@ -390,3 +390,39 @@
 .mp-game__input-status { min-height: 1.4em; text-align: center; }
 .mp-game__input-status[data-kind='error'] { color: var(--red); }
 @media (min-width: 900px) { .mp-game-controls { display: none; } }
+
+/* ---- step 9: Brawl views, follow picker, results, elimination overlay ---- */
+.mp-game-tabs { display: flex; gap: 6px; margin: 10px 0; }
+.mp-game-tabs button {
+  flex: 1 1 auto; padding: 7px 10px; border: 1px solid var(--line); border-radius: 9px;
+  background: transparent; color: var(--muted); font-size: 12px; cursor: pointer;
+}
+.mp-game-tabs button[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--accent-2) 16%, transparent);
+  border-color: color-mix(in srgb, var(--accent-2) 55%, transparent);
+  color: var(--green);
+}
+.mp-game-tabs button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.mp-game__follow-row { display: flex; align-items: center; gap: 8px; margin: 8px 0 0; color: var(--muted); font-size: 12px; }
+.mp-game__follow-row select {
+  max-width: 100%; padding: 6px 9px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--panel); color: var(--text); font: inherit; font-size: 12px;
+}
+.mp-game-score__meta { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; white-space: nowrap; }
+.mp-game-score__tag.is-alive { color: var(--green); }
+.mp-results { margin-top: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--line)); border-radius: 12px; }
+.mp-results__title { margin: 0 0 8px; font-size: 14px; }
+.mp-results-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.mp-results-table th, .mp-results-table td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+.mp-results-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.mp-results-table tr.is-you td { background: color-mix(in srgb, var(--accent-2) 10%, transparent); }
+.mp-results-table .mp-identity-color { width: 14px; height: 14px; vertical-align: -2px; margin-right: 6px; }
+.mp-eliminated {
+  margin-top: 12px; padding: 14px; border: 1px solid color-mix(in srgb, var(--red) 55%, transparent);
+  border-radius: 12px; background: color-mix(in srgb, var(--red) 8%, transparent);
+}
+.mp-eliminated__title { margin: 2px 0 4px; font-size: 16px; }
+.mp-eliminated__score { margin: 0 0 10px; color: var(--text); font-size: 13px; }
+@media (max-width: 560px) {
+  .mp-results-table th:nth-child(5), .mp-results-table td:nth-child(5) { display: none; }
+}

@@ -186,9 +186,37 @@
         </div>
         <span class="mp-game__tick" id="mp-game-tick"></span>
       </div>
-      <canvas id="mp-game-canvas" class="mp-game__canvas" tabindex="0" role="application"
-              aria-label="Multiplayer Snake arena. Use arrow keys or WASD, swipe the arena, or use the direction buttons."></canvas>
-      <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
+      <nav class="mp-game-tabs" id="mp-game-tabs" aria-label="Brawl views">
+        <button type="button" data-game-pane="board" aria-pressed="true">Board</button>
+        <button type="button" data-game-pane="standings" aria-pressed="false">Standings</button>
+        <button type="button" data-game-pane="lobby" aria-pressed="false">Lobby</button>
+      </nav>
+      <p class="mp-game__follow-row" id="mp-follow-row" hidden>
+        <label for="mp-follow">Spectate</label>
+        <select id="mp-follow" aria-label="Follow a living player"></select>
+      </p>
+      <div id="mp-board-pane">
+        <canvas id="mp-game-canvas" class="mp-game__canvas" tabindex="0" role="application"
+                aria-label="Multiplayer Snake arena. Use arrow keys or WASD, swipe the arena, or use the direction buttons."></canvas>
+        <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
+      </div>
+      <div id="mp-standings-pane" hidden>
+        <div id="mp-standings-table"></div>
+      </div>
+      <section class="mp-results" id="mp-results" hidden aria-label="Final results">
+        <h4 class="mp-results__title">Final results</h4>
+        <div id="mp-results-table"></div>
+      </section>
+      <div class="mp-eliminated" id="mp-eliminated" hidden role="alertdialog" aria-labelledby="mp-eliminated-title" aria-describedby="mp-eliminated-score">
+        <p class="mp-room__eyebrow">Eliminated</p>
+        <h4 class="mp-eliminated__title" id="mp-eliminated-title"><span id="mp-eliminated-name">Your snake</span> is out</h4>
+        <p class="mp-eliminated__score" id="mp-eliminated-score"></p>
+        <div class="mp-actions">
+          <button class="btn btn--primary btn--small" id="mp-spectate" type="button">Spectate Brawl</button>
+          <button class="btn btn--small" id="mp-lobby-view" type="button">Return to Lobby</button>
+          <button class="btn btn--small" id="mp-duel-entry" type="button" disabled title="Duels arrive in a later step">Duel (soon)</button>
+        </div>
+      </div>
       <nav class="mp-game-controls" aria-label="Touch steering">
         <button type="button" data-game-dir="up" aria-label="Steer up">↑</button>
         <div>
@@ -200,6 +228,10 @@
       <p class="mp-game__hint">Keyboard: arrows / WASD. Touch: swipe or use the steering pad. Only your direction is sent; positions, food and scores come from the server.</p>
       <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite"></p>
     </section>
+
+    <p class="mp-game__follow-row" id="mp-back-to-board-row" hidden>
+      <button class="btn btn--small" id="mp-board-view" type="button">Back to Board</button>
+    </p>
 
     <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
 

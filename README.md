@@ -543,6 +543,19 @@ globally. Filter values are `all`, a preset number (speed `1`â€“`6`, growth `1`â
 only ever contains preset runs; Custom contains runs with at least one custom
 slider.
 
+## Brawl scoreboards, elimination effects, and spectators (step 9)
+
+Brawls now show a live leaderboard (rank, color, name, points, length,
+survival time, alive/eliminated) in server-standing order, with the viewer's
+row highlighted. Eliminations are marked immediately with frozen final stats;
+the dead body stays on the board while client-side pixel dust breaks up and
+fades (skipped under reduced-motion preferences). Eliminated players get
+Spectate Brawl / Return to Lobby / Duel-soon actions; late joiners watch as
+spectators and can follow any living player. Board / Standings / Lobby tabs
+switch views without touching membership. Completed rounds show full final
+results, still points-first. See
+[`rails/docs/multiplayer-step-09-brawl-ux.md`](rails/docs/multiplayer-step-09-brawl-ux.md).
+
 ## Playable Brawls (step 8)
 
 Brawls are playable between separate browsers. The host presses **Start Brawl**

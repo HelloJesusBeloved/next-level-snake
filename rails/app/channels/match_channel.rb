@@ -24,16 +24,18 @@ class MatchChannel < ApplicationCable::Channel
     return reject_with("not_a_member", "You are not an active member of this room.") unless @membership
 
     @participant = @match.match_participants.find_by(room_membership_id: @membership.id)
-    return reject_with("not_a_participant", "You did not enter this Brawl.") unless @participant
-
+    # Late joiners (active room members without a frozen seat) watch as
+    # spectators: they receive the same authoritative snapshots but every
+    # direction intent is refused in #input below.
+    @spectator = @participant.nil? || @membership.spectator?
     stream_from self.class.stream_for(@match.id)
     # Seed a reconnect/new tab from the latest complete simulator snapshot.
     if @match.live_snapshot.present?
-      transmit(@match.live_snapshot.merge("type" => "snapshot"))
+      transmit(@match.live_snapshot.merge("type" => "snapshot", "spectator" => @spectator))
     elsif @match.checkpoint.present?
-      transmit(Simulation::Protocol.encode(@match.build_world).merge("type" => "snapshot"))
+      transmit(Simulation::Protocol.encode(@match.build_world).merge("type" => "snapshot", "spectator" => @spectator))
     else
-      transmit({ type: "waiting", match: @match.id, tick: @match.tick })
+      transmit({ type: "waiting", match: @match.id, tick: @match.tick, spectator: @spectator })
     end
   end
 
@@ -42,6 +44,7 @@ class MatchChannel < ApplicationCable::Channel
   def input(data)
     membership = current_membership(@match.room)
     return input_ack(nil, false, :not_a_member) unless membership
+    return input_ack(nil, false, :spectator) if membership.spectator?
     participant = @match.match_participants.find_by(room_membership_id: membership.id)
     return input_ack(nil, false, :not_a_participant) unless participant
 

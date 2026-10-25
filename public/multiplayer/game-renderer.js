@@ -10,6 +10,15 @@ export class MultiplayerGameRenderer {
     this.status = status;
     this.ownParticipantId = ownParticipantId ?? null;
     this.snapshot = null;
+    // Death dust: spawned LOCALLY from the authoritative body cells of a newly
+    // eliminated snake. Coordinates are never transmitted; the server only says
+    // who died. Motion is skipped entirely under prefers-reduced-motion.
+    this.dust = [];
+    this.dustFrame = 0;
+    this.followId = null;
+    this.tickMs = 105;
+    this.reducedMotion = typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.resizeObserver = typeof ResizeObserver === 'function'
       ? new ResizeObserver(() => this.draw()) : null;
     this.resizeObserver?.observe(canvas);
@@ -21,6 +30,24 @@ export class MultiplayerGameRenderer {
     this.ownParticipantId = id == null ? null : Number(id);
     this.drawScoreboard();
     this.draw();
+  }
+
+  setTickMs(ms) {
+    if (Number.isFinite(ms) && ms > 0) this.tickMs = ms;
+  }
+
+  // Spectator perspective: ring-highlight one living player's head. Purely
+  // presentational; it never changes what the server sends.
+  setFollow(id) {
+    this.followId = id == null ? null : Number(id);
+    this.draw();
+  }
+
+  static formatSurvival(ticks, tickMs) {
+    const totalSeconds = Math.max(0, Math.round((Number(ticks) || 0) * (Number(tickMs) || 0) / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
   }
 
   accept(snapshot) {
@@ -37,6 +64,7 @@ export class MultiplayerGameRenderer {
       if (player.b.some((cell) => !Number.isInteger(cell) || cell < 0 || cell >= total)) return false;
     }
     if (snapshot.f.some((food) => !Number.isInteger(food.c) || food.c < 0 || food.c >= total)) return false;
+    this.spawnDustForNewlyEliminated(snapshot);
     this.snapshot = snapshot;
     this.drawScoreboard();
     this.draw();
@@ -49,6 +77,51 @@ export class MultiplayerGameRenderer {
     }
     return true;
   }
+
+  spawnDustForNewlyEliminated(snapshot) {
+    if (this.reducedMotion || !this.snapshot) return;
+    const wasAlive = new Map(this.snapshot.p.map((player) => [player.i, player.a]));
+    for (const player of snapshot.p) {
+      if (wasAlive.get(player.i) === true && player.a === false && Array.isArray(player.b)) {
+        // One puff per body cell, capped so a giant snake cannot flood the tab.
+        const cells = player.b.slice(0, 64);
+        for (const index of cells) {
+          const x = index % snapshot.b.c; const y = Math.floor(index / snapshot.b.c);
+          for (let k = 0; k < 3; k++) {
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 0.4 + Math.random() * 1.6;
+            this.dust.push({
+              x: x + 0.5, y: y + 0.5,
+              vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed - 0.5,
+              life: 1, decay: 0.012 + Math.random() * 0.02,
+              size: 0.08 + Math.random() * 0.16,
+              color: HEX.test(player.c) ? player.c : '#808080',
+            });
+          }
+        }
+      }
+    }
+    if (this.dust.length) this.pumpDust();
+  }
+
+  pumpDust() {
+    if (this.dustFrame) return;
+    const step = () => {
+      this.dustFrame = 0;
+      for (const particle of this.dust) {
+        particle.x += particle.vx * 0.06;
+        particle.y += particle.vy * 0.06;
+        particle.vy += 0.02; // gentle settle
+        particle.life -= particle.decay;
+      }
+      this.dust = this.dust.filter((particle) => particle.life > 0);
+      this.draw();
+      if (this.dust.length) this.dustFrame = requestAnimationFrame(step);
+    };
+    this.dustFrame = requestAnimationFrame(step);
+  }
+
+  dustCountForTests() { return this.dust.length; }
 
   drawScoreboard() {
     if (!this.scoreboard || !this.snapshot) return;
@@ -68,11 +141,18 @@ export class MultiplayerGameRenderer {
       name.textContent = player.n;
       const score = document.createElement('strong'); score.className = 'mp-game-score__points';
       score.textContent = `${standing.sc} pts`;
-      row.append(color, place, name, score);
-      if (!player.a) {
-        const out = document.createElement('span'); out.className = 'mp-game-score__tag'; out.textContent = 'out';
-        row.append(out);
+      const length = document.createElement('span'); length.className = 'mp-game-score__meta';
+      length.textContent = `${player.l} long`;
+      const survived = document.createElement('span'); survived.className = 'mp-game-score__meta';
+      survived.textContent = MultiplayerGameRenderer.formatSurvival(player.sv, this.tickMs);
+      row.append(color, place, name, score, length, survived);
+      const tag = document.createElement('span');
+      if (player.a) {
+        tag.className = 'mp-game-score__tag is-alive'; tag.textContent = 'alive';
+      } else {
+        tag.className = 'mp-game-score__tag'; tag.textContent = 'out';
       }
+      row.append(tag);
       this.scoreboard.append(row);
     }
   }
@@ -116,14 +196,19 @@ export class MultiplayerGameRenderer {
       ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = Math.max(1, cell * .06); ctx.stroke();
     }
 
+    const followAlive = this.followId != null &&
+      (snapshot.p || []).some((player) => player.i === this.followId && player.a);
     for (const player of snapshot.p) {
       const color = HEX.test(player.c) ? player.c : '#808080';
+      // Eliminated bodies stay on the board, dimmed; follow mode dims the rest.
+      ctx.globalAlpha = (player.a ? 1 : 0.3) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
       player.b.forEach((index, part) => {
         const x = index % snapshot.b.c; const y = Math.floor(index / snapshot.b.c);
         const pad = Math.max(1, cell * .09);
         ctx.fillStyle = color;
         ctx.fillRect(ox + x * cell + pad, oy + y * cell + pad, cell - pad * 2, cell - pad * 2);
-        if (player.i === this.ownParticipantId && part === 0) {
+        const ringed = (player.i === this.ownParticipantId || player.i === this.followId) && part === 0;
+        if (ringed) {
           // Own head gets a white + accent double outline, so color is never the
           // only way a player can spot their own snake.
           ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, cell * .1);
@@ -132,10 +217,26 @@ export class MultiplayerGameRenderer {
           ctx.strokeRect(ox + x * cell + pad * 2, oy + y * cell + pad * 2, cell - pad * 4, cell - pad * 4);
         }
       });
+      ctx.globalAlpha = 1;
     }
+
+    // Client-only death dust. Positions were derived above from the
+    // authoritative body cells; nothing about particles crossed the socket.
+    for (const particle of this.dust) {
+      const px = ox + particle.x * cell;
+      const py = oy + particle.y * cell;
+      ctx.globalAlpha = Math.max(0, Math.min(1, particle.life));
+      ctx.fillStyle = particle.color;
+      const size = Math.max(1, particle.size * cell * particle.life);
+      ctx.fillRect(px - size / 2, py - size / 2, size, size);
+    }
+    ctx.globalAlpha = 1;
   }
 
   destroy() {
+    if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
+    this.dustFrame = 0;
+    this.dust = [];
     this.resizeObserver?.disconnect();
     this.themeObserver?.disconnect();
   }

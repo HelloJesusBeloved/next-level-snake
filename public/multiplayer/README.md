@@ -104,10 +104,22 @@ the Puma master (`config/puma.rb`) under the step-7 database lease; set
 `MULTIPLAYER_SIMULATOR=false` to run `bundle exec rails multiplayer:simulate`
 separately instead. See `rails/docs/multiplayer-step-08-brawl-gameplay.md`.
 
+## Scoreboards, dust, and spectators (step 9)
+
+`game-ui.js` holds the testable presentational helpers (survival formatting,
+standings ordering, elimination diffing, results table, overlay).
+`game-renderer.js` adds length/survival/status scoreboard columns, local death
+dust (never transmitted, disabled under reduced motion) and a follow
+highlight. `lobby.js` adds Board/Standings/Lobby panes, the follow picker, the
+elimination overlay and final results. Late joiners subscribe to
+`MatchChannel` as server-flagged spectators. See
+`rails/docs/multiplayer-step-09-brawl-ux.md`.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)
 - `configuration.js` — identity palette, host board controls and per-tab capability reports
+- `game-ui.js` — pure scoreboard/results/overlay helpers (directly tested)
 - `lobby.js` — roster, actions, polling fallback, Action Cable client,
   sharing panel, QR drawing and the camera scanner
 - `actioncable.esm.js` — official Action Cable client, vendored from the gem

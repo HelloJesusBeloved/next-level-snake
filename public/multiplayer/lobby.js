@@ -14,6 +14,7 @@
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step6';
 import { MultiplayerGameRenderer } from './game-renderer.js?v=step8';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -108,6 +109,18 @@ export function mountLobby(root) {
     gameStatus: $('mp-game-status'),
     gameTick: $('mp-game-tick'),
     gameInputStatus: $('mp-game-input-status'),
+    gameTabs: $('mp-game-tabs'),
+    gameBoardPane: $('mp-board-pane'),
+    gameStandingsPane: $('mp-standings-pane'),
+    followSelect: $('mp-follow'),
+    followRow: $('mp-follow-row'),
+    results: $('mp-results'),
+    resultsTable: $('mp-results-table'),
+    eliminated: $('mp-eliminated'),
+    spectateBtn: $('mp-spectate'),
+    lobbyViewBtn: $('mp-lobby-view'),
+    duelBtn: $('mp-duel-entry'),
+    boardViewBtn: $('mp-board-view'),
     readyToggle: $('mp-ready-toggle'),
     start: $('mp-start'),
     again: $('mp-again'),
@@ -265,17 +278,82 @@ export function mountLobby(root) {
 
   function renderGame() {
     const match = state.match;
-    const participantId = state.member?.match_participant_id;
-    const relevant = match && participantId &&
-      ['pending', 'running', 'paused', 'completed'].includes(match.status);
+    const relevant = match && ['pending', 'running', 'paused', 'completed'].includes(match.status);
     if (el.game) el.game.hidden = !relevant;
     if (!relevant) {
       gameRenderer?.setOwnParticipant(null);
+      hideEliminationOverlay(document);
       if (el.gameInputStatus) el.gameInputStatus.textContent = '';
       return;
     }
+    const participantId = state.member?.match_participant_id;
     gameRenderer?.setOwnParticipant(participantId);
+    gameRenderer?.setTickMs(match.tick_ms);
     if (el.gameTick && state.gameSnapshot) el.gameTick.textContent = `Tick ${state.gameSnapshot.t}`;
+    renderFollowOptions();
+    if (state.gameSnapshot) renderStandingsTable();
+    if (match.status === 'completed' && state.gameSnapshot) renderResults();
+  }
+
+  // Board / Standings / Lobby switcher. Purely presentational: membership,
+  // sockets and the simulation are untouched, so nothing here can drop a seat.
+  function showGamePane(name) {
+    if (el.gameBoardPane) el.gameBoardPane.hidden = name !== 'board';
+    if (el.gameStandingsPane) el.gameStandingsPane.hidden = name !== 'standings';
+    const backRow = document.getElementById('mp-back-to-board-row');
+    if (backRow) backRow.hidden = !(name === 'lobby' && state.match);
+    if (el.gameTabs) {
+      el.gameTabs.querySelectorAll('[data-game-pane]').forEach((button) => {
+        button.setAttribute('aria-pressed', String(button.dataset.gamePane === name));
+      });
+    }
+    if (name === 'lobby' && el.room) {
+      el.game.hidden = true;
+      el.room.scrollIntoView({ block: 'nearest' });
+    } else if (el.game && state.match) {
+      el.game.hidden = false;
+    }
+  }
+
+  // Spectator perspective picker: follow one living player (ring highlight +
+  // their name in the status line), or watch the whole board.
+  function renderFollowOptions() {
+    const select = el.followSelect;
+    if (!select || !state.gameSnapshot) return;
+    const living = (state.gameSnapshot.p || []).filter((player) => player.a);
+    const current = [...select.options].map((option) => option.value);
+    const wanted = ['', ...living.map((player) => String(player.i))];
+    if (current.join() !== wanted.join()) {
+      select.replaceChildren();
+      const all = document.createElement('option');
+      all.value = '';
+      all.textContent = 'Whole board';
+      select.append(all);
+      for (const player of living) {
+        const option = document.createElement('option');
+        option.value = String(player.i);
+        option.textContent = `Follow ${player.n}`;
+        select.append(option);
+      }
+    }
+    if (el.followRow) el.followRow.hidden = living.length === 0;
+  }
+
+  function renderStandingsTable() {
+    const container = document.getElementById('mp-standings-table');
+    if (!container || !state.gameSnapshot) return;
+    container.replaceChildren();
+    container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
+      state.member?.match_participant_id));
+  }
+
+  function renderResults() {
+    const container = el.resultsTable;
+    if (!container || !state.gameSnapshot) return;
+    container.replaceChildren();
+    container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
+      state.member?.match_participant_id));
+    if (el.results) el.results.hidden = false;
   }
 
   // ---- server conversation ---------------------------------------------------
@@ -684,8 +762,9 @@ export function mountLobby(root) {
 
   function connectMatchCable(match) {
     const matchId = match && match.id;
-    const participantId = state.member && state.member.match_participant_id;
-    if (!matchId || !participantId || !consumer || !state.room) {
+    // Participants AND late-joining spectators subscribe: the server marks
+    // spectators itself and refuses their direction intents.
+    if (!matchId || !consumer || !state.room || !state.member) {
       disconnectMatchCable();
       return;
     }
@@ -716,7 +795,11 @@ export function mountLobby(root) {
     if (message.type === 'snapshot') {
       const prior = state.gameSnapshot;
       if (prior && Number(message.t) < Number(prior.t)) return; // stale frame after reconnect
+      if (typeof message.spectator === 'boolean') {
+        state.match = { ...(state.match || {}), spectator: message.spectator };
+      }
       if (!gameRenderer || !gameRenderer.accept(message)) return;
+      const died = newlyEliminated(prior, message);
       state.gameSnapshot = message;
       state.match = { ...(state.match || {}), id: Number(message.m), status: message.s,
                       tick: message.t, columns: message.b?.c, rows: message.b?.r };
@@ -731,9 +814,22 @@ export function mountLobby(root) {
         el.game.dataset.ownAlive = String(own.a);
       }
       el.game?.setAttribute('data-tick', String(message.t));
+      const ownId = state.member?.match_participant_id;
+      if (died.includes(ownId)) {
+        const entry = message.q?.find((row) => row.i === ownId);
+        showEliminationOverlay(document, {
+          name: 'Your snake',
+          score: entry?.sc,
+          placement: entry?.p,
+          total: message.q?.length,
+        });
+      }
       if (el.gameStatus && message.s === 'completed') {
-        const placement = message.q?.find((entry) => entry.i === state.member?.match_participant_id)?.p;
+        const placement = message.q?.find((entry) => entry.i === ownId)?.p;
         el.gameStatus.textContent = placement ? `Brawl finished · place ${placement}` : 'Brawl finished';
+        renderResults();
+      } else if (el.gameStatus && state.match?.spectator) {
+        el.gameStatus.textContent = 'Spectating the live Brawl.';
       }
       return;
     }
@@ -1150,6 +1246,23 @@ export function mountLobby(root) {
       history.replaceState({}, '', '/multiplayer');
     });
   });
+  el.gameTabs?.querySelectorAll('[data-game-pane]').forEach((button) => {
+    button.addEventListener('click', () => showGamePane(button.dataset.gamePane));
+  });
+  on(el.boardViewBtn, 'click', () => { if (el.game) el.game.hidden = false; showGamePane('board'); });
+  on(el.followSelect, 'change', () => {
+    const value = el.followSelect.value ? Number(el.followSelect.value) : null;
+    gameRenderer?.setFollow(value);
+    const player = state.gameSnapshot?.p?.find((entry) => entry.i === value);
+    if (el.gameStatus && player) el.gameStatus.textContent = `Following ${player.n} · ${player.sc} points`;
+  });
+  on(el.spectateBtn, 'click', () => {
+    // Stay on the board as a spectator: keep the socket, stop steering UI.
+    hideEliminationOverlay(document);
+    showGamePane('board');
+    if (el.gameStatus) el.gameStatus.textContent = 'Spectating the live Brawl.';
+  });
+  on(el.lobbyViewBtn, 'click', () => showGamePane('lobby'));
   on(el.start, 'click', () => {
     roomAction('start').then((out) => {
       if (out && out.ok) flash(out.json.notice || 'Ready to start.', 'info');
