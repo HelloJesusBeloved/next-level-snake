@@ -40,6 +40,10 @@ module Simulation
 
     attr_reader :id, :config, :rules, :snakes, :tick, :status, :end_reason,
                 :started_at_tick, :ended_at_tick, :columns, :rows
+    # Server wall clock (epoch ms) stamped onto each snapshot by the leased
+    # owner. Clients may render a countdown from it; they never decide when a
+    # freeze starts or ends.
+    attr_accessor :server_time_ms
 
     def initialize(id:, config:, participants:, state: nil)
       @id = id
@@ -47,6 +51,7 @@ module Simulation
       @rules = config.rules
       @columns = config.columns
       @rows = config.rows
+      @server_time_ms = nil
       @rng = state ? Rng.restore(state.fetch("rng")) : Rng.new(config.seed)
       @snakes = []
       @shared_food = []
@@ -133,6 +138,11 @@ module Simulation
       return :not_a_participant unless snake
       return :match_not_running unless running?
       return :eliminated unless snake.alive
+      # Step 10: a disconnected player's commands are never authoritative.
+      # Frozen and unattended snakes keep moving (or stay still) without any
+      # browser input until the server observes a live connection again.
+      return :frozen if snake.frozen?
+      return :disconnected unless snake.connection_state == "connected"
       unless tick.is_a?(Integer) && tick.between?(@tick - window, @tick + window)
         return :invalid_tick
       end
@@ -162,7 +172,10 @@ module Simulation
       raise StateError, "match is #{status}" unless running?
 
       next_tick = @tick + 1
-      movers = alive_snakes
+      # Frozen snakes are present but immobile. They are NOT elimination
+      # candidates and they never accrue survival ticks while frozen.
+      movers = alive_snakes.reject(&:frozen?)
+      frozen_snakes.each { |snake| snake.frozen_ticks += 1 if snake.alive? }
       targets = {}
       movers.each do |snake|
         direction = snake.next_direction!
@@ -216,6 +229,62 @@ module Simulation
     end
 
     # ---- world information ---------------------------------------------------
+
+    # ---- connection lifecycle (step 10) -------------------------------------
+    #
+    # Every method below takes SERVER time in epoch milliseconds. The Rails
+    # adapter (Match#sync_connection_states!) is the only caller; no state
+    # transition is ever driven by the disconnected browser.
+
+    # Freezes an alive snake in place until the server-owned deadline. Position,
+    # length, direction, points, food and queued turns are all preserved.
+    def freeze_player!(player_id, now_ms:, until_ms:)
+      snake = player(player_id)
+      return :not_a_participant unless snake
+      return :eliminated unless snake.alive?
+
+      snake.freeze!(until_ms: until_ms)
+      :frozen
+    end
+
+    # Reconnection within grace (or later while still alive): restore control.
+    def resume_player!(player_id)
+      snake = player(player_id)
+      return :not_a_participant unless snake
+
+      # A dead participant reconnects as an eliminated spectator; it can never
+      # be handed back control of a body that no longer moves.
+      snake.unfreeze!(connection_state: "connected")
+      snake.alive? ? :resumed : :eliminated
+    end
+
+    # Grace expired: the snake is UNFROZEN and keeps moving in its last valid
+    # direction. It is never eliminated merely for failing to reconnect.
+    def release_player!(player_id)
+      snake = player(player_id)
+      return :not_a_participant unless snake
+      return :eliminated unless snake.alive?
+
+      snake.unfreeze!(connection_state: "unattended")
+      :released
+    end
+
+    # Server-owned deadline sweep: called by the leased owner on its own clock.
+    def expire_freezes!(now_ms:)
+      released = []
+      snakes.each do |snake|
+        next unless snake.frozen?
+        next if snake.frozen_until_ms.nil? || snake.frozen_until_ms > now_ms
+
+        snake.unfreeze!(connection_state: "unattended")
+        released << snake.id
+      end
+      released
+    end
+
+    def frozen_snakes
+      snakes.select(&:frozen?)
+    end
 
     def player(player_id)
       snakes.find { |snake| snake.id == player_id }

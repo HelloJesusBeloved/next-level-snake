@@ -29,7 +29,10 @@ module Simulation
                                                 "sc" => entry.score, "sv" => entry.survived_ticks,
                                                 "lg" => entry.longest_length } },
         "p" => world.snakes.map { |snake| encode_player(snake, world.columns) },
-        "f" => world.foods.map { |food| encode_food(food, world.columns) }
+        "f" => world.foods.map { |food| encode_food(food, world.columns) },
+        # Server wall clock for the grace countdown. The browser may render a
+        # countdown from this, but transitions remain server-owned.
+        "ts" => (world.server_time_ms || 0)
       }
     end
 
@@ -39,7 +42,12 @@ module Simulation
         "sc" => snake.score, "l" => snake.length, "a" => snake.alive,
         "d" => snake.direction.name, "b" => snake.body.map { |x, y| y * columns + x },
         "sv" => snake.survived_ticks, "lg" => snake.longest_length,
-        "el" => snake.eliminated_at_tick, "er" => snake.elimination_reason&.to_s
+        "el" => snake.eliminated_at_tick, "er" => snake.elimination_reason&.to_s,
+        # Step 10 connection state. "fr" drives the red loading ring on the
+        # head; "gu" is the absolute server deadline (epoch ms); "cy" is the
+        # server's authoritative connection classification.
+        "fr" => snake.frozen?, "gu" => snake.frozen_until_ms, "cy" => snake.connection_state,
+        "fz" => snake.frozen_ticks
       }
     end
 

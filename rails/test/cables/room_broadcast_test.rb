@@ -121,13 +121,19 @@ class RoomBroadcastTest < ActionDispatch::IntegrationTest
     first_a = @alice.events(2)
     first_b = @bob.events(2)
     assert_equal 2, first_a.size, "A gets member_left and host_changed"
-    assert_equal first_a, first_b, "B sees exactly the same sequence"
-    assert_equal %w[member_left host_changed], first_a.map { |e| e["event"] }
-    assert_equal first_a.first["v"], first_a.last["v"],
-                 "one logical change shares a single version"
-    assert first_a.last["host"], "the host_changed event names the new host"
-    assert_not_equal first_a.first["member"], first_a.last["host"],
-                     "the crown left the departing member"
+    # Action Cable delivers the two NOTIFYs of one logical change through
+    # independent per-subscription streams, so their interleaving is not
+    # guaranteed. Both clients must still see the same events at the same
+    # single version; order within one version carries no meaning.
+    signature = ->(events) { events.map { |event| [event["event"], event["v"]] }.sort }
+    assert_equal signature.call(first_a), signature.call(first_b),
+                 "B sees exactly the same events and version"
+    assert_equal %w[host_changed member_left], first_a.map { |e| e["event"] }.sort
+    left = first_a.find { |event| event["event"] == "member_left" }
+    changed = first_a.find { |event| event["event"] == "host_changed" }
+    assert_equal left["v"], changed["v"], "one logical change shares a single version"
+    assert changed["host"], "the host_changed event names the new host"
+    assert_not_equal left["member"], changed["host"], "the crown left the departing member"
 
     roster = get_json(guest, "/api/rooms/#{@room.invitation_code}")
     successor = roster[:room][:members].find { |m| m[:display_name] == "Grace" }

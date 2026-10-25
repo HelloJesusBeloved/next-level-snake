@@ -175,6 +175,10 @@ module Api
       membership = require_host!
       return unless membership
 
+      # Step 10: a finished room may start the next Brawl directly (no reload,
+      # no separate "back to lobby" round trip). Everyone's client switches to
+      # the new match id as soon as this returns or RoomChannel announces it.
+      rematch = @room.finished?
       @room.start_match!(actor: membership)
       @room.reload
       match = @room.live_match
@@ -182,8 +186,10 @@ module Api
       render json: state_payload(@room, membership.reload).merge(
         started: true,
         engine_ready: true,
+        rematch: rematch,
         match: match&.client_summary(participant_id: participant&.id),
-        notice: "Brawl started — points decide the winner."
+        notice: rematch ? "Next Brawl started — everyone is in the new round." :
+                          "Brawl started — points decide the winner."
       ), status: :created
     rescue Room::InvalidTransition => error
       eligibility = @room&.start_eligibility || {}
@@ -369,7 +375,8 @@ module Api
           room: room_payload(room, membership),
           member: membership && member_payload(membership, membership,
                                                 match_participant_id: participant&.id,
-                                                last_input_seq: participant&.last_input_seq),
+                                                last_input_seq: participant&.last_input_seq,
+                                                connection: participant&.connection_payload),
           viewer: viewer_payload,
           config: config_payload
         }
@@ -400,7 +407,8 @@ module Api
           participant = participants_by_membership[member.id]
           member_payload(member, viewer_membership, at: at,
                          match_participant_id: participant&.id,
-                         last_input_seq: participant&.last_input_seq)
+                         last_input_seq: participant&.last_input_seq,
+                         connection: participant&.connection_payload)
         end,
         counts: {
           members: members.size,
@@ -410,14 +418,16 @@ module Api
         },
         start: room.start_eligibility(at: at),
         host_grace_seconds: Room.config.host_grace,
-        idle_expiry_seconds: Room.config.room_idle
+        idle_expiry_seconds: Room.config.room_idle,
+        freeze_grace_seconds: Match.freeze_grace_seconds,
+        presence_timeout_seconds: Match.presence_stale_seconds
       }
     end
 
     # Deliberately small: ids are per-room and opaque, and no account names,
     # guest tokens or public ids are exposed to other players.
     def member_payload(member, viewer_membership = nil, at: Time.current,
-                       match_participant_id: nil, last_input_seq: nil)
+                       match_participant_id: nil, last_input_seq: nil, connection: nil)
       {
         id: member.id,
         display_name: member.display_name,
@@ -426,6 +436,7 @@ module Api
         device: member.device_kind(at: at),
         match_participant_id: match_participant_id,
         last_input_seq: last_input_seq,
+        connection: connection,
         host: member.host?,
         ready: member.ready?,
         state: member.state,

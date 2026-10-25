@@ -11,6 +11,11 @@ Rails.application.config.x.multiplayer = ActiveSupport::OrderedOptions.new.tap d
     value.match?(/\A\d+\z/) && value.to_i.positive? ? value.to_i : default
   end
 
+  def cfg.integer(key, default)
+    value = ENV[key].to_s.strip
+    value.match?(/\A\d+\z/) ? value.to_i : default
+  end
+
   # A member is "online" while seen within this window. The page polls well
   # inside it, so one missed poll does not make somebody vanish.
   cfg.presence_timeout = cfg.seconds("MULTIPLAYER_PRESENCE_TIMEOUT", 90)
@@ -27,6 +32,28 @@ Rails.application.config.x.multiplayer = ActiveSupport::OrderedOptions.new.tap d
 
   # An empty, untouched room is disbanded as "expired" after this.
   cfg.room_idle = cfg.seconds("MULTIPLAYER_ROOM_IDLE", 1800)
+
+  # ---- Brawl disconnection handling (step 10) ------------------------------
+  # A MatchChannel socket is considered lost once no heartbeat has arrived for
+  # this long. Two open tabs keep the player connected as long as either one
+  # beats; only losing ALL of them starts the freeze.
+  cfg.match_presence_timeout = cfg.seconds("MULTIPLAYER_MATCH_PRESENCE_TIMEOUT", 90)
+
+  # The server-owned grace window. A disconnected snake is frozen exactly this
+  # long, then resumes moving in its last valid direction. It is never killed
+  # for failing to reconnect.
+  cfg.brawl_freeze_grace = cfg.seconds("MULTIPLAYER_BRAWL_FREEZE_GRACE", 30)
+
+  # Anti-abuse: at most this many grace windows per participant per match, and
+  # never two within the cooldown. Further drops leave the snake unattended
+  # (moving) instead of granting another free freeze.
+  cfg.brawl_freeze_windows = cfg.integer("MULTIPLAYER_BRAWL_FREEZE_WINDOWS", 2)
+  cfg.brawl_freeze_cooldown = cfg.seconds("MULTIPLAYER_BRAWL_FREEZE_COOLDOWN", 60)
+
+  # A live match with no lease, no recoverable checkpoint and no progress for
+  # this long cannot be resumed safely; it is marked interrupted (never with
+  # invented standings or a winner). Completed matches are never touched.
+  cfg.orphan_match_grace = cfg.seconds("MULTIPLAYER_ORPHAN_MATCH_GRACE", 60)
 
   # Rooms create small and expand by themselves as players arrive (you are
   # never asked for a size); this is the hard ceiling they can expand into.

@@ -17,6 +17,10 @@ export class MultiplayerGameRenderer {
     this.dustFrame = 0;
     this.followId = null;
     this.tickMs = 105;
+    // Step 10: the red classic loading ring on a disconnected player's head.
+    // This is presentation only — the SERVER owns the freeze and its deadline.
+    this.frozenFrame = 0;
+    this.serverOffsetMs = 0;
     this.reducedMotion = typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.resizeObserver = typeof ResizeObserver === 'function'
@@ -24,6 +28,21 @@ export class MultiplayerGameRenderer {
     this.resizeObserver?.observe(canvas);
     this.themeObserver = new MutationObserver(() => this.draw());
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+
+  // A new match must start from a clean renderer. Without this, the previous
+  // round's snapshot made every frame of the rematch look stale and the page
+  // needed a full refresh to show the new game.
+  reset() {
+    this.snapshot = null;
+    this.dust = [];
+    this.followId = null;
+    this.serverOffsetMs = 0;
+    if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
+    this.dustFrame = 0;
+    this.drawScoreboard();
+    this.draw();
+    return this;
   }
 
   setOwnParticipant(id) {
@@ -65,9 +84,13 @@ export class MultiplayerGameRenderer {
     }
     if (snapshot.f.some((food) => !Number.isInteger(food.c) || food.c < 0 || food.c >= total)) return false;
     this.spawnDustForNewlyEliminated(snapshot);
+    if (Number.isFinite(snapshot.ts) && snapshot.ts > 0) {
+      this.serverOffsetMs = snapshot.ts - Date.now();
+    }
     this.snapshot = snapshot;
     this.drawScoreboard();
     this.draw();
+    if (snapshot.p.some((player) => player.fr)) this.pumpFreezeRings();
     if (this.status) {
       const own = snapshot.p.find((player) => player.i === this.ownParticipantId);
       this.status.textContent = snapshot.s === 'completed'
@@ -123,6 +146,29 @@ export class MultiplayerGameRenderer {
 
   dustCountForTests() { return this.dust.length; }
 
+  // Remaining grace from SERVER time. Used for the label only; when this hits
+  // zero the browser does nothing — the owner releases the snake and the next
+  // snapshot shows it moving.
+  graceSecondsLeft(player) {
+    if (!Number.isFinite(player.gu)) return 0;
+    return Math.max(0, Math.ceil((player.gu - (Date.now() + this.serverOffsetMs)) / 1000));
+  }
+
+  // Keeps a smooth spinner while any snake is frozen. Stops as soon as the
+  // server unfreezes everyone, so an idle board never burns animation frames.
+  pumpFreezeRings() {
+    if (this.frozenFrame) return;
+    const step = () => {
+      this.frozenFrame = 0;
+      this.draw();
+      this.drawScoreboard();
+      if (this.snapshot && this.snapshot.p.some((player) => player.fr)) {
+        this.frozenFrame = requestAnimationFrame(step);
+      }
+    };
+    this.frozenFrame = requestAnimationFrame(step);
+  }
+
   drawScoreboard() {
     if (!this.scoreboard || !this.snapshot) return;
     this.scoreboard.replaceChildren();
@@ -147,7 +193,10 @@ export class MultiplayerGameRenderer {
       survived.textContent = MultiplayerGameRenderer.formatSurvival(player.sv, this.tickMs);
       row.append(color, place, name, score, length, survived);
       const tag = document.createElement('span');
-      if (player.a) {
+      if (player.a && player.fr) {
+        tag.className = 'mp-game-score__tag is-frozen';
+        tag.textContent = `frozen ${this.graceSecondsLeft(player)}s`;
+      } else if (player.a) {
         tag.className = 'mp-game-score__tag is-alive'; tag.textContent = 'alive';
       } else {
         tag.className = 'mp-game-score__tag'; tag.textContent = 'out';
@@ -220,6 +269,34 @@ export class MultiplayerGameRenderer {
       ctx.globalAlpha = 1;
     }
 
+    // Step 10: disconnected snakes stay exactly where the server left them,
+    // with a small red classic loading circle on their head. Purely visual;
+    // the server already paused the body and owns the deadline.
+    for (const player of snapshot.p) {
+      if (!player.a || !player.fr || !Array.isArray(player.b) || player.b.length === 0) continue;
+      const index = player.b[0];
+      const x = index % snapshot.b.c; const y = Math.floor(index / snapshot.b.c);
+      const cx = ox + (x + 0.5) * cell;
+      const cy = oy + (y + 0.5) * cell;
+      const radius = Math.max(3.5, cell * 0.34);
+      const phase = (performance.now() / 700) % 1;
+      ctx.save();
+      ctx.lineCap = 'round';
+      ctx.globalAlpha = 0.35;
+      ctx.strokeStyle = 'rgba(0,0,0,.65)';
+      ctx.lineWidth = Math.max(2, cell * 0.16);
+      ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = '#ff3b30';
+      ctx.lineWidth = Math.max(2, cell * 0.16);
+      ctx.beginPath();
+      ctx.arc(cx, cy, radius, phase * Math.PI * 2, phase * Math.PI * 2 + Math.PI * 1.25);
+      ctx.stroke();
+      ctx.fillStyle = '#ff3b30';
+      ctx.beginPath(); ctx.arc(cx, cy, Math.max(1.2, cell * 0.1), 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+    }
+
     // Client-only death dust. Positions were derived above from the
     // authoritative body cells; nothing about particles crossed the socket.
     for (const particle of this.dust) {
@@ -235,6 +312,8 @@ export class MultiplayerGameRenderer {
 
   destroy() {
     if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
+    if (this.frozenFrame) cancelAnimationFrame(this.frozenFrame);
+    this.frozenFrame = 0;
     this.dustFrame = 0;
     this.dust = [];
     this.resizeObserver?.disconnect();

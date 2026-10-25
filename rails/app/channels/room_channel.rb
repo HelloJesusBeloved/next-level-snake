@@ -49,7 +49,10 @@ class RoomChannel < ApplicationCable::Channel
     return reject_with("not_a_member", "You are not in this room.") unless membership&.active?
 
     stream_from self.class.stream_for(@room)
-    membership.mark_seen! # this socket is proof of life right now
+    # This socket is proof of life right now. A reconnecting lobby player keeps
+    # their seat, their crown (inside host grace) and their prepared colors;
+    # nothing about a dropped socket disbands the party.
+    @room.touch_member_presence!(membership)
   end
 
   # ---- channel actions (re-authorized on every call) --------------------------
@@ -95,7 +98,7 @@ class RoomChannel < ApplicationCable::Channel
                         message: "You are no longer in this room." })
     end
 
-    membership.mark_seen!
+    @room.touch_member_presence!(membership)
     transmit({ event: "heartbeat", v: @room.reload.version })
   end
 end

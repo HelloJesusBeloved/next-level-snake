@@ -27,6 +27,16 @@ simulator_stop = false
 simulator_stopping = -> { simulator_stop_mutex.synchronize { simulator_stop } }
 
 after_booted do
+  # Step 10: before simulating anything, reconcile matches left behind by a
+  # crashed process. A match with a checkpoint is recoverable by lease
+  # takeover; one without is marked interrupted WITHOUT standings or a winner.
+  # Completed results are never touched.
+  begin
+    Rails.application.executor.wrap { Match.recover_orphans! if defined?(Match) }
+  rescue StandardError => error
+    Rails.logger.error("Orphan match recovery failed: #{error.class}: #{error.message}")
+  end
+
   enabled = ENV.fetch("MULTIPLAYER_SIMULATOR", "true").to_s.downcase
   unless %w[0 false off no].include?(enabled)
     simulator_thread = Thread.new do

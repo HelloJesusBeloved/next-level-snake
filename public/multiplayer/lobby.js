@@ -107,6 +107,8 @@ export function mountLobby(root) {
     gameCanvas: $('mp-game-canvas'),
     gameScores: $('mp-game-scores'),
     gameStatus: $('mp-game-status'),
+    brawlConn: $('mp-brawl-conn'),
+    brawlConnText: $('mp-brawl-conn-text'),
     gameTick: $('mp-game-tick'),
     gameInputStatus: $('mp-game-input-status'),
     gameTabs: $('mp-game-tabs'),
@@ -150,6 +152,10 @@ export function mountLobby(root) {
     inputSeq: 0,
     buffered: [],
     cable: { status: 'idle', reason: null },
+    // Step 10: presentation-only mirror of the server's connection state.
+    matchLink: 'idle',
+    freezeTimer: null,
+    resumedTimer: null,
   };
   let consumer = null;
   let subscription = null;
@@ -157,6 +163,7 @@ export function mountLobby(root) {
   let matchSubscription = null;
   let matchSubscriptionId = null;
   let heartbeatTimer = null;
+  let matchHeartbeatTimer = null;
   let refreshTimer = null;
   const pollInterval = Math.max(2, parseInt(root.dataset.pollInterval, 10) || 5) * 1000;
   let timer = null;
@@ -193,6 +200,58 @@ export function mountLobby(root) {
   }
 
   // ---- rendering ------------------------------------------------------------
+
+  // ---- server-owned connection state (step 10) ------------------------------
+  //
+  // The browser renders labels and a countdown only. It NEVER starts, extends
+  // or ends the freeze; every transition arrives as an authoritative
+  // MatchChannel event or snapshot from the leased simulator owner.
+  function setBrawlConn(kind, text) {
+    state.matchLink = kind;
+    if (el.brawlConn) el.brawlConn.dataset.state = kind;
+    if (el.brawlConnText) el.brawlConnText.textContent = text;
+  }
+
+  function stopFreezeCountdown() {
+    if (state.freezeTimer) { window.clearInterval(state.freezeTimer); state.freezeTimer = null; }
+  }
+
+  function stopResumedTimer() {
+    if (state.resumedTimer) { window.clearTimeout(state.resumedTimer); state.resumedTimer = null; }
+  }
+
+  function showGraceCountdown(deadlineIso) {
+    stopFreezeCountdown();
+    const deadline = Date.parse(deadlineIso || '');
+    const tick = () => {
+      if (!Number.isFinite(deadline)) {
+        setBrawlConn('lost', 'Connection lost — your snake is frozen while we reconnect…');
+        return;
+      }
+      const seconds = Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+      setBrawlConn('lost', `Connection lost — snake frozen, ${seconds}s grace left. Reconnecting…`);
+      if (seconds <= 0) {
+        stopFreezeCountdown();
+        setBrawlConn('warn', 'Grace expired — your snake keeps moving on its own. Reconnecting…');
+      }
+    };
+    tick();
+    state.freezeTimer = window.setInterval(tick, 1000);
+  }
+
+  function markResumed() {
+    stopFreezeCountdown();
+    stopResumedTimer();
+    setBrawlConn('live', 'Resumed — authoritative state restored, controls live.');
+    state.resumedTimer = window.setTimeout(() => {
+      if (state.matchLink === 'live') setBrawlConn('live', 'Live');
+    }, 5000);
+  }
+
+  function markSpectating() {
+    stopFreezeCountdown();
+    setBrawlConn('spectating', 'Spectating — your snake is out; the Brawl continues.');
+  }
 
   function render() {
     const inRoom = !!state.room;
@@ -283,6 +342,7 @@ export function mountLobby(root) {
     if (!relevant) {
       gameRenderer?.setOwnParticipant(null);
       hideEliminationOverlay(document);
+      if (el.results) el.results.hidden = true;
       if (el.gameInputStatus) el.gameInputStatus.textContent = '';
       return;
     }
@@ -293,6 +353,7 @@ export function mountLobby(root) {
     renderFollowOptions();
     if (state.gameSnapshot) renderStandingsTable();
     if (match.status === 'completed' && state.gameSnapshot) renderResults();
+    else if (el.results) el.results.hidden = true;
   }
 
   // Board / Standings / Lobby switcher. Purely presentational: membership,
@@ -374,8 +435,25 @@ export function mountLobby(root) {
         state.inputSeq = 0;
       }
       if (state.match && state.match.id !== previousMatchId) {
+        // A rematch is a NEW round. Reset every piece of round-local state in
+        // the browser (renderer, results, banners, sequence mirror) so the
+        // server's new snapshots render immediately — no page refresh.
         state.gameSnapshot = null;
         state.inputSeq = Number(state.member?.last_input_seq || 0);
+        gameRenderer?.reset();
+        hideEliminationOverlay(document);
+        stopFreezeCountdown();
+        stopResumedTimer();
+        setBrawlConn('live', state.match.spectator ? 'Spectating the live Brawl.' : 'Live');
+        if (el.results) el.results.hidden = true;
+        if (el.gameInputStatus) { el.gameInputStatus.textContent = ''; el.gameInputStatus.removeAttribute('data-kind'); }
+      }
+      if (!state.match) {
+        state.gameSnapshot = null;
+        gameRenderer?.reset();
+        if (el.results) el.results.hidden = true;
+        setBrawlConn('live', 'Waiting for the next Brawl…');
+        disconnectMatchCable();
       }
       if (state.room && typeof out.json.room.version === 'number') {
         // Snapshots are authoritative: adopting their version is what makes
@@ -738,6 +816,7 @@ export function mountLobby(root) {
 
   function disconnectCable() {
     disconnectMatchCable();
+    stopMatchHeartbeat();
     stopHeartbeat();
     if (consumer) { try { consumer.disconnect(); } catch (err) { /* closing anyway */ } }
     consumer = null;
@@ -771,18 +850,52 @@ export function mountLobby(root) {
     if (matchSubscription && matchSubscriptionId === matchId) return;
     disconnectMatchCable();
     matchSubscriptionId = matchId;
+    // A fresh subscription is always seeded with a complete snapshot; drop any
+    // frame from a previous round so its match id cannot shadow the new one.
+    gameRenderer?.reset();
+    state.gameSnapshot = null;
+    if (el.results) el.results.hidden = true;
     matchSubscription = consumer.subscriptions.create(
       { channel: 'MatchChannel', match: matchId },
       {
-        connected() { renderGame(); },
-        disconnected() { if (el.gameStatus) el.gameStatus.textContent = 'Reconnecting to Brawl…'; },
-        rejected() { if (el.gameStatus) el.gameStatus.textContent = 'This Brawl is no longer available.'; },
+        connected() {
+          renderGame();
+          startMatchHeartbeat();
+          // The seed snapshot follows immediately; this also refreshes the
+          // server-side input sequence mirror after a gap.
+          refresh();
+        },
+        disconnected() {
+          stopMatchHeartbeat();
+          setBrawlConn('lost', 'Connection lost — reconnecting… your snake may be frozen for up to 30s.');
+        },
+        rejected() {
+          stopMatchHeartbeat();
+          setBrawlConn('warn', 'This Brawl is no longer available.');
+        },
         received(message) { onMatchMessage(message); },
       },
     );
   }
 
+  // One heartbeat per tab. Several tabs therefore keep the player connected as
+  // long as ANY of them beats; only all-tabs-silent starts the server grace.
+  function startMatchHeartbeat() {
+    stopMatchHeartbeat();
+    matchHeartbeatTimer = window.setInterval(() => {
+      if (matchSubscription && consumer?.connection?.isOpen?.()) {
+        matchSubscription.perform('heartbeat');
+      }
+    }, 10_000);
+  }
+
+  function stopMatchHeartbeat() {
+    if (matchHeartbeatTimer) { window.clearInterval(matchHeartbeatTimer); matchHeartbeatTimer = null; }
+  }
+
   function disconnectMatchCable() {
+    stopMatchHeartbeat();
+    stopFreezeCountdown();
     if (matchSubscription) {
       try { matchSubscription.unsubscribe(); } catch (err) { /* room teardown */ }
     }
@@ -792,6 +905,28 @@ export function mountLobby(root) {
 
   function onMatchMessage(message) {
     if (!message || Number(message.m || message.match) !== Number(state.match && state.match.id)) return;
+    if (message.type === 'connection') {
+      const ownId = state.member?.match_participant_id;
+      if (!ownId || Number(message.participant) !== Number(ownId)) return;
+      if (message.spectator) { markSpectating(); return; }
+      if (message.state === 'frozen' || message.state === 'disconnected') {
+        showGraceCountdown(message.grace_deadline_at);
+      } else if (message.state === 'resumed' || message.state === 'connected') {
+        markResumed();
+        refresh(); // re-read the authoritative sequence mirror
+      } else if (message.state === 'unattended') {
+        stopFreezeCountdown();
+        setBrawlConn('warn', 'Grace expired — your snake keeps moving on its own. Reconnect to take control.');
+        refresh();
+      }
+      return;
+    }
+    if (message.type === 'interrupted') {
+      stopFreezeCountdown();
+      setBrawlConn('warn', 'This Brawl was interrupted — no result was recorded. The room is back in the lobby.');
+      refresh();
+      return;
+    }
     if (message.type === 'snapshot') {
       const prior = state.gameSnapshot;
       if (prior && Number(message.t) < Number(prior.t)) return; // stale frame after reconnect
@@ -815,6 +950,18 @@ export function mountLobby(root) {
       }
       el.game?.setAttribute('data-tick', String(message.t));
       const ownId = state.member?.match_participant_id;
+      // Mirror the SERVER's frozen/spectator state on the non-blocking banner.
+      if (own) {
+        if (!own.a) {
+          markSpectating();
+        } else if (own.fr) {
+          showGraceCountdown(Number.isFinite(own.gu) ? new Date(own.gu).toISOString() : null);
+        } else if (state.matchLink === 'lost' || state.matchLink === 'warn') {
+          markResumed();
+        } else if (!state.match?.spectator) {
+          setBrawlConn('live', 'Live');
+        }
+      }
       if (died.includes(ownId)) {
         const entry = message.q?.find((row) => row.i === ownId);
         showEliminationOverlay(document, {
@@ -844,6 +991,11 @@ export function mountLobby(root) {
       } else if (el.gameInputStatus) {
         el.gameInputStatus.textContent = `Direction not accepted (${message.reason || 'resync'}).`;
         el.gameInputStatus.dataset.kind = 'error';
+        // A command that raced the disconnect is discarded by the server; the
+        // banner explains why instead of silently dropping input.
+        if (message.reason === 'frozen' || message.reason === 'disconnected') {
+          setBrawlConn('lost', 'Connection lost — input paused until the server sees you again.');
+        }
       }
       return;
     }
@@ -864,6 +1016,10 @@ export function mountLobby(root) {
     const ownId = state.member?.match_participant_id;
     const own = snapshot?.p?.find((player) => player.i === ownId);
     if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.a) return;
+    // Frozen/dead/spectating snakes never send: the server would reject these
+    // anyway, and any pre-disconnect command still in flight is discarded on
+    // the server when the socket is released.
+    if (own.fr || state.match?.spectator) return;
     state.inputSeq = Math.max(state.inputSeq, Number(state.member.last_input_seq || 0)) + 1;
     matchSubscription.perform('input', {
       v: 1, type: 'input', match: state.match.id,
@@ -1269,10 +1425,19 @@ export function mountLobby(root) {
     });
   });
   on(el.again, 'click', () => {
-    // Host-only: results -> lobby, then the normal Start Brawl is available.
-    roomAction('lobby').then((out) => {
-      if (out && out.ok) flash('Back in the lobby — start the next Brawl whenever you like.', 'info');
+    // Step 10 fix: ONE server action returns the finished room to lobby
+    // semantics and freezes the next match in the same lock. Every client
+    // switches because the room snapshot's match id changed — no refresh.
+    roomAction('start').then((out) => {
+      if (out && out.ok) flash(out.json.notice || 'Next Brawl started.', 'info');
     });
+  });
+
+  // A tab returning to the foreground proves life immediately (and is also a
+  // chance to re-subscribe if the tunnel dropped while hidden).
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    if (matchSubscription) matchSubscription.perform('heartbeat');
   });
 
   // Sharing panel (step 5): native share, always-available copy with visible

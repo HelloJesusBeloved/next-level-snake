@@ -289,6 +289,15 @@ class Room < ApplicationRecord
   # frozen before the durable Match is created.
   def start_match!(actor: nil)
     with_lock do
+      # Step 10 fix: a finished room can start the next Brawl directly. The
+      # host's "Play again" is ONE server action that returns the room to lobby
+      # semantics and freezes a fresh match in the same lock, so every client
+      # receives the new match id and resets without reloading the page.
+      if finished?
+        room_memberships.where(state: "playing").update_all(state: "joined", updated_at: Time.current)
+        room_memberships.active.update_all(spectator: false, updated_at: Time.current)
+        update!(state: "lobby", finished_at: nil)
+      end
       raise InvalidTransition, "only a lobby can start a Brawl" unless lobby?
       raise InvalidTransition, "only Brawls are available in this step" unless mode == "brawl"
       host_id = room_memberships.active.where(role: "host").pick(:id)
@@ -443,6 +452,18 @@ class Room < ApplicationRecord
   # Newest sign of life: a state change, or anything a member did.
   def last_activity_at
     [updated_at, room_memberships.maximum(:updated_at)].compact.max
+  end
+
+  # Records a socket as proof of life and tells everyone when somebody who had
+  # gone quiet is back. The crown (and the room) never move on a socket blip:
+  # only the configured grace windows below can do that.
+  def touch_member_presence!(membership, at: Time.current)
+    return nil unless membership&.active?
+
+    was_offline = membership.offline_for?(self.class.config.presence_timeout, at: at)
+    membership.mark_seen!(at: at)
+    notify_events!([[:member_resumed, { member: membership.id }]]) if was_offline
+    was_offline
   end
 
   def members_online(at: Time.current)

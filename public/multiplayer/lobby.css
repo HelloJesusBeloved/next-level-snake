@@ -426,3 +426,57 @@
 @media (max-width: 560px) {
   .mp-results-table th:nth-child(5), .mp-results-table td:nth-child(5) { display: none; }
 }
+
+/* Step 10 — Brawl connection state. Never covers the board: everyone else
+   keeps playing while one player's snake is frozen. */
+.mp-brawl-conn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0 10px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1.35;
+  background: rgba(53, 255, 107, .12);
+  color: var(--green, #35ff6b);
+  border: 1px solid rgba(53, 255, 107, .3);
+  width: fit-content;
+}
+.mp-brawl-conn[data-state='lost'] {
+  background: rgba(255, 59, 48, .14);
+  color: #ff8a84;
+  border-color: rgba(255, 59, 48, .45);
+}
+.mp-brawl-conn[data-state='warn'] {
+  background: rgba(255, 196, 0, .14);
+  color: #ffd66b;
+  border-color: rgba(255, 196, 0, .4);
+}
+.mp-brawl-conn[data-state='spectating'] {
+  background: rgba(255, 255, 255, .08);
+  color: inherit;
+  border-color: rgba(255, 255, 255, .18);
+}
+.mp-brawl-conn__ring {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  opacity: .55;
+  flex: none;
+}
+.mp-brawl-conn[data-state='lost'] .mp-brawl-conn__ring {
+  border-top-color: transparent;
+  animation: mp-freeze-ring .8s linear infinite;
+}
+@keyframes mp-freeze-ring { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .mp-brawl-conn[data-state='lost'] .mp-brawl-conn__ring { animation: none; }
+}
+.mp-game-score__tag.is-frozen {
+  color: #ff8a84;
+  border-color: rgba(255, 59, 48, .5);
+  background: rgba(255, 59, 48, .14);
+}

@@ -115,6 +115,24 @@ elimination overlay and final results. Late joiners subscribe to
 `MatchChannel` as server-flagged spectators. See
 `rails/docs/multiplayer-step-09-brawl-ux.md`.
 
+## Robust disconnects and reconnects (step 10)
+
+A Brawl now survives tunnels, closed tabs and crashes. Each tab owns one
+presence row (`match_presences`); a player is only disconnected when **all**
+tabs are gone. The server freezes the snake in place for a 30-second grace
+window (`Match#release_presence!`), keeps it visible with a red loading ring on
+its head (`game-renderer.js`), and unfreezes it in its last valid direction if
+nobody returns. Freeze deadlines, the grace countdown and the anti-abuse window
+budget live in PostgreSQL and are enforced by the leased simulator owner —
+never by a browser timer. Reconnecting clears stale commands and re-seeds the
+complete snapshot before controls return.
+
+`lobby.js` shows non-blocking `Reconnecting` / `Connection lost — frozen` /
+`Resumed` states, pings `MatchChannel` every 10 s per tab, and re-syncs on
+`visibilitychange`. The host's **Play again** starts the next Brawl in one
+action and the renderer resets on the new match id, so no page refresh is
+needed between rounds. See `rails/docs/multiplayer-step-10-reconnects.md`.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)

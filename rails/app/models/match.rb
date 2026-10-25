@@ -7,8 +7,17 @@
 # write is fenced on owner_token, so a stale owner cannot checkpoint or publish
 # results after another process took over.
 class Match < ApplicationRecord
-  STATUSES = %w[pending running paused completed abandoned].freeze
+  STATUSES = %w[pending running paused completed abandoned interrupted].freeze
   LIVE_STATUSES = %w[pending running paused].freeze
+  # ---- Step 10: connection recovery ---------------------------------------
+  FREEZE_GRACE_SECONDS = 30
+  MAX_FREEZE_WINDOWS = 2
+  FREEZE_COOLDOWN_SECONDS = 60
+  # Backstop only: Action Cable closes a dead socket on its own ping timeout,
+  # which is what normally starts the freeze immediately. The heartbeat window
+  # must stay comfortably above hidden-tab timer throttling.
+  PRESENCE_STALE_SECONDS = 90
+  ORPHAN_MATCH_GRACE_SECONDS = 60
   MODES = %w[brawl duel].freeze
   DEFAULT_DURATION_SECONDS = 180
   TICK_PRESET_MS = Simulation::Config::SPEED_PRESETS
@@ -17,6 +26,9 @@ class Match < ApplicationRecord
   belongs_to :winner_membership, class_name: "RoomMembership", optional: true
   has_many :match_participants, dependent: :delete_all, inverse_of: :match
   has_many :match_inputs, dependent: :delete_all, inverse_of: :match
+  # One row per open MatchChannel socket (one tab). Presence rows are the only
+  # source of "is any tab of this player still connected?".
+  has_many :match_presences, dependent: :delete_all, inverse_of: :match
 
   validates :mode, inclusion: { in: MODES }
   validates :status, inclusion: { in: STATUSES }
@@ -87,6 +99,37 @@ class Match < ApplicationRecord
     fallback
   end
 
+  # Tunables resolve through the shared multiplayer configuration so an
+  # operator (or a test with a controllable clock) can scale the timeline
+  # without editing code. Defaults are the step-10 contract: 30 s grace, at
+  # most two windows per match, 60 s between windows.
+  class << self
+    def tuning(key, fallback)
+      cfg = Rails.configuration.x.multiplayer
+      cfg.respond_to?(key) ? cfg.public_send(key) : fallback
+    end
+
+    def freeze_grace_seconds
+      tuning(:brawl_freeze_grace, FREEZE_GRACE_SECONDS)
+    end
+
+    def max_freeze_windows
+      tuning(:brawl_freeze_windows, MAX_FREEZE_WINDOWS)
+    end
+
+    def freeze_cooldown_seconds
+      tuning(:brawl_freeze_cooldown, FREEZE_COOLDOWN_SECONDS)
+    end
+
+    def presence_stale_seconds
+      tuning(:match_presence_timeout, PRESENCE_STALE_SECONDS)
+    end
+
+    def orphan_match_grace_seconds
+      tuning(:orphan_match_grace, ORPHAN_MATCH_GRACE_SECONDS)
+    end
+  end
+
   def self.derive_max_ticks(tick_ms)
     [(DEFAULT_DURATION_SECONDS * 1_000.0 / tick_ms).round, Simulation::Config::MIN_MAX_TICKS].max
   end
@@ -111,7 +154,10 @@ class Match < ApplicationRecord
   def client_summary(participant_id: nil)
     { id: id, mode: mode, status: status, tick: tick, tick_ms: tick_ms,
       columns: columns, rows: rows, protocol_version: Simulation::Protocol::SNAPSHOT_VERSION,
-      participant_id: participant_id }
+      participant_id: participant_id,
+      # Step 10: the browser renders the countdown from server values only.
+      freeze_grace_seconds: self.class.freeze_grace_seconds,
+      presence_stale_seconds: self.class.presence_stale_seconds }
   end
 
   # Queue a direction from a channel that authenticated the connection and
@@ -131,6 +177,16 @@ class Match < ApplicationRecord
       end
       unless participant.status == "alive"
         outcome = :eliminated
+        next
+      end
+      # Step 10: commands from a frozen/unattended snake are never authoritative,
+      # even if a stale socket slips one past the disconnect handler.
+      unless participant.connection_state == "connected"
+        outcome = :disconnected
+        next
+      end
+      if participant.freeze_deadline_at.present? && participant.freeze_deadline_at > now
+        outcome = :frozen
         next
       end
       unless input.seq.is_a?(Integer) && input.seq > participant.last_input_seq
@@ -218,6 +274,264 @@ class Match < ApplicationRecord
     end
   end
 
+  # ---- connection lifecycle (step 10) -------------------------------------
+  #
+  # The SERVER owns every transition below. A browser disconnect only records
+  # "no fresh socket"; the leased simulator owner applies the freeze to the
+  # in-memory world, unfreezes at the database deadline, and resumes on the
+  # next observed connection. No client timer participates.
+
+  def interrupted?
+    status == "interrupted"
+  end
+
+  def recoverable_from_checkpoint?
+    checkpoint.present? && Array(checkpoint["snakes"]).any?
+  end
+
+  # Atomic connect/observe. A new tab/socket immediately clears any freeze in
+  # the database and discards queued commands from the lost connection; the
+  # owner unfreezes the snake on its next pass. Returns [presence, participant].
+  def register_presence!(membership:, socket_token:, kind: "participant", now: Time.current)
+    participant = match_participants.find_by(room_membership_id: membership.id)
+    presence = match_presences.create!(
+      room_membership: membership, match_participant: participant,
+      socket_token: socket_token, kind: participant ? "participant" : "spectator",
+      connected_at: now, last_seen_at: now
+    )
+    if participant
+      with_lock do
+        participant.reload
+        # Discard commands queued for the connection that just died. The
+        # sequence counter itself is monotonic, so replayed envelopes stay
+        # rejected after a resume.
+        match_inputs.where(match_participant_id: participant.id).delete_all
+        participant.update_columns(
+          connection_state: "connected", reconnected_at: now, last_seen_at: now,
+          frozen_at: nil, freeze_deadline_at: nil, updated_at: now
+        )
+      end
+      broadcast_connection!(participant.reload, event: "resumed", now: now)
+    end
+    [presence, participant&.reload]
+  rescue ActiveRecord::RecordNotUnique
+    [match_presences.find_by(socket_token: socket_token), participant]
+  end
+
+  # Removes one tab. The player is only considered gone when no other fresh
+  # presence remains. Returns :still_connected, :frozen, :unattended,
+  # :already_disconnected, :not_a_participant or :match_over.
+  def release_presence!(socket_token:, now: Time.current)
+    presence = match_presences.find_by(socket_token: socket_token)
+    return :not_a_participant unless presence
+
+    membership = presence.room_membership
+    participant = presence.match_participant || match_participants.find_by(room_membership_id: membership.id)
+    match_presences.where(socket_token: socket_token).delete_all
+    return :spectator unless participant
+
+    outcome = nil
+    with_lock do
+      participant.reload
+      if match_presences.where(room_membership_id: membership.id).fresh(now).exists?
+        outcome = :still_connected
+      elsif !live?
+        outcome = :match_over
+      elsif participant.connection_state != "connected"
+        outcome = :already_disconnected
+      else
+        outcome = mark_disconnected_locked!(participant, now: now, reason: :socket_closed)
+      end
+    end
+    broadcast_connection!(participant.reload, event: outcome.to_s, now: now) unless outcome == :still_connected
+    outcome
+  end
+
+  # Reaps sockets that vanished without a clean close (Cloudflare Tunnel, killed
+  # tab, dead worker) and freezes any participant whose last tab went silent.
+  # Returns the outcomes for observability/tests.
+  def reconcile_presence!(now: Time.current)
+    stale_before = now - self.class.presence_stale_seconds
+    stale = match_presences.where("last_seen_at < ?", stale_before)
+    stale_memberships = stale.pluck(:room_membership_id).uniq
+    stale.delete_all
+    outcomes = {}
+    match_participants.where(connection_state: "connected").where.not(last_seen_at: nil).find_each do |participant|
+      next if participant.room_membership_id.nil?
+      next if match_presences.where(room_membership_id: participant.room_membership_id).exists?
+
+      membership = RoomMembership.find_by(id: participant.room_membership_id)
+      next unless membership
+
+      outcome = with_lock do
+        participant.lock!
+        break :already_disconnected unless participant.connection_state == "connected"
+        break :match_over unless live?
+
+        mark_disconnected_locked!(participant, now: now, reason: :presence_timeout)
+      end
+      outcomes[participant.id] = outcome
+      broadcast_connection!(participant.reload, event: outcome.to_s, now: now) unless outcome == :already_disconnected
+    end
+    { stale_sockets: stale_memberships, participants: outcomes }
+  end
+
+  # Server-owned clock pass, called by the leased owner before it steps the
+  # world. Applies freezes, unfreezes on reconnection and RELEASES snakes whose
+  # 30 s grace expired; released snakes keep moving in their last direction and
+  # are never eliminated here.
+  def sync_connection_states!(world, now: Time.current)
+    events = []
+    with_lock do
+      world.server_time_ms = (now.to_f * 1000).round
+      match_participants.find_each do |participant|
+        snake = world.player(participant.id)
+        next unless snake
+
+        participant.reload
+        case participant.connection_state
+        when "connected"
+          if snake.frozen?
+            world.resume_player!(participant.id)
+            events << { participant: participant.id, state: "resumed" }
+          end
+        when "disconnected"
+          if snake.alive? && participant.freeze_deadline_at.present? &&
+             participant.freeze_deadline_at > now
+            unless snake.frozen?
+              world.freeze_player!(participant.id, now_ms: (now.to_f * 1000).round,
+                                   until_ms: (participant.freeze_deadline_at.to_f * 1000).round)
+              events << { participant: participant.id, state: "frozen",
+                          grace_deadline_at: participant.freeze_deadline_at.iso8601(6) }
+            end
+          else
+            world.release_player!(participant.id) if snake.frozen?
+            if participant.connection_state == "disconnected"
+              participant.update_columns(connection_state: "unattended", frozen_at: nil,
+                                         freeze_deadline_at: nil, updated_at: now)
+            end
+            events << { participant: participant.id, state: "unattended", reason: "grace_expired" }
+          end
+        when "unattended"
+          world.release_player!(participant.id) if snake.frozen?
+        end
+      end
+      # Frozen ticks are persisted at checkpoint/completion time, never per
+      # movement tick: Postgres stays out of the simulation loop.
+    end
+    events.each { |fields| MatchChannel.broadcast_event(id, { type: "connection", match: id }.merge(fields)) }
+    events
+  end
+
+  # A late reconnection while still alive simply restores control. This is a
+  # deliberate no-op for a completed/interrupted match: the connection is
+  # acknowledged, but no snake can be resurrected.
+  def reconnect_after_game!(membership:, now: Time.current)
+    participant = match_participants.find_by(room_membership_id: membership.id)
+    return nil unless participant
+
+    participant.update_columns(last_seen_at: now, reconnected_at: now, updated_at: now)
+    participant
+  end
+
+  # Ended without simulation: either the match never produced a recoverable
+  # checkpoint, or the room was closed. Never writes standings or a winner.
+  def interrupt!(reason: "unrecoverable", now: Time.current)
+    changed = false
+    transaction do
+      changed = self.class.where(id: id, status: LIVE_STATUSES).update_all(
+        status: "interrupted", ended_at: now, end_reason: reason.to_s,
+        owner_token: nil, lease_expires_at: nil, winner_membership_id: nil, updated_at: now
+      ) == 1
+      next unless changed
+
+      match_presences.delete_all
+      match_participants.update_all(connection_state: "unattended", frozen_at: nil,
+                                    freeze_deadline_at: nil, updated_at: now)
+    end
+    return false unless changed
+
+    reload
+    begin
+      MatchChannel.broadcast_event(id, { type: "interrupted", match: id, reason: reason.to_s })
+      room.finish_match! if room.in_match?
+    rescue StandardError => error
+      Rails.logger.warn("Interrupted match #{id}; room notification deferred: " \
+                        "#{error.class}: #{error.message}")
+    end
+    true
+  end
+
+  # Marks live matches that cannot be resumed safely as interrupted. A match
+  # with an authoritative checkpoint is NOT interrupted: the lease can be
+  # taken over and the world rebuilt. Completed results are frozen forever.
+  def self.recover_orphans!(now: Time.current, limit: 100)
+    cutoff = now - orphan_match_grace_seconds
+    interrupted = []
+    live.where("lease_expires_at IS NULL OR lease_expires_at < ?", now)
+        .where(created_at: ..cutoff).order(:id).limit(limit).each do |match|
+      next if match.recoverable_from_checkpoint?
+      next unless match.interrupt!(reason: "unrecoverable", now: now)
+
+      interrupted << match.id
+    end
+    interrupted
+  end
+
+  private def mark_disconnected_locked!(participant, now:, reason:)
+    # Commands queued for the connection that just died are stale by
+    # definition: drop them before the freeze so they can never be applied
+    # after a reconnect. Sequence numbers stay monotonic (replay is refused).
+    match_inputs.where(match_participant_id: participant.id).delete_all
+    # Only grant a freeze while the Brawl is running and the snake still lives.
+    if live? && participant.status == "alive" && freeze_window_allowed?(participant, now)
+      deadline = now + self.class.freeze_grace_seconds
+      participant.update_columns(
+        connection_state: "disconnected", disconnected_at: now, frozen_at: now,
+        freeze_deadline_at: deadline, last_seen_at: now,
+        freeze_windows_used: participant.freeze_windows_used + 1,
+        last_freeze_started_at: now, updated_at: now
+      )
+      :frozen
+    else
+      participant.update_columns(
+        connection_state: "unattended", disconnected_at: now, frozen_at: nil,
+        freeze_deadline_at: nil, last_seen_at: now, updated_at: now
+      )
+      :unattended
+    end
+  end
+
+  private def freeze_window_allowed?(participant, now)
+    return false if participant.freeze_windows_used >= self.class.max_freeze_windows
+
+    last = participant.last_freeze_started_at
+    last.nil? || last <= now - self.class.freeze_cooldown_seconds
+  end
+
+  # Called from checkpoint and completion writes only. Frozen ticks are an
+  # audit/display counter; Ranking never uses them.
+  def persist_freeze_ticks!(world, now: Time.current)
+    frozen = world.snakes.select { |snake| snake.frozen_ticks.positive? }
+    frozen.each do |snake|
+      match_participants.where(id: snake.id).update_all(freeze_ticks: snake.frozen_ticks, updated_at: now)
+    end
+    # Persist the authoritative frozen set as part of the checkpoint; a crash
+    # then restores the exact same pause (still bounded by the DB deadline).
+  end
+
+  private def broadcast_connection!(participant, event:, now:)
+    MatchChannel.broadcast_event(id, {
+      type: "connection", match: id, participant: participant.id,
+      state: event.to_s, connection: participant.connection_state,
+      frozen: participant.frozen?, reason: event.to_s,
+      grace_deadline_at: participant.freeze_deadline_at&.iso8601(6),
+      freezes_used: participant.freeze_windows_used, at: now.iso8601(6)
+    }.compact)
+  rescue StandardError => error
+    Rails.logger.warn("match=#{id} connection event deferred: #{error.class}: #{error.message}")
+  end
+
   # ---- ownership lease -----------------------------------------------------
 
   def claim_lease!(token:, ttl_seconds:, now: Time.current)
@@ -279,6 +593,7 @@ class Match < ApplicationRecord
       raise ActiveRecord::Rollback unless updated
 
       persist_standings!(entries, now)
+      persist_freeze_ticks!(world, now: now)
       committed = true
     end
     reload

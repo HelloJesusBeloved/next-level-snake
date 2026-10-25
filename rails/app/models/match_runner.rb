@@ -26,6 +26,11 @@ class MatchRunner
   # drains pending direction rows; otherwise a step can run without them.
   INPUT_POLL_INTERVAL_MS = 30
   SNAPSHOT_BROADCAST_INTERVAL_MS = 100
+  # Step 10: presence sweeps are throttled well below socket-heartbeat cadence
+  # but fast enough to detect a silent tunnel drop without a 15 s stall.
+  PRESENCE_SWEEP_INTERVAL_MS = 500
+  # Orphan recovery is a cheap bounded query; never run it on every pass.
+  ORPHAN_SWEEP_INTERVAL_MS = 10_000
 
   class << self
     def token
@@ -43,6 +48,14 @@ class MatchRunner
     def forget_match(match_id)
       input_poll_at.delete(match_id)
       snapshot_broadcast_at.delete(match_id)
+    end
+
+    def presence_sweep_at
+      @presence_sweep_at ||= 0
+    end
+
+    def orphan_sweep_at
+      @orphan_sweep_at ||= 0
     end
 
     def supervisor
@@ -67,10 +80,61 @@ class MatchRunner
     def tick_once(now: Time.current, monotonic_ms: Simulation::Scheduler.monotonic_ms, limit: MAX_CLAIMS_PER_TICK)
       mutex.synchronize do
         claimed = claim_matches(now: now, monotonic_ms: monotonic_ms, limit: limit)
-        report = supervisor.tick!(now_ms: monotonic_ms).merge(claimed: claimed)
+        # Server-owned connection transitions run BEFORE any movement tick, so a
+        # freeze/unfreeze takes effect in the same pass that observes it.
+        # Presence first: a silent socket starts a grace window, then the world
+        # is frozen before it can move another cell.
+        presence = reconcile_connections(now: now, monotonic_ms: monotonic_ms)
+        connections = sync_connections(now: now)
+        interrupted = recover_orphans(now: now, monotonic_ms: monotonic_ms)
+        report = supervisor.tick!(now_ms: monotonic_ms).merge(
+          claimed: claimed, connections: connections, presence: presence,
+          interrupted: interrupted
+        )
         publish_snapshots(now: now, monotonic_ms: monotonic_ms)
         report
       end
+    end
+
+    # Applies the database's authoritative connection states to every owned
+    # world. Entirely server-driven: a frozen snake stays put, a resumed one is
+    # released, and an expired grace deadline unfreezes without killing.
+    def sync_connections(now: Time.current)
+      changes = []
+      supervisor.entries.each_value do |entry|
+        match = Match.find_by(id: entry.world.id)
+        next unless match
+
+        changes.concat(match.sync_connection_states!(entry.world, now: now))
+      rescue StandardError => error
+        Rails.logger.warn("Connection sync failed for match=#{entry.world.id}: " \
+                          "#{error.class}: #{error.message}")
+      end
+      changes
+    end
+
+    # Reaps sockets that died without a clean Action Cable callback and starts
+    # the grace window for players whose every tab is silent.
+    def reconcile_connections(now: Time.current, monotonic_ms: Simulation::Scheduler.monotonic_ms)
+      return {} if monotonic_ms - presence_sweep_at < PRESENCE_SWEEP_INTERVAL_MS
+
+      @presence_sweep_at = monotonic_ms
+      Match.live.find_each do |match|
+        match.reconcile_presence!(now: now)
+      rescue StandardError => error
+        Rails.logger.warn("Presence reconcile failed for match=#{match.id}: " \
+                          "#{error.class}: #{error.message}")
+      end
+    end
+
+    # Server-crash recovery: only safely unrecoverable live matches (no
+    # checkpoint, lease expired) are interrupted — without invented standings
+    # or a winner. Completed matches/results are never modified.
+    def recover_orphans(now: Time.current, monotonic_ms: Simulation::Scheduler.monotonic_ms)
+      return [] if monotonic_ms - orphan_sweep_at < ORPHAN_SWEEP_INTERVAL_MS
+
+      @orphan_sweep_at = monotonic_ms
+      Match.recover_orphans!(now: now)
     end
 
     # Throttled, fenced drain of durable direction commands. Returns false when
@@ -163,6 +227,8 @@ class MatchRunner
       @mutex = Mutex.new
       @supervisor = nil
       @token = nil
+      @presence_sweep_at = 0
+      @orphan_sweep_at = 0
       input_poll_at.clear
       snapshot_broadcast_at.clear
       true
@@ -202,6 +268,7 @@ class MatchRunner
       match = Match.find_by(id: world.id)
       return false unless match
 
+      match.persist_freeze_ticks!(world)
       match.save_progress!(world, token: @token)
     rescue ActiveRecord::ActiveRecordError => error
       Rails.logger.warn("MatchRunner checkpoint failed for match=#{world.id}: #{error.class}: #{error.message}")

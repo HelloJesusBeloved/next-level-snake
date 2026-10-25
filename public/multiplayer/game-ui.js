@@ -58,7 +58,7 @@ export function buildResultsTable(snapshot, tickMs, ownId) {
       `<td><strong>${esc(entry.sc ?? player.sc)}</strong></td>` +
       `<td>${esc(formatSurvival(player.sv, tickMs))}</td>` +
       `<td>${esc(player.lg ?? player.l)}</td>` +
-      `<td>${player.a ? 'Survived' : 'Eliminated'}</td>`;
+      `<td>${player.a ? (player.fr ? 'Frozen' : 'Survived') : 'Eliminated'}</td>`;
     body.append(row);
   }
   table.append(body);

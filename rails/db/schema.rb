@@ -43,6 +43,21 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
     t.check_constraint "input_seq > 0 AND client_tick >= 0", name: "match_inputs_sequence_check"
   end
 
+  create_table "match_presences", force: :cascade do |t|
+    t.bigint "match_id", null: false
+    t.bigint "room_membership_id", null: false
+    t.bigint "match_participant_id"
+    t.string "socket_token", null: false
+    t.string "kind", default: "participant", null: false
+    t.datetime "connected_at", null: false
+    t.datetime "last_seen_at", null: false
+    t.datetime "created_at", null: false
+    t.datetime "updated_at", null: false
+    t.index ["match_id", "last_seen_at"], name: "match_presences_freshness_idx"
+    t.index ["match_id", "room_membership_id"], name: "match_presences_identity_idx"
+    t.index ["socket_token"], name: "index_match_presences_on_socket_token", unique: true
+  end
+
   create_table "match_participants", force: :cascade do |t|
     t.bigint "match_id", null: false
     t.bigint "room_membership_id"
@@ -58,12 +73,24 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.bigint "last_input_seq", default: 0, null: false
+    t.string "connection_state", default: "connected", null: false
+    t.datetime "disconnected_at"
+    t.datetime "reconnected_at"
+    t.datetime "frozen_at"
+    t.datetime "freeze_deadline_at"
+    t.integer "freeze_windows_used", default: 0, null: false
+    t.datetime "last_freeze_started_at"
+    t.bigint "freeze_ticks", default: 0, null: false
+    t.datetime "last_seen_at"
     t.index ["match_id", "placement"], name: "match_participants_placement_idx"
+    t.index ["match_id", "connection_state"], name: "match_participants_connection_idx"
     t.index ["match_id", "room_membership_id"], name: "match_participants_identity_idx", unique: true
     t.index ["room_membership_id"], name: "index_match_participants_on_room_membership_id"
     t.check_constraint "color_slot >= 0 AND color_slot <= 95", name: "match_participants_color_check"
     t.check_constraint "final_score >= 0 AND longest_length >= 0 AND survived_ticks >= 0", name: "match_participants_counters_check"
     t.check_constraint "last_input_seq >= 0", name: "match_participants_last_input_seq_check"
+    t.check_constraint "connection_state::text = ANY (ARRAY['connected'::character varying::text, 'disconnected'::character varying::text, 'unattended'::character varying::text])", name: "match_participants_connection_state_check"
+    t.check_constraint "freeze_windows_used >= 0 AND freeze_ticks >= 0", name: "match_participants_freeze_counters_check"
     t.check_constraint "status::text = ANY (ARRAY['alive'::character varying::text, 'eliminated'::character varying::text, 'left'::character varying::text])", name: "match_participants_status_check"
   end
 
@@ -98,7 +125,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
     t.check_constraint "growth >= 0 AND growth <= 100", name: "matches_growth_check"
     t.check_constraint "mode::text = ANY (ARRAY['brawl'::character varying::text, 'duel'::character varying::text])", name: "matches_mode_check"
     t.check_constraint "snapshot_tick >= 0", name: "matches_snapshot_tick_check"
-    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'running'::character varying::text, 'paused'::character varying::text, 'completed'::character varying::text, 'abandoned'::character varying::text])", name: "matches_status_check"
+    t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'running'::character varying::text, 'paused'::character varying::text, 'completed'::character varying::text, 'abandoned'::character varying::text, 'interrupted'::character varying::text])", name: "matches_status_check"
     t.check_constraint "tick >= 0 AND checkpoint_tick >= 0", name: "matches_ticks_check"
     t.check_constraint "tick_ms >= 40 AND tick_ms <= 1000", name: "matches_tick_ms_check"
   end
@@ -194,6 +221,9 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
   add_foreign_key "match_inputs", "match_participants", on_delete: :cascade
   add_foreign_key "match_inputs", "matches", on_delete: :cascade
   add_foreign_key "match_participants", "matches", on_delete: :cascade
+  add_foreign_key "match_presences", "match_participants", on_delete: :nullify
+  add_foreign_key "match_presences", "matches", on_delete: :cascade
+  add_foreign_key "match_presences", "room_memberships", on_delete: :cascade
   add_foreign_key "match_participants", "room_memberships", on_delete: :nullify
   add_foreign_key "matches", "room_memberships", column: "winner_membership_id", on_delete: :nullify
   add_foreign_key "matches", "rooms", on_delete: :cascade

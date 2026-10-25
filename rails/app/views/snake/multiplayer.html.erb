@@ -186,6 +186,12 @@
         </div>
         <span class="mp-game__tick" id="mp-game-tick"></span>
       </div>
+      <%# Step 10: non-blocking connection state for THIS player's snake. The
+          rest of the board keeps running for everyone else. %>
+      <p class="mp-brawl-conn" id="mp-brawl-conn" data-state="live" role="status" aria-live="polite">
+        <span class="mp-brawl-conn__ring" aria-hidden="true"></span>
+        <span id="mp-brawl-conn-text">Live</span>
+      </p>
       <nav class="mp-game-tabs" id="mp-game-tabs" aria-label="Brawl views">
         <button type="button" data-game-pane="board" aria-pressed="true">Board</button>
         <button type="button" data-game-pane="standings" aria-pressed="false">Standings</button>

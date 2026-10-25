@@ -33,8 +33,14 @@ class MatchChannelTest < ActionCable::Channel::TestCase
 
     assert subscription.confirmed?
     assert_has_stream(MatchChannel.stream_for(@match.id))
-    message = transmissions.last
-    assert_includes %w[waiting snapshot], message["type"]
+    seed = transmissions.find { |message| %w[waiting snapshot].include?(message["type"]) }
+    assert seed, "the seed frame must be the complete authoritative snapshot"
+    # Step 10: the follow-up status frame tells the UI this tab is connected.
+    status = transmissions.find { |message| message["type"] == "connection" }
+    assert_equal "connected", status["state"]
+    assert_equal false, status["spectator"]
+    assert_equal Match.freeze_grace_seconds, status["grace_seconds"]
+    assert_match(/\Amatches:#{@match.id}\z/, MatchChannel.stream_for(@match.id))
   end
 
   test "a room member who joined late watches as a spectator but cannot steer" do
@@ -68,6 +74,22 @@ class MatchChannelTest < ActionCable::Channel::TestCase
 
     assert subscription.rejected?
     assert_equal "match_not_found", transmissions.last["error"]
+  end
+
+  test "losing one of two tabs keeps the participant connected and unfrozen" do
+    connect_as_guest
+    subscribe(match: @match.id)
+    first_token = @match.match_presences.where(room_membership_id: @seat.id).order(:id).last.socket_token
+    # A second browser tab: same identity, its own presence row.
+    second = @match.register_presence!(membership: @seat, socket_token: "tab-two-#{SecureRandom.hex(3)}").first
+
+    @match.release_presence!(socket_token: first_token)
+    assert_equal "connected", @participant.reload.connection_state
+    assert_nil @participant.freeze_deadline_at
+
+    @match.release_presence!(socket_token: second.socket_token)
+    assert_equal "disconnected", @participant.reload.connection_state
+    assert @participant.freeze_deadline_at.present?
   end
 
   test "a participant can queue a direction and gets an ack with its participant id" do
