@@ -178,7 +178,12 @@ class Match < ApplicationRecord
           player_id: entry.match_participant_id,
           direction: Simulation::Direction.parse(entry.direction),
           tick: entry.client_tick,
-          seq: entry.input_seq
+          seq: entry.input_seq,
+          # The client names its last RECEIVED snapshot tick, which lags the
+          # owner's in-memory tick (10 Hz broadcast vs 40-1000 ms ticks, plus
+          # checkpoint/catch-up drift). Sequence order, not this tick, governs
+          # ordering; a strict window here silently dropped valid steering.
+          window: Simulation::World::QUEUED_INPUT_TICK_WINDOW
         )
         unless %i[accepted duplicate_direction reversal queue_full].include?(outcome)
           rejected << { participant: entry.match_participant_id, seq: entry.input_seq, reason: outcome }

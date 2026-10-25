@@ -110,6 +110,7 @@ export function mountLobby(root) {
     gameInputStatus: $('mp-game-input-status'),
     readyToggle: $('mp-ready-toggle'),
     start: $('mp-start'),
+    again: $('mp-again'),
     disband: $('mp-disband'),
     leave: $('mp-leave'),
     hostNote: $('mp-host-note'),
@@ -252,6 +253,7 @@ export function mountLobby(root) {
       el.readyToggle.disabled = !!me.spectator || room.state === 'in_match';
     }
     if (el.start) el.start.hidden = !amHost || room.state !== 'lobby';
+    if (el.again) el.again.hidden = !amHost || room.state !== 'finished';
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
@@ -720,6 +722,15 @@ export function mountLobby(root) {
                       tick: message.t, columns: message.b?.c, rows: message.b?.r };
       if (el.gameTick) el.gameTick.textContent = `Tick ${message.t}`;
       if (el.game) el.game.hidden = false;
+      // Authoritative own-state mirror: useful when debugging a live client
+      // (and in tests). Never used to steer or to compute game state.
+      const own = message.p?.find((player) => player.i === state.member?.match_participant_id);
+      if (el.game && own) {
+        el.game.dataset.ownDirection = own.d;
+        el.game.dataset.ownScore = String(own.sc);
+        el.game.dataset.ownAlive = String(own.a);
+      }
+      el.game?.setAttribute('data-tick', String(message.t));
       if (el.gameStatus && message.s === 'completed') {
         const placement = message.q?.find((entry) => entry.i === state.member?.match_participant_id)?.p;
         el.gameStatus.textContent = placement ? `Brawl finished · place ${placement}` : 'Brawl finished';
@@ -1142,6 +1153,12 @@ export function mountLobby(root) {
   on(el.start, 'click', () => {
     roomAction('start').then((out) => {
       if (out && out.ok) flash(out.json.notice || 'Ready to start.', 'info');
+    });
+  });
+  on(el.again, 'click', () => {
+    // Host-only: results -> lobby, then the normal Start Brawl is available.
+    roomAction('lobby').then((out) => {
+      if (out && out.ok) flash('Back in the lobby — start the next Brawl whenever you like.', 'info');
     });
   });
 

@@ -108,3 +108,109 @@ test('the on-screen steering pad steers on mobile-sized screens', async ({ page,
   await expect(page.locator('#mp-game-input-status')).toBeEmpty();
   await friendContext.close();
 });
+
+// Step 8 review regression: steering quoted at the client's last received
+// snapshot tick used to be rejected server-side (silent input loss), because
+// that tick lags the owner's in-memory tick. This reads REAL WebSocket frames
+// and asserts the snake's authoritative direction actually changed.
+// Step 8 review regression: steering quoted at the client's last received
+// snapshot tick used to be rejected server-side (silent input loss), because
+// that tick lags the owner's in-memory tick. This drives the real keyboard and
+// asserts the AUTHORITATIVE direction the server broadcast actually changed,
+// on both clients.
+// Step 8 review regression: steering quoted at the client's last received
+// snapshot tick used to be rejected server-side (silent input loss), because
+// that tick lags the owner's in-memory tick. Both browsers steer with the real
+// keyboard and each one's AUTHORITATIVE server-broadcast direction must change.
+test('direction key presses from both browsers reach the server', async ({ browser, baseURL }) => {
+  const contextA = await browser.newContext({ baseURL });
+  const contextB = await browser.newContext({ baseURL });
+  const host = await contextA.newPage();
+  const guest = await contextB.newPage();
+  const errors = [];
+  host.on('pageerror', (e) => errors.push(`A: ${e.message}`));
+  guest.on('pageerror', (e) => errors.push(`B: ${e.message}`));
+
+  const code = await hostRoom(host, 'Ada');
+  await joinRoom(guest, code, 'Grace');
+  await host.click('#mp-start');
+  await expect(host.locator('#mp-game-canvas')).toBeVisible();
+  await expect(guest.locator('#mp-game-canvas')).toBeVisible();
+
+  // Both clients are receiving authoritative snapshots.
+  for (const page of [host, guest]) {
+    await expect
+      .poll(() => page.locator('#mp-game').getAttribute('data-tick'), { timeout: 15_000 })
+      .toMatch(/^\d+$/);
+  }
+
+  // The host steers up.
+  const hostBefore = await host.locator('#mp-game').getAttribute('data-own-direction');
+  await host.locator('#mp-game-canvas').click();
+  await host.keyboard.press('ArrowUp');
+  await expect(host.locator('#mp-game-input-status')).toBeEmpty();
+  await expect
+    .poll(() => host.locator('#mp-game').getAttribute('data-own-direction'), { timeout: 15_000 })
+    .not.toBe(hostBefore);
+  const hostAfter = await host.locator('#mp-game').getAttribute('data-own-direction');
+  expect(['up', 'down', 'left', 'right']).toContain(hostAfter);
+
+  // The guest steers down — a second real client through the same path.
+  const guestBefore = await guest.locator('#mp-game').getAttribute('data-own-direction');
+  await guest.locator('#mp-game-canvas').click();
+  await guest.keyboard.press('ArrowDown');
+  await expect(guest.locator('#mp-game-input-status')).toBeEmpty();
+  await expect
+    .poll(() => guest.locator('#mp-game').getAttribute('data-own-direction'), { timeout: 15_000 })
+    .not.toBe(guestBefore);
+  const guestAfter = await guest.locator('#mp-game').getAttribute('data-own-direction');
+  expect(['up', 'down', 'left', 'right']).toContain(guestAfter);
+
+  // Both clients are still bound to a live authoritative match: each has a
+  // numeric server tick and no page errors. (The direction assertions above are
+  // the regression proof; a snake may legitimately be eliminated mid-test.)
+  for (const page of [host, guest]) {
+    const tick = await page.locator('#mp-game').getAttribute('data-tick');
+    expect(tick).toMatch(/^\d+$/);
+  }
+
+  expect(errors).toEqual([]);
+  await contextA.close();
+  await contextB.close();
+});
+
+// Step 8 review: the host-only "Play again" control appears only once a Brawl
+// has finished, and returns the room to the lobby for another round. The full
+// rematch round-trip is covered deterministically by the Rails integration
+// tests (a second Match is created and the first result is preserved).
+test('the Play again control follows the room lifecycle and is host-only', async ({ browser, baseURL }) => {
+  const contextA = await browser.newContext({ baseURL });
+  const contextB = await browser.newContext({ baseURL });
+  const host = await contextA.newPage();
+  const guest = await contextB.newPage();
+
+  const code = await hostRoom(host, 'Ada');
+  await joinRoom(guest, code, 'Grace');
+
+  // In the lobby the host sees Start, not Play again; the guest sees neither.
+  await expect(host.locator('#mp-start')).toBeVisible();
+  await expect(host.locator('#mp-again')).toBeHidden();
+  await expect(guest.locator('#mp-start')).toBeHidden();
+  await expect(guest.locator('#mp-again')).toBeHidden();
+
+  await host.click('#mp-start');
+  await expect(host.locator('#mp-room-state')).toHaveText('in_match');
+  await expect(host.locator('#mp-start')).toBeHidden();
+  await expect(host.locator('#mp-again')).toBeHidden();
+  await expect(guest.locator('#mp-again')).toBeHidden();
+
+  // Non-hosts cannot reset a room through the new endpoint.
+  const refused = await guest.request.post(`/api/rooms/${code}/lobby`, {
+    headers: { 'Content-Type': 'application/json' },
+    data: {},
+  });
+  expect(refused.status()).toBe(403);
+
+  await contextA.close();
+  await contextB.close();
+});

@@ -339,12 +339,17 @@ class Room < ApplicationRecord
     self
   end
 
-  def return_to_lobby!
+  # Results -> lobby so the host can start another Brawl. Anyone who joined as
+  # a spectator is released into a normal seat (step 6 semantics), and the
+  # completed match stays untouched for later ranking/archives.
+  def return_to_lobby!(actor: nil)
     with_lock do
       raise InvalidTransition, "only a finished room can return to the lobby" unless finished?
+      host_id = room_memberships.active.where(role: "host").pick(:id)
+      raise InvalidTransition, "Only the current host can start another Brawl." if actor && actor.id != host_id
 
       room_memberships.active.update_all(spectator: false)
-      update!(state: "lobby")
+      update!(state: "lobby", finished_at: nil)
     end
     notify_events!([[:room_state, { state: state }]])
     self

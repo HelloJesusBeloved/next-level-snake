@@ -33,6 +33,7 @@ Rails.application.routes.draw do
     post "rooms/:code/board", to: "rooms#board", constraints: { code: ROOM_CODE }
     post "rooms/:code/leave", to: "rooms#leave", constraints: { code: ROOM_CODE }
     post "rooms/:code/start", to: "rooms#start", constraints: { code: ROOM_CODE }
+    post "rooms/:code/lobby", to: "rooms#lobby", constraints: { code: ROOM_CODE }
     post "rooms/:code/disband", to: "rooms#disband", constraints: { code: ROOM_CODE }
     post "rooms/:code/host", to: "rooms#transfer_host", constraints: { code: ROOM_CODE }
 

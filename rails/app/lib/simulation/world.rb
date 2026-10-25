@@ -20,7 +20,16 @@ module Simulation
     STATUSES = %i[pending running paused completed].freeze
     # How many ticks behind the current tick an input may still target. Bounds
     # how long a delayed packet can influence the match.
+    # Strict window for direct in-memory calls (tests, single-process use).
     INPUT_TICK_WINDOW = 2
+    # Wide window for DURABLY QUEUED inputs. A client can only name the tick of
+    # the last snapshot it received, which is broadcast at 10 Hz while the
+    # engine ticks every 40-1000 ms, and which lags the owner's in-memory tick
+    # by the checkpoint interval plus scheduler catch-up. Ordering is NOT
+    # governed by this tick at all: the durable queue is consumed strictly in
+    # per-participant sequence order, one row at a time. The tick only rejects
+    # clearly ancient or far-future commands.
+    QUEUED_INPUT_TICK_WINDOW = 30
     START_LENGTH = 3
 
     StepResult = Struct.new(:tick, :status, :eliminated, :eaten, keyword_init: true) do
@@ -119,12 +128,14 @@ module Simulation
     # server from the authenticated membership — never from the payload. The
     # engine refuses unknown players, non-running matches, eliminated snakes,
     # stale ticks, replayed sequences and illegal turns.
-    def apply_input(player_id:, direction:, tick:, seq:)
+    def apply_input(player_id:, direction:, tick:, seq:, window: INPUT_TICK_WINDOW)
       snake = snakes.find { |candidate| candidate.id == player_id }
       return :not_a_participant unless snake
       return :match_not_running unless running?
       return :eliminated unless snake.alive
-      return :invalid_tick unless tick.is_a?(Integer) && tick.between?(@tick - INPUT_TICK_WINDOW, @tick + 1)
+      unless tick.is_a?(Integer) && tick.between?(@tick - window, @tick + window)
+        return :invalid_tick
+      end
       return :stale_sequence unless seq.is_a?(Integer) && seq.positive? && seq > snake.last_seq
 
       # A valid envelope consumes its sequence number even when the turn itself

@@ -22,7 +22,9 @@ class MatchRunner
   LEASE_TTL_SECONDS = 6
   CHECKPOINT_EVERY_TICKS = 20
   MAX_CLAIMS_PER_TICK = 10
-  INPUT_POLL_INTERVAL_MS = 50
+  # Must stay below the fastest tick (Ludicrous = 42 ms) so every logical step
+  # drains pending direction rows; otherwise a step can run without them.
+  INPUT_POLL_INTERVAL_MS = 30
   SNAPSHOT_BROADCAST_INTERVAL_MS = 100
 
   class << self

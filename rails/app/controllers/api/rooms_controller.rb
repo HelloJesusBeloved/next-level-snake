@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start disband transfer_host color capabilities board]
+    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -193,6 +193,18 @@ module Api
                      start: eligibility }, status: status
     rescue ActiveRecord::RecordInvalid, ActiveRecord::RecordNotUnique => error
       render_error("start_conflict", error.message, :conflict)
+    end
+
+    # POST /api/rooms/:code/lobby — host-only. Returns a finished room to the
+    # lobby so another Brawl can start; the completed match is preserved.
+    def lobby
+      membership = require_host!
+      return unless membership
+
+      @room.return_to_lobby!(actor: membership)
+      render json: state_payload(@room.reload, membership.reload)
+    rescue Room::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
     end
 
     # POST /api/rooms/:code/disband — host-only. Ends the room for everybody.

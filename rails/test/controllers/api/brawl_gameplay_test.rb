@@ -159,6 +159,65 @@ class Api::BrawlGameplayTest < ActionDispatch::IntegrationTest
     assert_equal eliminated.id, final["w"]
   end
 
+  # Step 8 review regression: a direction quoted at the client's last RECEIVED
+  # snapshot tick used to be rejected and deleted (silent input loss), because
+  # that tick lags the owner's in-memory tick.
+  test "a direction quoted at a lagging snapshot tick reaches the simulation" do
+    MatchRunner.tick_once(monotonic_ms: 0)
+    world = MatchRunner.supervisor.entries.fetch(@match.id).world
+    participant = participant_for(@host)
+    12.times { MatchRunner.tick_once(monotonic_ms: 250 * (_1 + 1)) }
+    owner_tick = world.tick
+
+    input = Simulation::Protocol::Input.new(match_id: @match.id,
+                                           direction: Simulation::Direction.parse("up"),
+                                           tick: [owner_tick - 8, 0].max, seq: 1)
+    assert_equal :queued, @match.accept_direction!(membership: membership_for(@host), input: input)
+
+    MatchRunner.tick_once(monotonic_ms: 4_000)
+    snake = world.snakes.find { |s| s.id == participant.id }
+    assert_equal 1, snake.last_seq, "the lagging-tick direction was applied, not dropped"
+    assert_empty MatchInput.where(match_participant_id: participant.id)
+                           .where.not(id: nil).where("input_seq > ?", snake.last_seq).to_a,
+                 "no input row is silently left behind or lost"
+  end
+
+  # Step 8 review: after a Brawl the room must be able to host another one.
+  test "the host returns the room to the lobby and starts a second Brawl" do
+    MatchRunner.tick_once(monotonic_ms: 0)
+    world = MatchRunner.supervisor.entries.fetch(@match.id).world
+    world.snakes.each { |snake| snake.eliminate!(at_tick: 1, reason: :self_collision) }
+    world.finish!(reason: :last_standing)
+    MatchRunner.tick_once(monotonic_ms: 1_000)
+    assert_equal "finished", @match.room.reload.state
+    first_match_id = @match.id
+
+    # Non-hosts cannot reset the room.
+    post_json(@guest, "/api/rooms/#{@code}/lobby")
+    assert_equal 403, status(@guest)
+
+    out = post_json(@host, "/api/rooms/#{@code}/lobby")
+    assert_equal 200, status(@host)
+    assert_equal "lobby", Room.find_by_invitation_code(@code).state
+
+    second = post_json(@host, "/api/rooms/#{@code}/start")
+    assert_equal 201, status(@host)
+    new_match = Room.find_by_invitation_code(@code).live_match
+    assert new_match
+    assert_not_equal first_match_id, new_match.id, "a brand-new Brawl was created"
+    assert_equal 2, new_match.match_participants.count
+    # The first Brawl's results survive for later ranking/archive steps.
+    assert @match.reload.completed?
+    assert_equal 2, @match.match_participants.where.not(placement: nil).count
+  end
+
+  test "a completed match cannot be reset by a non-member" do
+    stranger = browser
+    post_json(stranger, "/api/rooms/#{@code}/lobby")
+    assert_equal 403, status(stranger)
+    assert_equal "in_match", Room.find_by_invitation_code(@code).reload.state
+  end
+
   test "one player refreshing or sending garbage cannot corrupt the shared simulation" do
     MatchRunner.tick_once(monotonic_ms: 0)
     world = MatchRunner.supervisor.entries.fetch(@match.id).world

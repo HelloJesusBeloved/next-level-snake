@@ -98,7 +98,7 @@ winners and player ids are rejected as `forbidden_field`.
 
 ## Tests actually executed
 
-* **Rails (253 runs / 1,300 assertions, 0 failures)** on Rails 8 + PostgreSQL,
+* **Rails (260 runs / 1,325 assertions, 0 failures)** on Rails 8 + PostgreSQL,
   including a fresh `db:schema:load`:
   * Brawl rules (pure engine, no Rails): per-player colored snakes + owned
     food; eating scores/grows/respawns; pass-through no-effect; foreign food
@@ -127,6 +127,32 @@ winners and player ids are rejected as `forbidden_field`.
   checks 20/20.
 * Production checks: `zeitwerk:check`, eager load, fresh schema load, and a
   live two-client smoke over real WebSockets.
+
+## Focused review corrections (follow-up to the original step-8 commit)
+
+1. **Silent input loss (critical).** `World#apply_input` accepted only
+   `tick ∈ [@tick-2, @tick+1]`, but a client can only name the tick of the last
+   snapshot it *received*, which is broadcast at 10 Hz while the engine ticks
+   every 40–1000 ms. That tick legitimately lags the owner's in-memory tick, so
+   real steering was rejected as `:invalid_tick` and its row deleted. Fixed by a
+   separate `QUEUED_INPUT_TICK_WINDOW` (30) used only when consuming the durable
+   queue; ordering was never governed by this tick (the queue is consumed
+   strictly in per-participant `seq` order), so the wide window is safe. The
+   strict window remains for direct in-memory calls. Covered by
+   `queued_input_window_test.rb` and by an end-to-end browser test where **both**
+   clients steer and each authoritative direction changes.
+2. **No rematch path.** After one Brawl the room stayed `finished` forever, and
+   `start_match!` requires `lobby?` — so a room could host exactly one Brawl.
+   Added a host-only `POST /api/rooms/:code/lobby` (`Room#return_to_lobby!`,
+   host rechecked under the room lock) plus a host-only **Play again** control.
+   The completed match and its standings are preserved for later ranking steps,
+   and a second Match is created on the next start (verified by test).
+3. **Input drain throttled slower than the fastest tick.** `INPUT_POLL_INTERVAL_MS`
+   was 50 ms while the Ludicrous preset ticks every 42 ms, so some steps ran
+   without draining pending directions. Reduced to 30 ms.
+4. Added `data-tick` / `data-own-direction` mirrors on `#mp-game`. They are
+   read-only reflections of the last authoritative snapshot, useful for
+   debugging live clients and for tests; never used to steer or compute state.
 
 ## Limitations / for later steps
 
