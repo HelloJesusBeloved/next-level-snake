@@ -83,7 +83,12 @@ module RoomIdentity
   # Presence heartbeat: every identified multiplayer request is a sign of life,
   # which is what keeps a seat and the crown (see Room#sweep!).
   def touch_presence!
-    current_membership&.mark_seen!
+    # PERFORMANCE (step 10 perf): presence is a 90 s window, so writing
+    # last_seen on every 5 s poll was pure write amplification (and one of the
+    # reasons polling clients felt sluggish). Throttled writes keep the same
+    # semantics with a fraction of the traffic.
+    current_membership&.mark_seen_throttled!(interval: 15)
+    # GuestSession#touch_last_seen! already has its own 60 s interval.
     current_guest_session&.touch_last_seen!
   end
 end

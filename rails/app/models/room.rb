@@ -421,6 +421,13 @@ class Room < ApplicationRecord
   #   3. an empty room untouched for `room_idle` expires.
   def sweep!(at: Time.current)
     return self if closed?
+    # PERFORMANCE (step 10 perf): this ran under a row lock on every single
+    # lobby read (each player polls every few seconds) even when there was
+    # nothing to reconcile, serializing the whole lobby. The cheap read-only
+    # check below decides whether a transition is actually possible; only then
+    # do we take the lock and write. Semantics are unchanged: any real
+    # drop/succession/expiry still happens immediately.
+    return self unless sweep_needed?(at: at)
 
     events = []
     with_lock do
@@ -436,6 +443,60 @@ class Room < ApplicationRecord
     # refetches once and lands on the exact state the sweep produced.
     notify_events!(events)
     self
+  end
+
+  # Read-only predicate: true only when a sweep could actually change
+  # something. Never takes a lock and never writes.
+  def sweep_needed?(at: Time.current)
+    members = room_memberships.active.to_a
+    drop_cutoff = at - self.class.config.member_drop
+    return true if members.any? { |member| member.seen_at < drop_cutoff }
+
+    host = members.find { |member| member.role == "host" }
+    return true if host.nil?
+    return true if members.any? { |member| member.id != host.id && member.online?(at: at) } &&
+                   host.seen_at <= at - self.class.config.host_grace
+
+    return false unless members.empty?
+
+    (last_activity_at || created_at) <= at - self.class.config.room_idle
+  end
+
+  # A room must never be left stuck in_match with no match to follow: that is
+  # what "the game froze and ended" looks like from a player's seat. Any live
+  # match still owned by a healthy process is untouched; a match that cannot be
+  # resumed is interrupted (no standings, no winner) and the room returns to the
+  # lobby so the players can start again without a refresh.
+  def self.heal_stranded_matches!(now: Time.current, limit: 50)
+    healed = []
+    not_closed.where(state: "in_match").order(:id).limit(limit).each do |room|
+      next if room.matches.live.exists?
+
+      room.matches.where(status: %w[pending running paused]).find_each do |stale|
+        stale.update!(status: "interrupted", ended_at: now, end_reason: "unrecoverable",
+                      owner_token: nil, lease_expires_at: nil)
+        healed << stale.id
+      end
+      next unless room.reload.matches.live.none?
+
+      room.with_lock do
+        room.room_memberships.where(state: "playing")
+            .update_all(state: "joined", updated_at: now)
+        room.room_memberships.active.update_all(spectator: false, updated_at: now)
+        room.update!(state: "lobby", started_at: nil, finished_at: nil)
+      end
+      room.notify_events!([[:room_state, { state: "lobby", reason: "match_recovered" }]])
+      room.matches.where(status: "interrupted").find_each do |match|
+        MatchChannel.broadcast_event(match.id, { type: "interrupted", match: match.id,
+                                                  reason: "unrecoverable" })
+      rescue StandardError
+        next
+      end
+    rescue ActiveRecord::RecordInvalid, InvalidTransition => error
+      Rails.logger.warn("Room #{room.id} could not self-heal: #{error.message}")
+      next
+    end
+    healed
   end
 
   # Lazy global pass for rooms nobody is polling. Bounded by `sweep_batch`

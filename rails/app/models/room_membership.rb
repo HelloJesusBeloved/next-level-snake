@@ -155,6 +155,22 @@ class RoomMembership < ApplicationRecord
     self
   end
 
+  # Presence heartbeats arrive far more often than the presence window needs.
+  # Writing every one of them made each lobby poll (and every socket
+  # heartbeat) a database write and serialized on the row. This skips the
+  # write unless the last one is old enough to matter, which cuts poll write
+  # load by roughly an order of magnitude while keeping last_seen accurate to
+  # within `interval`.
+  def mark_seen_throttled!(at: Time.current, interval: 15)
+    return self unless persisted?
+
+    current = read_attribute(:last_seen_at)
+    return self if current && current > at - interval
+
+    update_column(:last_seen_at, at)
+    self
+  end
+
   def leave!
     depart!("left")
   end

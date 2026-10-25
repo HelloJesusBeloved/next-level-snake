@@ -133,6 +133,23 @@ complete snapshot before controls return.
 action and the renderer resets on the new match id, so no page refresh is
 needed between rounds. See `rails/docs/multiplayer-step-10-reconnects.md`.
 
+## Responsiveness (step 10 performance)
+
+The authoritative rules did not change; the hot paths did. Connection sync is a
+single lock-free read at 150 ms (it used to be a row lock plus one reload per
+player twenty times a second); snapshots broadcast in memory at ~15 Hz and are
+persisted every 2 s instead of a jsonb write + full row reload at 10 Hz;
+direction intents reserve their sequence atomically without touching the match
+row lock; lobby polls are read-only and throttle presence writes.
+
+Rendering stays **discrete and grid-locked**: the server emits exactly one
+frame per movement tick and the canvas draws those authoritative cells
+immediately, snapped to the grid. There is no interpolation, prediction or
+easing — tweening a grid game delays every frame and makes corrections slide
+and snap (rubberbanding). The renderer's speed comes from caching theme and
+geometry, blitting a pre-rendered grid and diffing the scoreboard in place.
+See `rails/docs/multiplayer-step-10-performance.md`.
+
 ## Files
 
 - `page.js` — entry point (Terminal rain + mounts the lobby)
@@ -168,3 +185,22 @@ PLAYWRIGHT_BASE_URL=http://127.0.0.1:3000 npx playwright test tests/browser/mult
 The tests use real page routes and the real room API without mocking. They
 create guest rooms (which expire on their own) and never create accounts or
 submit scores. The repository's `src/` preview is not the target.
+
+## Mobile input and server-owned continuity (step 10, round 2)
+
+Swipes now turn the snake the moment the drag crosses 20 px instead of waiting
+for the finger to lift, the steering pad fires on `pointerdown` rather than
+`click`, and canvas measurement is coalesced so the mobile URL bar can no longer
+trigger a grid re-rasterise storm. Rendering cost stays low on phones through
+concatenated signatures instead of `JSON.stringify` per tick and a
+dpr-2 backing-store cap.
+
+Nothing a player's client does can end a round any more: a (re)connecting socket
+reads the owner's cached frame without touching the simulator lock, the round
+duration clock only advances while a snake can actually move, lobby
+presence/host sweeps run on the server's own clock, and a room whose match
+died is healed back to the lobby instead of being left stuck in `in_match`.
+
+## Mobile responsiveness follow-up
+
+See `rails/docs/multiplayer-step-10-mobile.md` for the phone trace. The live canvas is no longer forced to wait on `drawScoreboard`: secondary HUD text is sampled at 1Hz, while movement frames still arrive and paint immediately at tick cadence. The phone pane is contained with an opaque background; unchanged DOM text is not reassigned, and every input queue is drained before the next movement tick.

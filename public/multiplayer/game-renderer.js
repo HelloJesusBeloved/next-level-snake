@@ -1,65 +1,151 @@
-// Canvas-only multiplayer renderer (step 8). It never moves a snake or decides
-// a collision, score or winner; it draws only versioned server snapshots from
+// Canvas-only multiplayer renderer. It never moves a snake or decides a
+// collision, score or winner; it draws only versioned server snapshots from
 // Simulation::Protocol v1, which the leased simulator owns.
+//
+// RENDERING MODEL — discrete, grid-locked, no tweening.
+// Snake is a grid game: a snake occupies whole cells and jumps one cell per
+// logical tick. The renderer therefore draws exactly what the latest
+// authoritative frame says, snapped to the grid, the moment that frame
+// arrives. There is deliberately NO interpolation, NO prediction and NO
+// easing: tweening between two ticks delays every frame by up to a tick and
+// makes a late frame or a server correction visibly slide and snap back
+// (rubberbanding). Crisp cell-to-cell movement is both the correct look and
+// the lowest-latency one. The server emits one frame per movement tick, so
+// the visual cadence is exactly the simulation cadence.
+//
+// Performance (all of it invisible, none of it changes what is drawn):
+//   * theme colours are read on theme change, geometry on resize — never per frame;
+//   * the grid is rasterised once per size/theme into an offscreen canvas;
+//   * snapshot frames paint immediately; only incidental redraws coalesce into
+//     one requestAnimationFrame;
+//   * the scoreboard is diffed by signature and patched in place.
+import { createPlayBudget, text, hudKey } from './play-budget.js';
+
 const HEX = /^#[0-9a-f]{6}$/i;
 
 export class MultiplayerGameRenderer {
-  constructor({ canvas, scoreboard, status, ownParticipantId }) {
+  constructor({ canvas, scoreboard, status, ownParticipantId, budget = null }) {
     this.canvas = canvas;
     this.scoreboard = scoreboard;
     this.status = status;
     this.ownParticipantId = ownParticipantId ?? null;
     this.snapshot = null;
     // Death dust: spawned LOCALLY from the authoritative body cells of a newly
-    // eliminated snake. Coordinates are never transmitted; the server only says
-    // who died. Motion is skipped entirely under prefers-reduced-motion.
+    // eliminated snake. Coordinates are never transmitted.
     this.dust = [];
     this.dustFrame = 0;
     this.followId = null;
     this.tickMs = 105;
-    // Step 10: the red classic loading ring on a disconnected player's head.
-    // This is presentation only — the SERVER owns the freeze and its deadline.
-    this.frozenFrame = 0;
+    this.frozenTimer = 0;
     this.serverOffsetMs = 0;
+    this.paintFrame = 0;
+    this.scoreSignature = '';
+    this.scoreRows = new Map();
+    this.active = false;
+    this.hidden = document.hidden;
+    this.hudBudget = budget || createPlayBudget();
+    // Only the canvas and the network move at tick cadence. HUD labels update
+    // at <= 1 Hz (or immediately when an important control change occurs).
+    this.hudBudget.start();
+    this.onVisibility = () => {
+      this.hidden = document.hidden;
+      if (this.hidden) {
+        this.hudBudget.stop();
+        this.stopFreezeRings();
+      } else {
+        this.hudBudget.start();
+        this.hudBudget.add('scores', () => this.drawScoreboard());
+        this.requestDraw();
+      }
+    };
+    document.addEventListener('visibilitychange', this.onVisibility);
+    this.view = { width: 0, height: 0, dpr: 1 };
+    this.theme = this.readTheme();
+    this.gridCache = null;
     this.reducedMotion = typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    this.resizePending = false;
     this.resizeObserver = typeof ResizeObserver === 'function'
-      ? new ResizeObserver(() => this.draw()) : null;
+      ? new ResizeObserver(() => {
+          if (this.resizePending) return;
+          this.resizePending = true;
+          // One measure per frame, never one per resize event.
+          requestAnimationFrame(() => { this.resizePending = false; this.measure(); });
+        }) : null;
     this.resizeObserver?.observe(canvas);
-    this.themeObserver = new MutationObserver(() => this.draw());
-    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    this.themeObserver = new MutationObserver(() => {
+      this.theme = this.readTheme();
+      this.gridCache = null;
+      this.requestDraw();
+    });
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
+    this.measure();
   }
 
-  // A new match must start from a clean renderer. Without this, the previous
-  // round's snapshot made every frame of the rematch look stale and the page
-  // needed a full refresh to show the new game.
+  readTheme() {
+    const css = getComputedStyle(document.documentElement);
+    return {
+      background: css.getPropertyValue('--ink').trim() || '#0c0e10',
+      grid: css.getPropertyValue('--line').trim() || 'rgba(255,255,255,.08)',
+      accent: css.getPropertyValue('--green').trim() || '#35ff6b',
+      red: css.getPropertyValue('--red').trim() || '#ff3b30',
+    };
+  }
+
+  // Called on construction and by the ResizeObserver only — never in a paint.
+  // Mobile browsers fire a resize storm whenever the URL bar shows or hides;
+  // re-rasterising the grid layer for a one-pixel change is exactly the kind of
+  // work that reads as jank on a phone, so sub-threshold changes are ignored.
+  measure(force = false) {
+    const rect = this.canvas.getBoundingClientRect();
+    // Cap the backing store: a 3x phone would otherwise paint 9x the pixels of
+    // a 1x screen for no visible gain in a block-art game.
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const previous = this.view;
+    const material = force || !previous.width ||
+      Math.abs(rect.width - previous.width) >= 2 ||
+      Math.abs(rect.height - previous.height) >= 2 ||
+      dpr !== previous.dpr;
+    if (!material) return;
+    this.view = { width: rect.width, height: rect.height, dpr };
+    this.gridCache = null;
+    this.requestDraw();
+  }
+
   reset() {
     this.snapshot = null;
     this.dust = [];
     this.followId = null;
     this.serverOffsetMs = 0;
+    this.scoreSignature = '';
+    this.scoreRows.clear();
     if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
     this.dustFrame = 0;
-    this.drawScoreboard();
-    this.draw();
+    this.stopFreezeRings();
+    this.hudBudget.add('scores', () => this.drawScoreboard());
+    this.requestDraw();
     return this;
+  }
+
+  setActive(active) {
+    this.active = active;
+    if (active) this.hudBudget.flush('scores');
   }
 
   setOwnParticipant(id) {
     this.ownParticipantId = id == null ? null : Number(id);
-    this.drawScoreboard();
-    this.draw();
+    this.scoreSignature = '';
+    this.hudBudget.add('scores', () => this.drawScoreboard());
+    this.requestDraw();
   }
 
   setTickMs(ms) {
     if (Number.isFinite(ms) && ms > 0) this.tickMs = ms;
   }
 
-  // Spectator perspective: ring-highlight one living player's head. Purely
-  // presentational; it never changes what the server sends.
   setFollow(id) {
     this.followId = id == null ? null : Number(id);
-    this.draw();
+    this.requestDraw();
   }
 
   static formatSurvival(ticks, tickMs) {
@@ -67,6 +153,16 @@ export class MultiplayerGameRenderer {
     const minutes = Math.floor(totalSeconds / 60);
     const seconds = totalSeconds % 60;
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
+  }
+
+  // Incidental redraws (resize, theme, follow, dust) coalesce into one frame.
+  // Authoritative snapshots do NOT go through here: they paint immediately.
+  requestDraw() {
+    if (this.paintFrame || this.hidden) return;
+    this.paintFrame = requestAnimationFrame(() => {
+      this.paintFrame = 0;
+      this.draw();
+    });
   }
 
   accept(snapshot) {
@@ -84,20 +180,19 @@ export class MultiplayerGameRenderer {
     }
     if (snapshot.f.some((food) => !Number.isInteger(food.c) || food.c < 0 || food.c >= total)) return false;
     this.spawnDustForNewlyEliminated(snapshot);
-    if (Number.isFinite(snapshot.ts) && snapshot.ts > 0) {
-      this.serverOffsetMs = snapshot.ts - Date.now();
-    }
+    if (Number.isFinite(snapshot.ts) && snapshot.ts > 0) this.serverOffsetMs = snapshot.ts - Date.now();
+
     this.snapshot = snapshot;
-    this.drawScoreboard();
+    this.hudBudget.add('scores', () => this.drawScoreboard());
+    // Paint the authoritative frame now. Waiting for the next animation frame
+    // would add latency for no benefit: this IS the visual event.
+    if (this.paintFrame) { cancelAnimationFrame(this.paintFrame); this.paintFrame = 0; }
     this.draw();
-    if (snapshot.p.some((player) => player.fr)) this.pumpFreezeRings();
-    if (this.status) {
-      const own = snapshot.p.find((player) => player.i === this.ownParticipantId);
-      this.status.textContent = snapshot.s === 'completed'
-        ? (own ? `Brawl finished · ${own.sc} points` : 'Brawl finished')
-        : own && !own.a ? `Eliminated · ${own.sc} points (the round continues)`
-          : `Tick ${snapshot.t} · ${own ? `${own.sc} points` : 'Watching the server snapshot'}`;
+    if (snapshot.s === 'completed' || snapshot.s === 'interrupted') {
+      this.hudBudget.flush('scores');
     }
+    if (snapshot.p.some((player) => player.fr)) this.startFreezeRings();
+    else this.stopFreezeRings();
     return true;
   }
 
@@ -106,7 +201,6 @@ export class MultiplayerGameRenderer {
     const wasAlive = new Map(this.snapshot.p.map((player) => [player.i, player.a]));
     for (const player of snapshot.p) {
       if (wasAlive.get(player.i) === true && player.a === false && Array.isArray(player.b)) {
-        // One puff per body cell, capped so a giant snake cannot flood the tab.
         const cells = player.b.slice(0, 64);
         for (const index of cells) {
           const x = index % snapshot.b.c; const y = Math.floor(index / snapshot.b.c);
@@ -134,7 +228,7 @@ export class MultiplayerGameRenderer {
       for (const particle of this.dust) {
         particle.x += particle.vx * 0.06;
         particle.y += particle.vy * 0.06;
-        particle.vy += 0.02; // gentle settle
+        particle.vy += 0.02;
         particle.life -= particle.decay;
       }
       this.dust = this.dust.filter((particle) => particle.life > 0);
@@ -146,37 +240,79 @@ export class MultiplayerGameRenderer {
 
   dustCountForTests() { return this.dust.length; }
 
-  // Remaining grace from SERVER time. Used for the label only; when this hits
-  // zero the browser does nothing — the owner releases the snake and the next
-  // snapshot shows it moving.
   graceSecondsLeft(player) {
     if (!Number.isFinite(player.gu)) return 0;
     return Math.max(0, Math.ceil((player.gu - (Date.now() + this.serverOffsetMs)) / 1000));
   }
 
-  // Keeps a smooth spinner while any snake is frozen. Stops as soon as the
-  // server unfreezes everyone, so an idle board never burns animation frames.
-  pumpFreezeRings() {
-    if (this.frozenFrame) return;
-    const step = () => {
-      this.frozenFrame = 0;
-      this.draw();
-      this.drawScoreboard();
-      if (this.snapshot && this.snapshot.p.some((player) => player.fr)) {
-        this.frozenFrame = requestAnimationFrame(step);
+  // The only continuously animated element: the red loading ring on a frozen
+  // head. Snakes themselves never animate between ticks. Runs at 20 fps and
+  // only while somebody is actually frozen.
+  startFreezeRings() {
+    if (this.frozenTimer || this.reducedMotion) return;
+    this.frozenTimer = window.setInterval(() => {
+      if (!this.snapshot || !this.snapshot.p.some((player) => player.fr)) {
+        this.stopFreezeRings();
+        this.requestDraw();
+        return;
       }
-    };
-    this.frozenFrame = requestAnimationFrame(step);
+      this.paintFrozenLabels();
+      this.requestDraw();
+    }, 50);
   }
 
+  stopFreezeRings() {
+    if (!this.frozenTimer) return;
+    window.clearInterval(this.frozenTimer);
+    this.frozenTimer = 0;
+  }
+
+  paintFrozenLabels() {
+    for (const player of this.snapshot?.p || []) {
+      const node = this.scoreRows.get(player.i)?.tag;
+      if (!node || !player.fr) continue;
+      text(node, `frozen ${this.graceSecondsLeft(player)}s`);
+    }
+  }
+
+  // Signature-based reconciliation: only rows that changed are touched.
   drawScoreboard() {
     if (!this.scoreboard || !this.snapshot) return;
-    this.scoreboard.replaceChildren();
+    // Visibility is stateful, never offsetParent (which forces layout on a
+    // dirty DOM). The browser still gets every authoritative canvas frame.
+    if (this.hidden || !this.active) return;
+    // Cheap signature: string concatenation, no JSON.stringify and no
+    // intermediate arrays per snapshot (this runs at the tick rate).
+    const signature = hudKey(this.snapshot, this.ownParticipantId, this.tickMs);
+    if (signature === this.scoreSignature) {
+      this.paintFrozenLabels();
+      return;
+    }
+    this.scoreSignature = signature;
+    const players = new Map((this.snapshot.p || []).map((player) => [player.i, player]));
+    const fragment = document.createDocumentFragment();
+    const nextRows = new Map();
+    let structureChanged = false;
     for (const standing of this.snapshot.q || []) {
-      const player = this.snapshot.p.find((entry) => entry.i === standing.i);
+      const player = players.get(standing.i);
       if (!player) continue;
+      const existing = this.scoreRows.get(standing.i);
+      if (existing) {
+        text(existing.place, `${standing.p}.`);
+        text(existing.score, `${standing.sc} pts`);
+        text(existing.length, `${player.l} long`);
+        text(existing.survived, MultiplayerGameRenderer.formatSurvival(player.sv, this.tickMs));
+        if (existing.row.classList.contains('is-you') !== (player.i === this.ownParticipantId)) {
+          existing.row.classList.toggle('is-you', player.i === this.ownParticipantId);
+        }
+        this.paintTag(existing.tag, player);
+        nextRows.set(player.i, existing);
+        continue;
+      }
+      structureChanged = true;
       const row = document.createElement('li');
       row.className = `mp-game-score${player.i === this.ownParticipantId ? ' is-you' : ''}`;
+      row.dataset.playerId = String(player.i);
       const color = document.createElement('span');
       color.className = 'mp-identity-color';
       color.style.setProperty('--player-color', HEX.test(player.c) ? player.c : '#808080');
@@ -191,95 +327,157 @@ export class MultiplayerGameRenderer {
       length.textContent = `${player.l} long`;
       const survived = document.createElement('span'); survived.className = 'mp-game-score__meta';
       survived.textContent = MultiplayerGameRenderer.formatSurvival(player.sv, this.tickMs);
-      row.append(color, place, name, score, length, survived);
       const tag = document.createElement('span');
-      if (player.a && player.fr) {
-        tag.className = 'mp-game-score__tag is-frozen';
-        tag.textContent = `frozen ${this.graceSecondsLeft(player)}s`;
-      } else if (player.a) {
-        tag.className = 'mp-game-score__tag is-alive'; tag.textContent = 'alive';
-      } else {
-        tag.className = 'mp-game-score__tag'; tag.textContent = 'out';
-      }
-      row.append(tag);
-      this.scoreboard.append(row);
+      this.paintTag(tag, player);
+      row.append(color, place, name, score, length, survived, tag);
+      fragment.append(row);
+      nextRows.set(player.i, { row, place, score, length, survived, tag });
     }
+    this.scoreRows = nextRows;
+    const previousIds = [...this.scoreboard.children].map((row) => row.dataset.playerId);
+    const order = [...nextRows.keys()].map(String);
+    if (structureChanged || previousIds.join(',') !== order.join(',')) {
+      this.scoreboard.replaceChildren(...nextRows.values().map((entry) => entry.row));
+    }
+  }
+
+  paintTag(tag, player) {
+    if (player.a && player.fr) {
+      if (tag.className !== 'mp-game-score__tag is-frozen') tag.className = 'mp-game-score__tag is-frozen';
+      text(tag, `frozen ${this.graceSecondsLeft(player)}s`);
+    } else if (player.a) {
+      if (tag.className !== 'mp-game-score__tag is-alive') tag.className = 'mp-game-score__tag is-alive';
+      text(tag, 'alive');
+    } else {
+      if (tag.className !== 'mp-game-score__tag') tag.className = 'mp-game-score__tag';
+      text(tag, 'out');
+    }
+  }
+
+  // Offscreen background + grid, rebuilt only when size, board or theme moves.
+  gridLayer(cols, rows, cell, ox, oy) {
+    const { width, height, dpr } = this.view;
+    const key = `${cols}x${rows}:${cell.toFixed(2)}:${ox.toFixed(2)}x${oy.toFixed(2)}:${width}x${height}:${dpr}:${this.theme.grid}:${this.theme.background}`;
+    if (this.gridCache?.key === key) return this.gridCache.canvas;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(width * dpr));
+    canvas.height = Math.max(1, Math.round(height * dpr));
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = this.theme.background;
+    ctx.fillRect(0, 0, width, height);
+    ctx.strokeStyle = this.theme.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let x = 0; x <= cols; x++) {
+      // Half-pixel offset keeps 1px grid lines crisp instead of blurred.
+      const px = Math.round(ox + x * cell) + 0.5;
+      ctx.moveTo(px, oy); ctx.lineTo(px, oy + rows * cell);
+    }
+    for (let y = 0; y <= rows; y++) {
+      const py = Math.round(oy + y * cell) + 0.5;
+      ctx.moveTo(ox, py); ctx.lineTo(ox + cols * cell, py);
+    }
+    ctx.stroke();
+    this.gridCache = { key, canvas };
+    return canvas;
   }
 
   draw() {
     const snapshot = this.snapshot;
     const canvas = this.canvas;
-    if (!snapshot || !canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    if (!rect.width || !rect.height) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2);
-    const pixelWidth = Math.max(1, Math.round(rect.width * dpr));
-    const pixelHeight = Math.max(1, Math.round(rect.height * dpr));
+    if (!snapshot || !canvas || this.hidden) return;
+    if (!this.view.width || !this.view.height) {
+      this.measure();
+      if (!this.view.width || !this.view.height) return;
+    }
+    const { width, height, dpr } = this.view;
+    const pixelWidth = Math.max(1, Math.round(width * dpr));
+    const pixelHeight = Math.max(1, Math.round(height * dpr));
     if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
       canvas.width = pixelWidth; canvas.height = pixelHeight;
     }
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const css = getComputedStyle(document.documentElement);
-    const bg = css.getPropertyValue('--ink').trim() || '#0c0e10';
-    const grid = css.getPropertyValue('--line').trim() || 'rgba(255,255,255,.08)';
-    ctx.fillStyle = bg; ctx.fillRect(0, 0, rect.width, rect.height);
-    const cell = Math.min(rect.width / snapshot.b.c, rect.height / snapshot.b.r);
-    const boardWidth = cell * snapshot.b.c; const boardHeight = cell * snapshot.b.r;
-    const ox = (rect.width - boardWidth) / 2; const oy = (rect.height - boardHeight) / 2;
-    ctx.strokeStyle = grid; ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = 0; x <= snapshot.b.c; x++) { const px = ox + x * cell; ctx.moveTo(px, oy); ctx.lineTo(px, oy + boardHeight); }
-    for (let y = 0; y <= snapshot.b.r; y++) { const py = oy + y * cell; ctx.moveTo(ox, py); ctx.lineTo(ox + boardWidth, py); }
-    ctx.stroke();
 
-    // Food is owner-colored in Brawl. The server's owner id is authoritative;
-    // no browser-side food coordinates are generated or moved.
+    const cols = snapshot.b.c; const rows = snapshot.b.r;
+    const cell = Math.min(width / cols, height / rows);
+    const ox = (width - cell * cols) / 2;
+    const oy = (height - cell * rows) / 2;
+    const gridLayer = this.gridLayer(cols, rows, cell, ox, oy);
+    if (gridLayer) ctx.drawImage(gridLayer, 0, 0, width, height);
+    else { ctx.fillStyle = this.theme.background; ctx.fillRect(0, 0, width, height); }
+
+    // Food is owner-colored in Brawl; the server's owner id is authoritative.
     const colors = new Map(snapshot.p.map((player) => [player.i, player.c]));
     for (const food of snapshot.f) {
-      const x = food.c % snapshot.b.c; const y = Math.floor(food.c / snapshot.b.c);
-      const color = HEX.test(colors.get(food.o)) ? colors.get(food.o) : (css.getPropertyValue('--red').trim() || '#ff3b30');
-      ctx.fillStyle = color; ctx.beginPath();
-      ctx.arc(ox + (x + 0.5) * cell, oy + (y + 0.5) * cell, Math.max(2, cell * 0.31), 0, Math.PI * 2); ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = Math.max(1, cell * .06); ctx.stroke();
+      const x = food.c % cols; const y = Math.floor(food.c / cols);
+      const color = HEX.test(colors.get(food.o)) ? colors.get(food.o) : this.theme.red;
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(ox + (x + 0.5) * cell, oy + (y + 0.5) * cell, Math.max(2, cell * 0.31), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,255,255,.9)';
+      ctx.lineWidth = Math.max(1, cell * .06);
+      ctx.stroke();
     }
 
     const followAlive = this.followId != null &&
       (snapshot.p || []).some((player) => player.i === this.followId && player.a);
+    const pad = Math.max(1, cell * .09);
     for (const player of snapshot.p) {
       const color = HEX.test(player.c) ? player.c : '#808080';
       // Eliminated bodies stay on the board, dimmed; follow mode dims the rest.
       ctx.globalAlpha = (player.a ? 1 : 0.3) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
-      player.b.forEach((index, part) => {
-        const x = index % snapshot.b.c; const y = Math.floor(index / snapshot.b.c);
-        const pad = Math.max(1, cell * .09);
-        ctx.fillStyle = color;
-        ctx.fillRect(ox + x * cell + pad, oy + y * cell + pad, cell - pad * 2, cell - pad * 2);
-        const ringed = (player.i === this.ownParticipantId || player.i === this.followId) && part === 0;
-        if (ringed) {
-          // Own head gets a white + accent double outline, so color is never the
-          // only way a player can spot their own snake.
-          ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(2, cell * .1);
-          ctx.strokeRect(ox + x * cell + pad, oy + y * cell + pad, cell - pad * 2, cell - pad * 2);
-          ctx.strokeStyle = css.getPropertyValue('--green').trim() || '#35ff6b'; ctx.lineWidth = 1;
-          ctx.strokeRect(ox + x * cell + pad * 2, oy + y * cell + pad * 2, cell - pad * 4, cell - pad * 4);
+      ctx.fillStyle = color;
+      const body = player.b;
+      ctx.beginPath();
+      // A snake is one filled shape, not a separate canvas operation per cell.
+      // This preserves grid-locked rules and contains zero interpolation.
+      for (let part = 0; part < body.length; part++) {
+        const index = body[part];
+        const x = index % cols; const y = Math.floor(index / cols);
+        // Whole-pixel cell rectangles: discrete, aligned, no sub-pixel blur.
+        const left = Math.round(ox + x * cell + pad);
+        const top = Math.round(oy + y * cell + pad);
+        const size = Math.max(1, Math.round(cell - pad * 2));
+        ctx.rect(left, top, size, size);
+      }
+      ctx.fill();
+      // The following highlight is still one authoritative cell, no tweening.
+      if (body.length && (player.i === this.ownParticipantId || player.i === this.followId)) {
+        const index = body[0];
+        const x = index % cols; const y = Math.floor(index / cols);
+        const left = Math.round(ox + x * cell + pad);
+        const top = Math.round(oy + y * cell + pad);
+        const size = Math.max(1, Math.round(cell - pad * 2));
+        {
+          // Own head gets a white + accent double outline, so color is never
+          // the only way a player can spot their own snake.
+          ctx.strokeStyle = '#fff';
+          ctx.lineWidth = Math.max(2, cell * .1);
+          ctx.strokeRect(left, top, size, size);
+          ctx.strokeStyle = this.theme.accent;
+          ctx.lineWidth = 1;
+          ctx.strokeRect(left + pad, top + pad, Math.max(1, size - pad * 2), Math.max(1, size - pad * 2));
         }
-      });
+      }
       ctx.globalAlpha = 1;
     }
 
-    // Step 10: disconnected snakes stay exactly where the server left them,
-    // with a small red classic loading circle on their head. Purely visual;
-    // the server already paused the body and owns the deadline.
+    // Disconnected snakes stay exactly where the server left them, with a
+    // small red loading circle on the head. Purely visual; the server owns the
+    // freeze and its deadline.
     for (const player of snapshot.p) {
       if (!player.a || !player.fr || !Array.isArray(player.b) || player.b.length === 0) continue;
       const index = player.b[0];
-      const x = index % snapshot.b.c; const y = Math.floor(index / snapshot.b.c);
+      const x = index % cols; const y = Math.floor(index / cols);
       const cx = ox + (x + 0.5) * cell;
       const cy = oy + (y + 0.5) * cell;
       const radius = Math.max(3.5, cell * 0.34);
-      const phase = (performance.now() / 700) % 1;
+      const phase = this.reducedMotion ? 0 : (performance.now() / 700) % 1;
       ctx.save();
       ctx.lineCap = 'round';
       ctx.globalAlpha = 0.35;
@@ -287,35 +485,38 @@ export class MultiplayerGameRenderer {
       ctx.lineWidth = Math.max(2, cell * 0.16);
       ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI * 2); ctx.stroke();
       ctx.globalAlpha = 1;
-      ctx.strokeStyle = '#ff3b30';
+      ctx.strokeStyle = this.theme.red;
       ctx.lineWidth = Math.max(2, cell * 0.16);
       ctx.beginPath();
       ctx.arc(cx, cy, radius, phase * Math.PI * 2, phase * Math.PI * 2 + Math.PI * 1.25);
       ctx.stroke();
-      ctx.fillStyle = '#ff3b30';
+      ctx.fillStyle = this.theme.red;
       ctx.beginPath(); ctx.arc(cx, cy, Math.max(1.2, cell * 0.1), 0, Math.PI * 2); ctx.fill();
       ctx.restore();
     }
 
-    // Client-only death dust. Positions were derived above from the
-    // authoritative body cells; nothing about particles crossed the socket.
+    // Client-only death dust, derived above from authoritative body cells.
     for (const particle of this.dust) {
       const px = ox + particle.x * cell;
       const py = oy + particle.y * cell;
       ctx.globalAlpha = Math.max(0, Math.min(1, particle.life));
       ctx.fillStyle = particle.color;
-      const size = Math.max(1, particle.size * cell * particle.life);
-      ctx.fillRect(px - size / 2, py - size / 2, size, size);
+      const particleSize = Math.max(1, particle.size * cell * particle.life);
+      ctx.fillRect(px - particleSize / 2, py - particleSize / 2, particleSize, particleSize);
     }
     ctx.globalAlpha = 1;
   }
 
   destroy() {
+    this.hudBudget.stop();
+    document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
-    if (this.frozenFrame) cancelAnimationFrame(this.frozenFrame);
-    this.frozenFrame = 0;
+    if (this.paintFrame) cancelAnimationFrame(this.paintFrame);
+    this.stopFreezeRings();
     this.dustFrame = 0;
+    this.paintFrame = 0;
     this.dust = [];
+    this.gridCache = null;
     this.resizeObserver?.disconnect();
     this.themeObserver?.disconnect();
   }

@@ -366,21 +366,25 @@ module Api
 
     # ---- payloads -----------------------------------------------------------
 
+    # PERFORMANCE (step 10 perf): building the read-only room state used to
+    # take the ROOM ROW LOCK (`room.with_lock`). Every 5 s poll from every
+    # player, every socket (re)connect and every channel action therefore
+    # serialized behind the lobby's writes. Reads never needed that lock: all
+    # writes that matter already happen under their own row locks, and the
+    # version field makes a client refetch rather than trust a torn view.
     def state_payload(room, membership)
-      room.with_lock do
-        membership&.reload
-        current_match = room.matches.order(id: :desc).first
-        participant = current_match&.match_participants&.find_by(room_membership_id: membership&.id)
-        {
-          room: room_payload(room, membership),
-          member: membership && member_payload(membership, membership,
-                                                match_participant_id: participant&.id,
-                                                last_input_seq: participant&.last_input_seq,
-                                                connection: participant&.connection_payload),
-          viewer: viewer_payload,
-          config: config_payload
-        }
-      end
+      membership&.reload
+      current_match = room.matches.order(id: :desc).first
+      participant = current_match&.match_participants&.find_by(room_membership_id: membership&.id)
+      {
+        room: room_payload(room, membership),
+        member: membership && member_payload(membership, membership,
+                                              match_participant_id: participant&.id,
+                                              last_input_seq: participant&.last_input_seq,
+                                              connection: participant&.connection_payload),
+        viewer: viewer_payload,
+        config: config_payload
+      }
     end
 
     def room_payload(room, viewer_membership = nil, at: Time.current)

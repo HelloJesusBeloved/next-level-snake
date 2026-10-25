@@ -14,6 +14,7 @@
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step6';
 import { MultiplayerGameRenderer } from './game-renderer.js?v=step8';
+import { createPlayBudget, text } from './play-budget.js';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
@@ -156,6 +157,13 @@ export function mountLobby(root) {
     matchLink: 'idle',
     freezeTimer: null,
     resumedTimer: null,
+    rosterSignature: '',
+    standingsSignature: '',
+    resultsSignature: '',
+    liveHudBudget: createPlayBudget(),
+    gamePane: 'board',
+    frozenDeadline: '',
+    controls: null,
   };
   let consumer = null;
   let subscription = null;
@@ -206,14 +214,15 @@ export function mountLobby(root) {
   // The browser renders labels and a countdown only. It NEVER starts, extends
   // or ends the freeze; every transition arrives as an authoritative
   // MatchChannel event or snapshot from the leased simulator owner.
-  function setBrawlConn(kind, text) {
+  function setBrawlConn(kind, label) {
     state.matchLink = kind;
-    if (el.brawlConn) el.brawlConn.dataset.state = kind;
-    if (el.brawlConnText) el.brawlConnText.textContent = text;
+    if (el.brawlConn && el.brawlConn.dataset.state !== kind) el.brawlConn.dataset.state = kind;
+    text(el.brawlConnText, label);
   }
 
   function stopFreezeCountdown() {
     if (state.freezeTimer) { window.clearInterval(state.freezeTimer); state.freezeTimer = null; }
+    state.frozenDeadline = '';
   }
 
   function stopResumedTimer() {
@@ -221,7 +230,9 @@ export function mountLobby(root) {
   }
 
   function showGraceCountdown(deadlineIso) {
+    if (state.frozenDeadline === deadlineIso && state.freezeTimer) return;
     stopFreezeCountdown();
+    state.frozenDeadline = deadlineIso || '';
     const deadline = Date.parse(deadlineIso || '');
     const tick = () => {
       if (!Number.isFinite(deadline)) {
@@ -299,7 +310,16 @@ export function mountLobby(root) {
     }
 
     if (el.roster) {
-      el.roster.innerHTML = (room.members || []).map((member) => {
+      // PERFORMANCE: the roster used to be rebuilt with innerHTML on every
+      // poll and every room event (including 1 Hz heartbeats on 8-player
+      // lobbies). It now repaints only when something visible changed.
+      const rosterSignature = JSON.stringify((room.members || []).map((member) => [
+        member.id, member.display_name, member.online, member.host, member.ready,
+        member.spectator, member.you, member.color?.hex,
+      ]));
+      if (rosterSignature !== state.rosterSignature) {
+        state.rosterSignature = rosterSignature;
+        el.roster.innerHTML = (room.members || []).map((member) => {
         const tags = [];
         if (member.you) tags.push('<span class="mp-player__tag">you</span>');
         if (!member.online) tags.push('<span class="mp-player__tag">away</span>');
@@ -317,7 +337,8 @@ export function mountLobby(root) {
           `<span class="mp-badge${member.ready ? ' is-ready' : ''}">${member.ready ? 'Ready' : 'Not ready'}</span>`,
           '</li>',
         ].join('');
-      }).join('');
+        }).join('');
+      }
     }
 
     if (el.readyToggle) {
@@ -348,8 +369,16 @@ export function mountLobby(root) {
     }
     const participantId = state.member?.match_participant_id;
     gameRenderer?.setOwnParticipant(participantId);
+    gameRenderer?.setActive(state.gamePane === 'board');
+    state.liveHudBudget.start();
     gameRenderer?.setTickMs(match.tick_ms);
-    if (el.gameTick && state.gameSnapshot) el.gameTick.textContent = `Tick ${state.gameSnapshot.t}`;
+    if (el.gameTick && state.gameSnapshot) text(el.gameTick, `Tick ${state.gameSnapshot.t}`);
+    // Roster/palette/board are lobby-only, and must not schedule any
+    // background work on a moving snake. A match's controls already do not
+    // depend on the lobby host's tab.
+    if (state.room) {
+      window.MatrixRain?.set(false);
+    }
     renderFollowOptions();
     if (state.gameSnapshot) renderStandingsTable();
     if (match.status === 'completed' && state.gameSnapshot) renderResults();
@@ -359,6 +388,8 @@ export function mountLobby(root) {
   // Board / Standings / Lobby switcher. Purely presentational: membership,
   // sockets and the simulation are untouched, so nothing here can drop a seat.
   function showGamePane(name) {
+    state.gamePane = name;
+    gameRenderer?.setActive(name === 'board');
     if (el.gameBoardPane) el.gameBoardPane.hidden = name !== 'board';
     if (el.gameStandingsPane) el.gameStandingsPane.hidden = name !== 'standings';
     const backRow = document.getElementById('mp-back-to-board-row');
@@ -368,6 +399,7 @@ export function mountLobby(root) {
         button.setAttribute('aria-pressed', String(button.dataset.gamePane === name));
       });
     }
+    if (name === 'standings') renderStandingsTable(true);
     if (name === 'lobby' && el.room) {
       el.game.hidden = true;
       el.room.scrollIntoView({ block: 'nearest' });
@@ -400,9 +432,27 @@ export function mountLobby(root) {
     if (el.followRow) el.followRow.hidden = living.length === 0;
   }
 
-  function renderStandingsTable() {
+  // PERFORMANCE: both tables are diffed by signature and skipped while their
+  // pane is hidden. The old code rebuilt a full <table> for every 10 Hz
+  // snapshot even when the Standings tab was not visible.
+  function standingsSignature() {
+    const snapshot = state.gameSnapshot;
+    if (!snapshot) return '';
+    // Built by concatenation: this runs on every authoritative frame and a
+    // JSON.stringify of two arrays per tick is measurable on a phone.
+    let signature = `${snapshot.t}:${state.match?.tick_ms}:${state.member?.match_participant_id}`;
+    for (const row of snapshot.q || []) signature += `|${row.i}:${row.p}:${row.sc}`;
+    for (const player of snapshot.p || []) signature += `#${player.i}:${player.a ? 1 : 0}${player.fr ? 1 : 0}:${player.l}:${player.sv}`;
+    return signature;
+  }
+
+  function renderStandingsTable(force = false) {
     const container = document.getElementById('mp-standings-table');
     if (!container || !state.gameSnapshot) return;
+    if (el.gameStandingsPane?.hidden && !force) return;
+    const signature = standingsSignature();
+    if (!force && signature === state.standingsSignature) return;
+    state.standingsSignature = signature;
     container.replaceChildren();
     container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
       state.member?.match_participant_id));
@@ -411,6 +461,12 @@ export function mountLobby(root) {
   function renderResults() {
     const container = el.resultsTable;
     if (!container || !state.gameSnapshot) return;
+    const signature = `results:${standingsSignature()}`;
+    if (signature === state.resultsSignature) {
+      if (el.results) el.results.hidden = false;
+      return;
+    }
+    state.resultsSignature = signature;
     container.replaceChildren();
     container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
       state.member?.match_participant_id));
@@ -439,7 +495,10 @@ export function mountLobby(root) {
         // the browser (renderer, results, banners, sequence mirror) so the
         // server's new snapshots render immediately — no page refresh.
         state.gameSnapshot = null;
+        state.controls = null;
         state.inputSeq = Number(state.member?.last_input_seq || 0);
+        state.standingsSignature = '';
+        state.resultsSignature = '';
         gameRenderer?.reset();
         hideEliminationOverlay(document);
         stopFreezeCountdown();
@@ -493,7 +552,7 @@ export function mountLobby(root) {
       refresh().then(drainBuffered);
       if (state.cable.status === 'reconnecting') renderConn();
       poll();
-    }, live ? 60000 : pollInterval);
+    }, live ? 90000 : pollInterval);
   }
 
   // Requirement 12: never silently abandon a room. Ask, then retry.
@@ -723,7 +782,7 @@ export function mountLobby(root) {
     const settings = savedSettings();
     settings.theme = theme;
     try { window.localStorage.setItem('snake.settings.v1', JSON.stringify(settings)); } catch (err) { /* blocked */ }
-    window.MatrixRain?.set(theme === 'terminal');
+    window.MatrixRain?.set(theme === 'terminal' && !state.match);
     markThemes();
   }
 
@@ -881,6 +940,7 @@ export function mountLobby(root) {
   // One heartbeat per tab. Several tabs therefore keep the player connected as
   // long as ANY of them beats; only all-tabs-silent starts the server grace.
   function startMatchHeartbeat() {
+    state.liveHudBudget.start();
     stopMatchHeartbeat();
     matchHeartbeatTimer = window.setInterval(() => {
       if (matchSubscription && consumer?.connection?.isOpen?.()) {
@@ -894,6 +954,8 @@ export function mountLobby(root) {
   }
 
   function disconnectMatchCable() {
+    gameRenderer?.setActive(false);
+    state.liveHudBudget.stop();
     stopMatchHeartbeat();
     stopFreezeCountdown();
     if (matchSubscription) {
@@ -938,15 +1000,27 @@ export function mountLobby(root) {
       state.gameSnapshot = message;
       state.match = { ...(state.match || {}), id: Number(message.m), status: message.s,
                       tick: message.t, columns: message.b?.c, rows: message.b?.r };
-      if (el.gameTick) el.gameTick.textContent = `Tick ${message.t}`;
+      state.liveHudBudget.add('tick', () => {
+      text(el.gameTick, `Tick ${state.gameSnapshot?.t}`);
+      // No aria-live announcement of every tick. The board is visible and
+      // the state is authoritative; only connection changes need speech.
+    });
       if (el.game) el.game.hidden = false;
       // Authoritative own-state mirror: useful when debugging a live client
       // (and in tests). Never used to steer or to compute game state.
       const own = message.p?.find((player) => player.i === state.member?.match_participant_id);
+      state.controls = own ? { id: own.i, alive: own.a, frozen: own.fr, direction: own.d } : null;
+      if (el.gameStatus && !state.match?.spectator && message.s === 'running') {
+        if (!own?.a) text(el.gameStatus, 'Eliminated · watching the Brawl');
+        else if (own.fr) text(el.gameStatus, 'Your snake is frozen · reconnecting');
+        else text(el.gameStatus, 'Live · your snake is controlled by the server');
+      }
       if (el.game && own) {
-        el.game.dataset.ownDirection = own.d;
-        el.game.dataset.ownScore = String(own.sc);
-        el.game.dataset.ownAlive = String(own.a);
+        // Read-only diagnostics do not need a new DOM mutation per frame. Only
+        // meaningfully changed own state may touch a data attribute.
+        if (el.game.dataset.ownDirection !== own.d) el.game.dataset.ownDirection = own.d;
+        if (el.game.dataset.ownScore !== String(own.sc)) el.game.dataset.ownScore = String(own.sc);
+        if (el.game.dataset.ownAlive !== String(own.a)) el.game.dataset.ownAlive = String(own.a);
       }
       el.game?.setAttribute('data-tick', String(message.t));
       const ownId = state.member?.match_participant_id;
@@ -972,11 +1046,12 @@ export function mountLobby(root) {
         });
       }
       if (el.gameStatus && message.s === 'completed') {
+        state.liveHudBudget.flush('tick');
         const placement = message.q?.find((entry) => entry.i === ownId)?.p;
-        el.gameStatus.textContent = placement ? `Brawl finished · place ${placement}` : 'Brawl finished';
+        text(el.gameStatus, placement ? `Brawl finished · place ${placement}` : 'Brawl finished');
         renderResults();
       } else if (el.gameStatus && state.match?.spectator) {
-        el.gameStatus.textContent = 'Spectating the live Brawl.';
+        text(el.gameStatus, 'Spectating the live Brawl.');
       }
       return;
     }
@@ -987,7 +1062,10 @@ export function mountLobby(root) {
     if (message.type === 'input_ack') {
       if (Number(message.participant) !== Number(state.member?.match_participant_id)) return;
       if (message.accepted) {
-        if (el.gameInputStatus) { el.gameInputStatus.textContent = ''; el.gameInputStatus.removeAttribute('data-kind'); }
+        if (el.gameInputStatus) {
+          text(el.gameInputStatus, '');
+          if (el.gameInputStatus.dataset.kind) el.gameInputStatus.removeAttribute('data-kind');
+        }
       } else if (el.gameInputStatus) {
         el.gameInputStatus.textContent = `Direction not accepted (${message.reason || 'resync'}).`;
         el.gameInputStatus.dataset.kind = 'error';
@@ -1014,12 +1092,16 @@ export function mountLobby(root) {
   function sendDirection(direction) {
     const snapshot = state.gameSnapshot;
     const ownId = state.member?.match_participant_id;
-    const own = snapshot?.p?.find((player) => player.i === ownId);
-    if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.a) return;
+    const own = state.controls && state.controls.id === ownId
+      ? state.controls : snapshot?.p?.find((player) => player.i === ownId);
+    if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.alive && !own?.a) return;
     // Frozen/dead/spectating snakes never send: the server would reject these
     // anyway, and any pre-disconnect command still in flight is discarded on
     // the server when the socket is released.
-    if (own.fr || state.match?.spectator) return;
+    if (own.frozen || own.fr || state.match?.spectator) return;
+    // Every intent is sent. The server de-duplicates the direction queue
+    // itself and the input path no longer takes a lock, so swallowing a
+    // keypress here could only ever lose a real turn.
     state.inputSeq = Math.max(state.inputSeq, Number(state.member.last_input_seq || 0)) + 1;
     matchSubscription.perform('input', {
       v: 1, type: 'input', match: state.match.id,
@@ -1037,12 +1119,6 @@ export function mountLobby(root) {
     if (!direction || !state.match || state.match.status !== 'running') return;
     event.preventDefault();
     sendDirection(direction);
-  }
-
-  function steerBySwipe(start, end) {
-    const dx = end.x - start.x; const dy = end.y - start.y;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < 24) return;
-    sendDirection(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
   }
 
   function onCableMessage(message) {
@@ -1372,18 +1448,62 @@ export function mountLobby(root) {
   function on(node, event, handler) { if (node) node.addEventListener(event, handler); }
 
   document.addEventListener('keydown', onGameKeydown);
+  // Mobile steering. Two latency sources are removed here:
+  //   * a swipe turns the snake as SOON AS the drag crosses the threshold,
+  //     instead of waiting for the finger to lift (and a lift can be delayed by
+  //     the browser gesture recognizer, a scroll, or a cancelled pointer);
+  //   * the steering pad fires on pointerdown, not click, so a tap is not
+  //     held back by tap-delay/double-tap-zoom heuristics.
+  // touchmove is registered non-passive on the canvas only, so a swipe never
+  // scrolls the page; everywhere else the page still scrolls normally.
   let swipeStart = null;
+  let swipeSent = null;
+  const SWIPE_THRESHOLD = 20;
+
+  function swipeDirection(start, end) {
+    const dx = end.x - start.x; const dy = end.y - start.y;
+    if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_THRESHOLD) return null;
+    return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+  }
+
   on(el.gameCanvas, 'pointerdown', (event) => {
     if (event.pointerType === 'mouse') return;
     swipeStart = { x: event.clientX, y: event.clientY };
+    swipeSent = null;
+    if (el.gameCanvas.setPointerCapture) { try { el.gameCanvas.setPointerCapture(event.pointerId); } catch (err) { /* unsupported */ } }
+  });
+  on(el.gameCanvas, 'pointermove', (event) => {
+    if (!swipeStart || event.pointerType === 'mouse') return;
+    const direction = swipeDirection(swipeStart, { x: event.clientX, y: event.clientY });
+    // One intent per direction per drag: a continuing drag in the same
+    // direction is a duplicate the server would reject anyway.
+    if (direction && direction !== swipeSent) { swipeSent = direction; sendDirection(direction); }
   });
   on(el.gameCanvas, 'pointerup', (event) => {
-    if (swipeStart) steerBySwipe(swipeStart, { x: event.clientX, y: event.clientY });
-    swipeStart = null;
+    // A short flick that never crossed the threshold mid-drag still counts.
+    if (swipeStart && !swipeSent) {
+      const direction = swipeDirection(swipeStart, { x: event.clientX, y: event.clientY });
+      if (direction) sendDirection(direction);
+    }
+    swipeStart = null; swipeSent = null;
   });
-  on(el.gameCanvas, 'pointercancel', () => { swipeStart = null; });
+  on(el.gameCanvas, 'pointercancel', () => { swipeStart = null; swipeSent = null; });
+  if (el.gameCanvas) {
+    // iOS Safari without touch-action support still needs a preventDefault to
+    // stop the arena swipe from scrolling/zooming the page.
+    el.gameCanvas.addEventListener('touchmove', (event) => { if (swipeStart) event.preventDefault(); }, { passive: false });
+  }
+
   document.querySelectorAll('[data-game-dir]').forEach((button) => {
-    button.addEventListener('click', () => sendDirection(button.dataset.gameDir));
+    // pointerdown: instant on touch. click is kept for keyboard/AT activation.
+    button.addEventListener('pointerdown', (event) => {
+      if (event.pointerType === 'mouse') return;
+      event.preventDefault();
+      sendDirection(button.dataset.gameDir);
+    });
+    button.addEventListener('click', (event) => {
+      if (event.detail === 0) sendDirection(button.dataset.gameDir); // keyboard Enter/Space
+    });
   });
 
   on(el.create, 'click', () => createRoom(false));
@@ -1435,9 +1555,21 @@ export function mountLobby(root) {
 
   // A tab returning to the foreground proves life immediately (and is also a
   // chance to re-subscribe if the tunnel dropped while hidden).
+  // A phone suspends timers and can silently drop the WebSocket while a tab is
+  // backgrounded; some browsers never fire the close handler. On return, prove
+  // life immediately and rebuild whatever socket actually died, so a player who
+  // tabbed away resumes instead of watching a stale board.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
+    const socketDead = !consumer || !consumer.connection || !consumer.connection.isOpen?.();
+    if (socketDead) {
+      if (state.room) connectCable(state.room.code); // re-derives identity server-side
+      refresh();
+      return;
+    }
+    if (subscription) subscription.perform('heartbeat');
     if (matchSubscription) matchSubscription.perform('heartbeat');
+    refresh();
   });
 
   // Sharing panel (step 5): native share, always-available copy with visible
@@ -1513,7 +1645,15 @@ export function mountLobby(root) {
   on(el.confirmClose, 'click', () => closeConfirm(true));
 
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') refresh();
+    if (document.visibilityState === 'visible') {
+      state.liveHudBudget.start();
+      if (state.room) {
+        window.MatrixRain?.set(false);
+        refresh();
+      }
+    } else {
+      state.liveHudBudget.stop();
+    }
   });
 
   // ---- boot --------------------------------------------------------------------

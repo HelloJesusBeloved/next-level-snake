@@ -3,7 +3,10 @@
 # Load .env before Puma reads PORT / RAILS_ENV.
 require_relative "env_loader"
 
-max_threads_count = ENV.fetch("RAILS_MAX_THREADS", 5).to_i
+# Sockets (Action Cable), HTTP polls and channel actions share this pool. The
+# old default of 5 could leave a steering intent queued behind lobby polls on a
+# full room; 8 keeps interactive requests from starving. Still overridable.
+max_threads_count = ENV.fetch("RAILS_MAX_THREADS", 8).to_i
 min_threads_count = ENV.fetch("RAILS_MIN_THREADS") { max_threads_count }.to_i
 threads min_threads_count, max_threads_count
 
@@ -47,7 +50,9 @@ after_booted do
         rescue StandardError => error
           Rails.logger.error("Multiplayer simulator pass failed: #{error.class}: #{error.message}")
         end
-        sleep 0.05
+        # Tight cadence while a Brawl is live so movement ticks land on time;
+        # idle processes sleep longer instead of spinning on the database.
+        sleep(MatchRunner.supervisor.match_ids.empty? ? 0.25 : 0.02)
       end
     end
   end

@@ -480,3 +480,53 @@
   border-color: rgba(255, 59, 48, .5);
   background: rgba(255, 59, 48, .14);
 }
+
+/* Mobile hot-path isolation. These are presentation-only constraints: no
+   movement, rules or connection policy changes. The board is a small
+   imperative canvas; its DOM siblings do not have to invalidate on every tick.
+   Keep the desktop layout/colours as-is. */
+@media (pointer: coarse) {
+  .mp-game {
+    contain: layout paint style;
+    background: var(--panel);
+  }
+  .mp-game-scores,
+  .mp-game__heading,
+  .mp-brawl-conn {
+    contain: layout style;
+  }
+  .mp-game-score {
+    contain: layout style;
+  }
+  /* Read-only surface is expensive to rasterize on a phone (the old blur
+     was blending every frame with an animated photo/terminal background). */
+  .mp-card, .mp-room, .mp-game, .mp-game-score {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  /* Touch input is independent of the board repaint. A 48px steering button
+     is below the modern 44px minimum; use a larger hit box but keep the visual
+     size unchanged. */
+  .mp-game-controls {
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    gap: 8px;
+  }
+  .mp-game-controls button {
+    min-width: 56px;
+    min-height: 48px;
+    touch-action: none;
+  }
+  .mp-game__canvas {
+    contain: paint;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  .mp-settings {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 400px;
+  }
+}

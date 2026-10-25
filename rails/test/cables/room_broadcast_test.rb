@@ -138,7 +138,7 @@ class RoomBroadcastTest < ActionDispatch::IntegrationTest
     roster = get_json(guest, "/api/rooms/#{@room.invitation_code}")
     successor = roster[:room][:members].find { |m| m[:display_name] == "Grace" }
     assert successor, "Grace is still seated"
-    assert_equal successor[:id], first_a.last["host"], "the crown moved to the longest-seated member"
+    assert_equal successor[:id], changed["host"], "the crown moved to the longest-seated member"
     assert successor[:host], "and the roster agrees Grace hosts now"
 
     # --- disband ---

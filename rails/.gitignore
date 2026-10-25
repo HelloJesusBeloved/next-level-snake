@@ -35,3 +35,7 @@
 /public/multiplayer/
 /public/violet-mist.svg
 /public/img/
+
+# Bundler (local test install; never part of a patch)
+/vendor/bundle/
+/Gemfile.lock

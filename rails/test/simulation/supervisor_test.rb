@@ -103,8 +103,11 @@ class SupervisorTest < Minitest::Test
     end
     supervisor = Simulation::Supervisor.new(ownership: ownership, renew_interval_ms: 0)
     world = big_world(max_ticks: Simulation::Config::MIN_MAX_TICKS)
-    # One tick away from the cap: the next step completes the match.
+    # One tick away from the cap: the next step completes the match. The
+    # duration limit is measured in MOVEMENT ticks (active_ticks), so both
+    # counters are positioned together here.
     world.instance_variable_set(:@tick, Simulation::Config::MIN_MAX_TICKS - 1)
+    world.instance_variable_set(:@active_ticks, Simulation::Config::MIN_MAX_TICKS - 1)
     supervisor.attach(world, now_ms: 0)
 
     report = supervisor.tick!(now_ms: world.config.tick_ms)

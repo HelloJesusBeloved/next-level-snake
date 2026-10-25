@@ -162,55 +162,48 @@ class Match < ApplicationRecord
 
   # Queue a direction from a channel that authenticated the connection and
   # resolved the actor's active RoomMembership. No player id is accepted from
-  # the wire payload. The match row serializes sequence allocation and caps.
+  # the wire payload.
+  #
+  # PERFORMANCE (step 10 perf): this used to take the MATCH row lock on every
+  # keypress, which serialized all steering behind the simulator's own
+  # lock/checkpoint/broadcast writes and was the main source of perceived input
+  # lag. The sequence is now reserved with a single atomic conditional UPDATE:
+  # concurrent duplicate/replayed envelopes still lose the race exactly once,
+  # but no rows stay locked while the command is written. The participant
+  # read + validation is three cheap indexed queries at most.
   def accept_direction!(membership:, input:, now: Time.current)
-    outcome = nil
-    with_lock do
-      unless LIVE_STATUSES.include?(status) && %w[pending running].include?(status)
-        outcome = :match_not_running
-        next
-      end
-      participant = match_participants.lock.find_by(room_membership_id: membership.id)
-      unless participant
-        outcome = :not_a_participant
-        next
-      end
-      unless participant.status == "alive"
-        outcome = :eliminated
-        next
-      end
-      # Step 10: commands from a frozen/unattended snake are never authoritative,
-      # even if a stale socket slips one past the disconnect handler.
-      unless participant.connection_state == "connected"
-        outcome = :disconnected
-        next
-      end
-      if participant.freeze_deadline_at.present? && participant.freeze_deadline_at > now
-        outcome = :frozen
-        next
-      end
-      unless input.seq.is_a?(Integer) && input.seq > participant.last_input_seq
-        outcome = :stale_sequence
-        next
-      end
-      earliest = [checkpoint_tick - Simulation::World::INPUT_TICK_WINDOW, 0].max
-      latest = checkpoint_tick + INPUT_FUTURE_WINDOW
-      unless input.tick.is_a?(Integer) && input.tick.between?(earliest, latest)
-        outcome = :invalid_tick
-        next
-      end
-      if MatchInput.where(match_participant_id: participant.id).count >= MAX_PENDING_INPUTS_PER_PARTICIPANT
-        outcome = :queue_full
-        next
-      end
+    # One indexed read decides liveness and gives the checkpoint window.
+    checkpoint = self.class.where(id: id, status: %w[pending running]).pick(:checkpoint_tick)
+    return :match_not_running if checkpoint.nil?
 
-      match_inputs.create!(match_participant: participant, input_seq: input.seq,
-                           client_tick: input.tick, direction: input.direction.name,
-                           received_at: now)
-      participant.update_columns(last_input_seq: input.seq, updated_at: now)
-      outcome = :queued
+    participant = match_participants.find_by(room_membership_id: membership.id)
+    return :not_a_participant unless participant
+    return :eliminated unless participant.status == "alive"
+    # Commands from a frozen/unattended snake are never authoritative, even if
+    # a stale socket slips one past the disconnect handler.
+    return :disconnected unless participant.connection_state == "connected"
+    return :frozen if participant.freeze_deadline_at.present? && participant.freeze_deadline_at > now
+    return :stale_sequence unless input.seq.is_a?(Integer) && input.seq > participant.last_input_seq
+
+    earliest = [checkpoint.to_i - Simulation::World::INPUT_TICK_WINDOW, 0].max
+    latest = checkpoint.to_i + INPUT_FUTURE_WINDOW
+    return :invalid_tick unless input.tick.is_a?(Integer) && input.tick.between?(earliest, latest)
+    if MatchInput.where(match_participant_id: participant.id).count >= MAX_PENDING_INPUTS_PER_PARTICIPANT
+      return :queue_full
     end
-    outcome
+
+    # Atomic reservation: no FOR UPDATE, no transaction held across the insert.
+    reserved = match_participants
+               .where(id: participant.id, status: "alive", connection_state: "connected")
+               .where("last_input_seq < ?", input.seq)
+               .where("freeze_deadline_at IS NULL OR freeze_deadline_at <= ?", now)
+               .update_all(last_input_seq: input.seq, updated_at: now)
+    return :stale_sequence if reserved.zero?
+
+    match_inputs.create!(match_participant: participant, input_seq: input.seq,
+                         client_tick: input.tick, direction: input.direction.name,
+                         received_at: now)
+    :queued
   rescue ActiveRecord::RecordNotUnique
     :stale_sequence
   end
@@ -218,47 +211,67 @@ class Match < ApplicationRecord
   # The sole owner drains durable commands immediately before a logical step.
   # Applied rows stay until the checkpoint that includes their sequence
   # commits, so a crash replays them from the previous checkpoint.
+  #
+  # PERFORMANCE (step 10 perf): the old version opened a transaction and took
+  # the match row lock BEFORE every logical tick even when the queue was empty
+  # (10-25 times per second per match). It now reads the ready rows with one
+  # indexed query and returns immediately when nobody is steering; the fenced
+  # liveness read happens only when there is real work to apply.
   def apply_queued_inputs!(world:, token:, now: Time.current, limit: 128)
-    rejected = []
-    owned = false
-    with_lock do
-      unless owner_token == token && lease_expires_at && lease_expires_at > now && live?
-        next
-      end
-      owned = true
-      match_inputs.order(:id).limit(limit).each do |entry|
-        snake = world.player(entry.match_participant_id)
-        next if snake && snake.last_seq >= entry.input_seq
+    entries = match_inputs.order(:id).limit(limit).to_a
+    return [] if entries.empty?
+    return nil unless owned_by?(token: token, now: now)
 
-        outcome = world.apply_input(
-          player_id: entry.match_participant_id,
-          direction: Simulation::Direction.parse(entry.direction),
-          tick: entry.client_tick,
-          seq: entry.input_seq,
-          # The client names its last RECEIVED snapshot tick, which lags the
-          # owner's in-memory tick (10 Hz broadcast vs 40-1000 ms ticks, plus
-          # checkpoint/catch-up drift). Sequence order, not this tick, governs
-          # ordering; a strict window here silently dropped valid steering.
-          window: Simulation::World::QUEUED_INPUT_TICK_WINDOW
-        )
-        unless %i[accepted duplicate_direction reversal queue_full].include?(outcome)
-          rejected << { participant: entry.match_participant_id, seq: entry.input_seq, reason: outcome }
-          match_inputs.where(id: entry.id).delete_all
-        end
-      end
+    rejected = []
+    entries.each do |entry|
+      snake = world.player(entry.match_participant_id)
+      next if snake && snake.last_seq >= entry.input_seq
+
+      outcome = world.apply_input(
+        player_id: entry.match_participant_id,
+        direction: Simulation::Direction.parse(entry.direction),
+        tick: entry.client_tick,
+        seq: entry.input_seq,
+        # The client names its last RECEIVED snapshot tick, which lags the
+        # owner's in-memory tick. Sequence order, not this tick, governs
+        # ordering; a strict window here silently dropped valid steering.
+        window: Simulation::World::QUEUED_INPUT_TICK_WINDOW
+      )
+      next if %i[accepted duplicate_direction reversal queue_full].include?(outcome)
+
+      rejected << { participant: entry.match_participant_id, seq: entry.input_seq, reason: outcome }
+      match_inputs.where(id: entry.id).delete_all
     end
-    owned ? rejected : nil
+    rejected
+  end
+
+  # Single indexed liveness check used by the input drain. Reads only; the
+  # authoritative fencing still happens on every durable write.
+  def owned_by?(token:, now: Time.current)
+    self.class.where(id: id, owner_token: token, status: LIVE_STATUSES)
+        .where("lease_expires_at > ?", now).exists?
   end
 
   # Persist the latest complete frame at the independent broadcast cadence (not
   # per movement tick), fenced on the lease, so a reconnecting channel on any
   # Puma worker can bootstrap from a whole authoritative snapshot.
   def publish_snapshot!(world, token:, now: Time.current)
+    persisted = persist_snapshot!(world, token: token, now: now)
+    # Keep the in-memory copy fresh for this process's reconnect seeds without
+    # re-reading the whole row (the old `reload` was a full extra SELECT on
+    # every published frame).
+    self.live_snapshot = Simulation::Protocol.encode(world).merge("type" => "snapshot")
+    self.snapshot_tick = world.tick
+    persisted
+  end
+
+  # Fenced durable write used at a deliberately lower cadence than the socket
+  # broadcast. Reconnecting clients are seeded from the newest persisted frame
+  # and immediately receive live frames, so 2 s of durability is plenty.
+  def persist_snapshot!(world, token:, now: Time.current)
     payload = Simulation::Protocol.encode(world).merge("type" => "snapshot")
-    updated = self.class.where(id: id, owner_token: token).where(status: LIVE_STATUSES)
-                .update_all(live_snapshot: payload, snapshot_tick: world.tick, updated_at: now) == 1
-    reload if updated
-    updated
+    self.class.where(id: id, owner_token: token).where(status: LIVE_STATUSES)
+        .update_all(live_snapshot: payload, snapshot_tick: world.tick, updated_at: now) == 1
   end
 
   # Rebuilds the in-memory world. A checkpoint (written every N ticks) is the
@@ -300,20 +313,25 @@ class Match < ApplicationRecord
       connected_at: now, last_seen_at: now
     )
     if participant
-      with_lock do
-        participant.reload
-        # Discard commands queued for the connection that just died. The
-        # sequence counter itself is monotonic, so replayed envelopes stay
-        # rejected after a resume.
+      # PERFORMANCE (step 10 perf): no match row lock and no unconditional
+      # command purge on every (re)subscribe. A healthy tab is now one UPDATE
+      # of its presence timestamp; only an actually broken connection pays for
+      # clearing the stale commands and signalling a resume.
+      was_offline = participant.connection_state != "connected" || participant.freeze_deadline_at.present?
+      if was_offline
         match_inputs.where(match_participant_id: participant.id).delete_all
-        participant.update_columns(
+        match_participants.where(id: participant.id).update_all(
           connection_state: "connected", reconnected_at: now, last_seen_at: now,
           frozen_at: nil, freeze_deadline_at: nil, updated_at: now
         )
+        participant.reload
+        broadcast_connection!(participant, event: "resumed", now: now)
+      else
+        match_participants.where(id: participant.id).update_all(last_seen_at: now, updated_at: now)
+        participant.last_seen_at = now
       end
-      broadcast_connection!(participant.reload, event: "resumed", now: now)
     end
-    [presence, participant&.reload]
+    [presence, participant]
   rescue ActiveRecord::RecordNotUnique
     [match_presences.find_by(socket_token: socket_token), participant]
   end
@@ -381,43 +399,51 @@ class Match < ApplicationRecord
   # 30 s grace expired; released snakes keep moving in their last direction and
   # are never eliminated here.
   def sync_connection_states!(world, now: Time.current)
+    world.server_time_ms = (now.to_f * 1000).round
+    # One indexed read of every participant instead of a row lock plus a
+    # per-participant `reload` on every simulator pass (the step-10 version did
+    # both ~20 times per second, which alone cost more than the simulation).
+    states = match_participants.pluck(:id, :connection_state, :freeze_deadline_at)
     events = []
-    with_lock do
-      world.server_time_ms = (now.to_f * 1000).round
-      match_participants.find_each do |participant|
-        snake = world.player(participant.id)
-        next unless snake
+    expired = []
 
-        participant.reload
-        case participant.connection_state
-        when "connected"
-          if snake.frozen?
-            world.resume_player!(participant.id)
-            events << { participant: participant.id, state: "resumed" }
-          end
-        when "disconnected"
-          if snake.alive? && participant.freeze_deadline_at.present? &&
-             participant.freeze_deadline_at > now
-            unless snake.frozen?
-              world.freeze_player!(participant.id, now_ms: (now.to_f * 1000).round,
-                                   until_ms: (participant.freeze_deadline_at.to_f * 1000).round)
-              events << { participant: participant.id, state: "frozen",
-                          grace_deadline_at: participant.freeze_deadline_at.iso8601(6) }
-            end
-          else
-            world.release_player!(participant.id) if snake.frozen?
-            if participant.connection_state == "disconnected"
-              participant.update_columns(connection_state: "unattended", frozen_at: nil,
-                                         freeze_deadline_at: nil, updated_at: now)
-            end
-            events << { participant: participant.id, state: "unattended", reason: "grace_expired" }
-          end
-        when "unattended"
-          world.release_player!(participant.id) if snake.frozen?
+    states.each do |participant_id, state, deadline|
+      snake = world.player(participant_id)
+      next unless snake
+
+      case state
+      when "connected"
+        next unless snake.frozen?
+
+        world.resume_player!(participant_id)
+        events << { participant: participant_id, state: "resumed" }
+      when "disconnected"
+        if snake.alive? && deadline.present? && deadline > now
+          next if snake.frozen?
+
+          world.freeze_player!(participant_id, now_ms: (now.to_f * 1000).round,
+                                              until_ms: (deadline.to_f * 1000).round)
+          events << { participant: participant_id, state: "frozen",
+                      grace_deadline_at: deadline.iso8601(6) }
+        else
+          world.release_player!(participant_id) if snake.frozen?
+          expired << participant_id
+          events << { participant: participant_id, state: "unattended", reason: "grace_expired" }
         end
+      when "unattended"
+        next unless snake.frozen?
+
+        world.release_player!(participant_id)
+        events << { participant: participant_id, state: "unattended" }
       end
-      # Frozen ticks are persisted at checkpoint/completion time, never per
-      # movement tick: Postgres stays out of the simulation loop.
+    end
+
+    unless expired.empty?
+      # Only the rows that are still disconnected are touched, so a tab that
+      # reconnected during this pass is not clobbered.
+      match_participants.where(id: expired, connection_state: "disconnected")
+                        .update_all(connection_state: "unattended", frozen_at: nil,
+                                    freeze_deadline_at: nil, updated_at: now)
     end
     events.each { |fields| MatchChannel.broadcast_event(id, { type: "connection", match: id }.merge(fields)) }
     events

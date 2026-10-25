@@ -40,6 +40,11 @@ module Simulation
 
     attr_reader :id, :config, :rules, :snakes, :tick, :status, :end_reason,
                 :started_at_tick, :ended_at_tick, :columns, :rows
+    # Ticks on which at least one alive snake could actually move. The match
+    # DURATION limit is measured against this, not against the raw tick
+    # counter, so a room where everybody backgrounded their tab simply pauses
+    # instead of timing out into a finished game.
+    attr_accessor :active_ticks
     # Server wall clock (epoch ms) stamped onto each snapshot by the leased
     # owner. Clients may render a countdown from it; they never decide when a
     # freeze starts or ends.
@@ -55,6 +60,7 @@ module Simulation
       @rng = state ? Rng.restore(state.fetch("rng")) : Rng.new(config.seed)
       @snakes = []
       @shared_food = []
+      @active_ticks = 0
       if state
         restore_state!(state, participants)
       else
@@ -223,6 +229,8 @@ module Simulation
       shrink_food!(next_tick) if rules.shared_food? && rules.shrinking?
 
       @tick = next_tick
+      # Movement progress, not wall-clock passes: frozen-only rounds are idle.
+      @active_ticks += 1 if movers.any?
       complete_if_over!
       StepResult.new(tick: @tick, status: status, eliminated: eliminated,
                      eaten: consumed.map { |snake, _food| snake.id })
@@ -319,7 +327,8 @@ module Simulation
     # owner can resume after a lease hand-over without replaying randomness.
     def to_state
       {
-        "tick" => @tick, "status" => @status.to_s, "reason" => @end_reason&.to_s,
+        "tick" => @tick, "active_ticks" => @active_ticks,
+        "status" => @status.to_s, "reason" => @end_reason&.to_s,
         "rng" => @rng.state, "started_at" => @started_at_tick, "ended_at" => @ended_at_tick,
         "snakes" => @snakes.map(&:to_state),
         "shared_food" => @shared_food.map(&:to_state)
@@ -339,7 +348,7 @@ module Simulation
     def complete_if_over!
       if snakes.length > 1 && alive_count <= 1
         finish!(reason: :last_standing)
-      elsif @tick >= config.max_ticks
+      elsif @active_ticks >= config.max_ticks
         finish!(reason: :tick_limit)
       end
     end
@@ -458,6 +467,7 @@ module Simulation
     def restore_state!(state, participants)
       metadata = participants.to_h { |p| [p.fetch(:id), p] }
       @tick = Integer(state.fetch("tick"))
+      @active_ticks = Integer(state.fetch("active_ticks") || @tick)
       @status = state.fetch("status").to_sym
       @end_reason = state["reason"]&.to_sym
       @started_at_tick = state["started_at"]

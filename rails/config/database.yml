@@ -2,9 +2,14 @@
 default: &default
   adapter: postgresql
   encoding: unicode
-  # Headroom for Action Cable's worker threads, which run beside Puma's
-  # threads (heartbeat writes, broadcasts).
-  pool: <%= ENV.fetch("RAILS_DB_POOL") { ENV.fetch("RAILS_MAX_THREADS") { 5 }.to_i + 4 } %>
+  # Headroom for Action Cable's worker threads (heartbeat writes, broadcasts)
+  # and the embedded simulator thread, which all run beside Puma's request
+  # threads. Undersizing this is not just slow: a socket worker that cannot get
+  # a connection while the simulator waits for one stalls the whole match loop,
+  # every player's presence goes stale at once, and all snakes freeze together.
+  # Cable workers (4) + simulator (1) + Puma must never queue for a checkout.
+  pool: <%= [ENV.fetch("RAILS_DB_POOL") { 0 }.to_i,
+             (ENV.fetch("RAILS_MAX_THREADS") { 8 }.to_i * 2) + 8].max %>
   host: <%= ENV.fetch("DATABASE_HOST", "localhost") %>
   port: <%= ENV.fetch("DATABASE_PORT") { 5432 } %>
   username: <%= ENV.fetch("DATABASE_USER", "snake") %>

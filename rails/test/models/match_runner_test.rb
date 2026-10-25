@@ -140,16 +140,23 @@ class MatchRunnerTest < ActiveSupport::TestCase
     assert_equal "someone-else", match.owner_token
   end
 
-  test "an orphaned running match without a checkpoint is abandoned, never replayed" do
-    match = started_room.live_match
+  # Step 10 (round 2): an unrecoverable orphan is INTERRUPTED rather than
+  # abandoned, because abandoning leaves the room stuck in_match with no match
+  # to follow — which is what "the game froze and ended" looks like to players.
+  test "an orphaned running match without a checkpoint is interrupted, never replayed" do
+    room = started_room
+    match = room.live_match
     match.update_columns(status: "running", checkpoint: {}, checkpoint_tick: 0, owner_token: nil)
 
     MatchRunner.tick_once(monotonic_ms: 0)
     match.reload
-    assert_equal "abandoned", match.status
+    assert_equal "interrupted", match.status
     assert_equal "owner_lost", match.end_reason
     assert_equal [nil], match.match_participants.pluck(:placement).uniq,
                  "an orphan with no checkpoint has no authoritative result"
+    assert_nil match.winner_membership_id, "no winner may be invented for it"
+    assert_not_equal "in_match", room.reload.state,
+                     "the room is returned to the players instead of stranded"
   end
 
   test "an expired lease with a checkpoint is resumed by a new owner" do

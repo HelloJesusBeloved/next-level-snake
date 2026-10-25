@@ -67,17 +67,15 @@ class MatchChannel < ApplicationCable::Channel
   # the simulator owner's sweeper then starts the authoritative grace window.
   def heartbeat
     now = Time.current
-    MatchPresence.where(socket_token: @socket_token).update_all(last_seen_at: now, updated_at: now) if @socket_token
-    @membership&.mark_seen!(at: now)
-    @participant&.update_columns(last_seen_at: now, updated_at: now)
+    touch_presence!(now: now)
     transmit({ type: "presence", at: now.iso8601(6), participant: @participant&.id,
-               connection: @participant&.reload&.connection_state })
+               connection: @participant&.connection_state })
   end
 
   # ActionCable dispatches the untrusted action hash here. There are no actions
   # for client movement/state changes: only Protocol v1 direction intent.
   def input(data)
-    touch_presence!
+    touch_presence!(now: Time.current)
     membership = current_membership(@match.room)
     return input_ack(nil, false, :not_a_member) unless membership
     return input_ack(nil, false, :spectator) if membership.spectator?
@@ -100,10 +98,25 @@ class MatchChannel < ApplicationCable::Channel
 
   private
 
-  def touch_presence!
-    now = Time.current
+  # PERFORMANCE (step 10 perf): a direction intent used to cost two extra
+  # UPDATEs just to refresh presence, so fast steering produced 7+ write
+  # queries per key and contended with the simulator. Presence only needs to
+  # be accurate to the presence window (90 s), so writes are throttled per
+  # socket; the first intent after a reconnect still refreshes immediately.
+  def touch_presence!(now: Time.current)
+    last = self.class.presence_touched_at[@socket_token]
+    return if last && now.to_f - last < self.class::PRESENCE_WRITE_INTERVAL_SECONDS
+
+    self.class.presence_touched_at[@socket_token] = now.to_f
     MatchPresence.where(socket_token: @socket_token).update_all(last_seen_at: now, updated_at: now) if @socket_token
+    @membership&.mark_seen_throttled!(at: now, interval: 15)
     @participant&.update_columns(last_seen_at: now, updated_at: now)
+  end
+
+  PRESENCE_WRITE_INTERVAL_SECONDS = 10
+
+  def self.presence_touched_at
+    @presence_touched_at ||= {}
   end
 
   def release_presence!
@@ -120,7 +133,12 @@ class MatchChannel < ApplicationCable::Channel
   # flag and deadline; the browser never computes them.
   def seed_payload
     payload =
-      if @match.live_snapshot.present?
+      # Fastest, freshest path: when this Puma process is the leased owner, the
+      # in-memory world is current to the tick. Reconnecting players therefore
+      # see the true board immediately instead of a frame up to 2 s old.
+      if (live = MatchRunner.live_snapshot_for(@match.id))
+        live
+      elsif @match.live_snapshot.present?
         @match.live_snapshot
       elsif @match.checkpoint.present?
         Simulation::Protocol.encode(@match.build_world)

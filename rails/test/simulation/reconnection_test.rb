@@ -203,3 +203,52 @@ class ReconnectionTest < Minitest::Test
     assert tiny.snakes.first.alive?
   end
 end
+
+# Step 10 (round 2): the round clock may never run down because of a browser.
+class FrozenDurationTest < Minitest::Test
+  include SimulationTestSupport
+
+  NOW = 1_700_000_000_000
+
+  def test_duration_clock_pauses_while_nobody_can_move
+    world = build_world(participants: 2, max_ticks: 10, seed: 5)
+    world.freeze_player!(world.snakes[0].id, now_ms: NOW, until_ms: NOW + 30_000)
+    world.freeze_player!(world.snakes[1].id, now_ms: NOW, until_ms: NOW + 30_000)
+
+    9.times { world.step! }
+    assert_equal 9, world.tick, "logical ticks still advance"
+    assert_equal 0, world.active_ticks, "no movement, no duration consumed"
+    refute world.completed?, "an all-frozen board must never time out into a result"
+
+    # One snake comes back: movement progress resumes, and only then does the
+    # 10-tick duration start being spent again.
+    world.resume_player!(world.snakes[0].id)
+    10.times { world.step! }
+    assert_equal 10, world.active_ticks
+    assert world.completed?
+    assert_equal :tick_limit, world.end_reason
+    assert world.snakes.all?(&:alive?), "timeout must not kill anybody"
+  end
+
+  def test_one_moving_snake_keeps_the_round_clock_honest
+    world = build_world(participants: 2, max_ticks: 10, seed: 6)
+    world.freeze_player!(world.snakes[1].id, now_ms: NOW, until_ms: NOW + 30_000)
+    10.times { world.step! }
+    assert world.completed?, "an actively playing snake still ends on time"
+    assert_equal 10, world.active_ticks
+    assert world.snakes[1].alive?, "the frozen player is not punished by the ending"
+  end
+
+  def test_active_ticks_survive_a_checkpoint_round_trip
+    world = build_world(participants: 2, max_ticks: 50, seed: 8)
+    3.times { world.step! }
+    state = world.to_state
+    assert_equal 3, state["active_ticks"]
+    restored = Simulation::World.restore(id: world.id, config: world.config,
+                                        participants: world.snakes.map { |s|
+                                          { id: s.id, name: s.name, color_hex: s.color_hex, color_slot: s.color_slot }
+                                        }, state: state)
+    assert_equal 3, restored.active_ticks
+    assert_equal world.tick, restored.tick
+  end
+end
