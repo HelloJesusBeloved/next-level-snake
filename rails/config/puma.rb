@@ -52,7 +52,7 @@ after_booted do
         end
         # Tight cadence while a Brawl is live so movement ticks land on time;
         # idle processes sleep longer instead of spinning on the database.
-        sleep(MatchRunner.supervisor.match_ids.empty? ? 0.25 : 0.02)
+        sleep(MatchRunner.supervisor.match_ids.empty? ? 0.25 : 0.005)
       end
     end
   end

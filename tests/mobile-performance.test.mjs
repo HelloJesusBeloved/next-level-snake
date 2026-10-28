@@ -107,29 +107,70 @@ test('identical labels never mutate the DOM or re-trigger the screen reader', ()
 
 // Rendering on the phone is immediate; secondary HUD changes follow the
 // budget. This tests the *real renderer* with a tiny DOM and a fake clock.
-import { JSDOM } from 'jsdom';
 const { MultiplayerGameRenderer } = await import('../public/multiplayer/game-renderer.js');
 
+function createMockElement(tag = 'div') {
+  const el = {
+    tagName: tag.toUpperCase(),
+    children: [],
+    childNodes: [],
+    style: { setProperty: () => {}, getPropertyValue: () => '' },
+    classList: {
+      _classes: new Set(),
+      add(c) { this._classes.add(c); },
+      remove(c) { this._classes.delete(c); },
+      toggle(c, v) { if (v === undefined ? !this._classes.has(c) : v) this._classes.add(c); else this._classes.delete(c); },
+      contains(c) { return this._classes.has(c); },
+    },
+    dataset: {},
+    setAttribute() {},
+    removeAttribute() {},
+    appendChild(child) { this.children.push(child); this.childNodes.push(child); return child; },
+    append(...children) { for (const c of children) this.appendChild(c); },
+    replaceChildren(...children) { this.children = [...children]; this.childNodes = [...children]; },
+    getBoundingClientRect() { return { width: 316, height: 237, x: 0, y: 0 }; },
+    getContext() { return new Proxy({}, { get: () => () => {}, set: () => true }); },
+    querySelector(sel) {
+      const match = (node) => {
+        if (node.tagName && node.tagName.toLowerCase() === sel.toLowerCase()) return node;
+        for (const child of node.children || []) {
+          const found = match(child);
+          if (found) return found;
+        }
+        return null;
+      };
+      return match(this);
+    }
+  };
+  return el;
+}
+
 test('real renderer keeps every authoritative tick but only writes HUD once per second', () => {
-  const dom = new JSDOM('<!doctype html><html><body><canvas id="board"></canvas><ol id="scores"></ol></body></html>', {
-    pretendToBeVisual: true, url: 'http://localhost/', runScripts: 'outside-only',
-  });
-  globalThis.window = dom.window;
-  globalThis.document = dom.window.document;
-  globalThis.getComputedStyle = dom.window.getComputedStyle.bind(dom.window);
-  globalThis.MutationObserver = dom.window.MutationObserver;
-  globalThis.requestAnimationFrame = () => 1;
+  const mockBoard = createMockElement('canvas');
+  const mockScores = createMockElement('ol');
+  globalThis.window = {
+    matchMedia: () => ({ matches: false }),
+    devicePixelRatio: 1,
+    setInterval: (fn) => setInterval(fn, 1000),
+    clearInterval: (id) => clearInterval(id),
+  };
+  globalThis.document = {
+    hidden: false,
+    documentElement: createMockElement('html'),
+    createElement: (tag) => createMockElement(tag),
+    createDocumentFragment: () => createMockElement('fragment'),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+  globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
+  globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
   globalThis.cancelAnimationFrame = () => {};
-  dom.window.matchMedia = () => ({ matches: false });
-  dom.window.HTMLCanvasElement.prototype.getContext = () => new Proxy({}, {
-    get: () => () => {}, set: () => true,
-  });
-  dom.window.HTMLElement.prototype.getBoundingClientRect = () => ({ width: 316, height: 237, x: 0, y: 0 });
   const budgetClock = clock();
   const hud = createPlayBudget({ now: budgetClock.now, schedule: budgetClock.schedule, cancel: budgetClock.cancel });
-  const scores = document.getElementById('scores');
+  const scores = mockScores;
   const renderer = new MultiplayerGameRenderer({
-    canvas: document.getElementById('board'), scoreboard: scores, ownParticipantId: 1, budget: hud,
+    canvas: mockBoard, scoreboard: scores, ownParticipantId: 1, budget: hud,
   });
   renderer.setActive(true);
   let draws = 0, mutations = 0;
@@ -152,5 +193,4 @@ test('real renderer keeps every authoritative tick but only writes HUD once per 
   assert.equal(scores.querySelector('li').dataset.playerId, '1');
   assert.equal(scores.querySelector('strong').textContent, '2 pts');
   renderer.destroy();
-  dom.window.close();
 });
