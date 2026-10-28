@@ -202,11 +202,12 @@ for (const hz of [30, 60, 120, 144]) {
 test('cacheable multiplayer entry points and modified dependency imports carry the new release', () => {
   const root = new URL('../', import.meta.url);
   const read = (path) => readFileSync(new URL(path, root), 'utf8');
-  const release = 'step10-cadence2';
+  const release = 'step10-mobile3';
   const view = read('rails/app/views/snake/multiplayer.html.erb');
   assert.ok(view.includes(`/multiplayer/page.js?v=${release}`));
   assert.ok(view.includes(`/multiplayer/lobby.css?v=${release}`));
   assert.ok(read('public/multiplayer/page.js').includes(`./lobby.js?v=${release}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./game-renderer.js?v=${release}`));
   assert.ok(read('public/multiplayer/game-renderer.js').includes(`./grid-cadence.js?v=${release}`));
+  assert.ok(read('public/multiplayer/lobby.js').includes(`./snapshot-chunks.js?v=${release}`));
 });

@@ -16,8 +16,35 @@ class MatchChannel < ApplicationCable::Channel
     "matches:#{Integer(match_id)}"
   end
 
+  # PostgreSQL NOTIFY refuses payloads >= 8000 bytes. A Brawl with several
+  # growing snakes can cross that limit even on the default mobile board; the
+  # simulator keeps running but every client then appears to freeze. Small
+  # frames keep the existing single broadcast. Oversized frames are sliced
+  # into ASCII-safe, individually bounded messages and reassembled in the
+  # browser before ANY part becomes visible. No cells or standings are cut.
+  MAX_NOTIFY_BYTES = 7_900
+  CHUNK_BYTES = 3_000
+
+  def self.snapshot_messages(snapshot)
+    payload = snapshot.merge("type" => "snapshot")
+    return [payload] if ActiveSupport::JSON.encode(payload).bytesize <= MAX_NOTIFY_BYTES
+
+    # JSON.generate's ascii_only mode escapes multibyte player names before
+    # byteslicing, so a chunk cannot split a UTF-8 codepoint. Partially encoded
+    # JSON is never parsed or rendered until every chunk has arrived.
+    encoded = JSON.generate(payload, ascii_only: true)
+    count = (encoded.bytesize.to_f / CHUNK_BYTES).ceil
+    Array.new(count) do |index|
+      { "type" => "snapshot_chunk", "m" => snapshot.fetch("m"),
+        "t" => snapshot.fetch("t"), "part" => index, "parts" => count,
+        "data" => encoded.byteslice(index * CHUNK_BYTES, CHUNK_BYTES) }
+    end
+  end
+
   def self.broadcast_snapshot(match_id, snapshot)
-    ActionCable.server.broadcast(stream_for(match_id), snapshot.merge("type" => "snapshot"))
+    snapshot_messages(snapshot).each do |message|
+      ActionCable.server.broadcast(stream_for(match_id), message)
+    end
   end
 
   def self.broadcast_event(match_id, event)

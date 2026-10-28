@@ -12,10 +12,11 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step10-cadence2';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-cadence2';
-import { createPlayBudget, text } from './play-budget.js?v=step10-cadence2';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-cadence2';
+import { mountConfiguration } from './configuration.js?v=step10-mobile3';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-mobile3';
+import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile3';
+import { createPlayBudget, text } from './play-budget.js?v=step10-mobile3';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile3';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -180,6 +181,7 @@ export function mountLobby(root) {
   const pollInterval = Math.max(2, parseInt(root.dataset.pollInterval, 10) || 5) * 1000;
   let timer = null;
   const configuration = mountConfiguration({ api, apply, getState: () => state });
+  const snapshotChunks = new SnapshotChunks();
   const gameRenderer = el.gameCanvas ? new MultiplayerGameRenderer({
     canvas: el.gameCanvas,
     scoreboard: el.gameScores,
@@ -517,6 +519,7 @@ export function mountLobby(root) {
         state.inputSeq = 0;
       }
       if (state.match && state.match.id !== previousMatchId) {
+        snapshotChunks.reset();
         // A rematch is a NEW round. Reset every piece of round-local state in
         // the browser (renderer, results, banners, sequence mirror) so the
         // server's new snapshots render immediately — no page refresh.
@@ -981,6 +984,7 @@ export function mountLobby(root) {
   }
 
   function disconnectMatchCable() {
+    snapshotChunks.reset();
     gameRenderer?.setActive(false);
     gameRenderer?.discardPendingFrames();
     state.liveHudBudget.stop();
@@ -995,6 +999,12 @@ export function mountLobby(root) {
 
   function onMatchMessage(message) {
     if (!message || Number(message.m || message.match) !== Number(state.match && state.match.id)) return;
+    if (message.type === 'snapshot_chunk') {
+      const full = snapshotChunks.receive(message, Number(state.match.id), state.gameSnapshot?.t ?? -1);
+      if (full) onMatchMessage(full); // one complete authoritative frame only
+      return;
+    }
+    if (message.type === 'snapshot') snapshotChunks.reset();
     if (message.type === 'connection') {
       const ownId = state.member?.match_participant_id;
       if (!ownId || Number(message.participant) !== Number(ownId)) return;

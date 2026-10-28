@@ -26,9 +26,12 @@ class MatchRunner
   RENEW_INTERVAL_MS = 4_000
   CHECKPOINT_EVERY_TICKS = 20
   MAX_CLAIMS_PER_TICK = 10
-  # Must stay below the fastest tick (Ludicrous = 42 ms) so every logical step
-  # drains pending direction rows; otherwise a step can run without them.
+  # Every movement step force-drains inputs before applying the tick. Keep
+  # a bounded wake for connection changes, but do not poll all matches again
+  # between ticks: those reads competed with the very tick they were meant to
+  # make responsive.
   INPUT_POLL_INTERVAL_MS = 30
+  CLAIM_SCAN_INTERVAL_MS = 250
   # Network cadence is decoupled from durability:
   #   * broadcast ONE frame per movement tick, in memory only (no DB write);
   #   * persist ~2 s so reconnects still have a complete recent frame.
@@ -48,6 +51,9 @@ class MatchRunner
   # Step 10: presence sweeps are throttled well below socket-heartbeat cadence
   # but fast enough to detect a silent tunnel drop without a 15 s stall.
   PRESENCE_SWEEP_INTERVAL_MS = 500
+  # A deleted socket row with no unsubscribe callback is caught by this full
+  # backstop. The usual half-second pass only touches rooms with stale rows.
+  PRESENCE_FULL_SWEEP_INTERVAL_MS = 5_000
   # Orphan recovery is a cheap bounded query; never run it on every pass.
   ORPHAN_SWEEP_INTERVAL_MS = 10_000
   # Lobby lifecycle (presence, host succession, idle expiry) used to run only
@@ -97,6 +103,10 @@ class MatchRunner
       @orphan_sweep_at ||= 0
     end
 
+    def claim_scan_at
+      @claim_scan_at
+    end
+
     # Latest broadcast frame per match, written by the owner in the same pass it
     # publishes. Action Cable reads it to seed a (re)connecting client without
     # touching the simulator mutex, the database, or encoding anything on a
@@ -143,40 +153,34 @@ class MatchRunner
         # is frozen before it can move another cell.
         presence = reconcile_connections(now: now, monotonic_ms: monotonic_ms)
         connections = sync_connections(now: now, monotonic_ms: monotonic_ms)
+        # Every step force-drains durable commands immediately before moving.
+        # A second query on each inter-tick pass only competes with movement.
+        report = supervisor.tick!(now_ms: monotonic_ms)
+        publish_snapshots(now: now, monotonic_ms: monotonic_ms)
+        # Housekeeping is server-owned but must not delay due movement or the
+        # broadcast behind a room-wide sweep or orphan recovery.
         interrupted = recover_orphans(now: now, monotonic_ms: monotonic_ms)
         sweep_rooms(now: now, monotonic_ms: monotonic_ms)
-        # Steering latency: commands are applied to the in-memory queue on
-        # every scheduler pass instead of waiting for the next movement tick
-        # (up to 165 ms at Chill). The supervisor still drains immediately
-        # before each step, which is idempotent and cheap when empty.
-        drain_inputs(now: now, monotonic_ms: monotonic_ms)
-        report = supervisor.tick!(now_ms: monotonic_ms).merge(
-          claimed: claimed, connections: connections, presence: presence,
-          interrupted: interrupted
-        )
-        publish_snapshots(now: now, monotonic_ms: monotonic_ms)
-        report
+        report.merge(claimed: claimed, connections: connections, presence: presence,
+                     interrupted: interrupted)
       end
     end
 
-    # Wake for the next actual movement/input deadline, not every fixed 5ms.
-    # Work already spent in the previous pass is subtracted from the deadline;
-    # sleeping "5ms after work" cannot guarantee a 5ms movement cadence and
-    # needlessly repeats claim queries up to 200 times/sec under load.
-    # The 1ms floor prevents an overdue scheduler from busy-spinning.
+    # Wake for the next actual movement deadline; the forced pre-step input
+    # drain also fires at that boundary. A 30ms ceiling keeps freeze/resume and
+    # new room claims responsive, without querying every active room's input
+    # queue on every inter-tick pass. This is only a SERVER timer.
     def next_wake_ms(now_ms: Simulation::Scheduler.monotonic_ms)
       entries = supervisor.entries.values
       return 250 if entries.empty?
 
-      deadlines = entries.flat_map do |entry|
+      deadlines = entries.filter_map do |entry|
+        next unless entry.world.running?
         scheduler = entry.scheduler
         elapsed = [now_ms - (scheduler.last_at_ms || now_ms), 0].max
-        tick_due = scheduler.tick_ms - scheduler.accumulator_ms - elapsed
-        polled_at = input_poll_at[entry.world.id]
-        input_due = polled_at ? INPUT_POLL_INTERVAL_MS - (now_ms - polled_at) : 0
-        [tick_due, input_due]
+        scheduler.tick_ms - scheduler.accumulator_ms - elapsed
       end
-      [1, [INPUT_POLL_INTERVAL_MS, deadlines.min].min].max
+      [1, [INPUT_POLL_INTERVAL_MS, deadlines.min || INPUT_POLL_INTERVAL_MS].min].max
     end
 
     # Applies any waiting direction intents to the owned worlds. Bounded by the
@@ -236,7 +240,16 @@ class MatchRunner
       return {} if monotonic_ms - presence_sweep_at < PRESENCE_SWEEP_INTERVAL_MS
 
       @presence_sweep_at = monotonic_ms
-      Match.live.find_each do |match|
+      stale_ids = MatchPresence.where("last_seen_at < ?", now - Match.presence_stale_seconds)
+                               .distinct.pluck(:match_id)
+      full = @presence_full_sweep_at &&
+             monotonic_ms - @presence_full_sweep_at >= PRESENCE_FULL_SWEEP_INTERVAL_MS
+      @presence_full_sweep_at ||= monotonic_ms
+      @presence_full_sweep_at = monotonic_ms if full
+      return {} if stale_ids.empty? && !full
+
+      matches = full ? Match.live : Match.live.where(id: stale_ids)
+      matches.find_each do |match|
         match.reconcile_presence!(now: now)
       rescue StandardError => error
         Rails.logger.warn("Presence reconcile failed for match=#{match.id}: " \
@@ -342,6 +355,11 @@ class MatchRunner
 
     def claim_matches(now:, monotonic_ms:, limit:)
       claimed = []
+      # With live matches the old scan ran at every 1–30ms wake, even when no
+      # match was claimable. First call still claims immediately; subsequent
+      # scans are bounded without involving any browser or room leader.
+      return claimed if claim_scan_at && monotonic_ms - claim_scan_at < CLAIM_SCAN_INTERVAL_MS
+      @claim_scan_at = monotonic_ms
       Match.claimable(now).order(:id).limit(limit).each do |match|
         next if supervisor.attach?(match.id)
 
@@ -390,8 +408,10 @@ class MatchRunner
       @supervisor = nil
       @token = nil
       @presence_sweep_at = 0
+      @presence_full_sweep_at = nil
       @orphan_sweep_at = 0
       @room_sweep_at = 0
+      @claim_scan_at = nil
       @live_frames = {}
       input_poll_at.clear
       snapshot_broadcast_at.clear
@@ -410,6 +430,8 @@ class MatchRunner
         Rails.logger.warn("MatchRunner could not release match=#{match_id}: #{error.class}: #{error.message}")
       end
       supervisor.shutdown!
+      @presence_full_sweep_at = nil
+      @claim_scan_at = nil
       live_frames.clear
       input_poll_at.clear
       snapshot_broadcast_at.clear

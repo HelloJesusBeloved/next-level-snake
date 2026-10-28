@@ -216,3 +216,14 @@ shows server vs network vs drawing timing and can switch the hold off. Server
 loops now wake on deadlines rather than a fixed 5ms polling sleep.
 See `rails/docs/multiplayer-step-10-mobile-cadence.md` for the measured results,
 limits, source research, and reproducible Chromium/WebKit probe.
+
+## Mobile performance follow-up 3 (step 10)
+
+The newest add-on fixes three independently reproduced sources of delayed or
+missing frames: the mobile cadence queue's default 30–60 ms presentation hold
+(now opt-in), PostgreSQL `NOTIFY` refusing Brawl frames larger than 8 KB
+(now fragmented and assembled only when complete), and excessive server scans
+before due movement ticks (now bounded and scheduled behind publication).
+Server authority, multi-tab grace, results and discrete grid drawing remain
+unchanged. See `rails/docs/multiplayer-step-10-mobile-3.md` for the measured
+latency/spacing tradeoff and cross-process PostgreSQL/browser checks.

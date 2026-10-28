@@ -35,10 +35,13 @@ class MatchWakeDeadlineTest < ActiveSupport::TestCase
     assert_equal 3, MatchRunner.next_wake_ms(now_ms: 102)
   end
 
-  test 'input poll remains responsive between movement ticks' do
+  test 'inter-tick wake stays bounded without polling every match input queue' do
     attach
     assert_equal 30, MatchRunner.next_wake_ms(now_ms: 0)
-    assert_equal 10, MatchRunner.next_wake_ms(now_ms: 20)
+    assert_equal 30, MatchRunner.next_wake_ms(now_ms: 20)
+    # World ticks still drain inputs forcibly at the step boundary, so the
+    # wake bound is for connection/claim maintenance, not client authority.
+    assert_equal 5, MatchRunner.next_wake_ms(now_ms: 100)
   end
 
   test 'a missed deadline cannot cause an unbounded busy spin' do

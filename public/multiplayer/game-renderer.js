@@ -10,8 +10,8 @@
 // stale history rather than playing catch-up. Clean links have no intentional
 // hold; jittery links can hold a frame <= min(50ms, half a tick) plus the next
 // refresh. This trade-off is observable and switchable in Movement diagnostics.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-cadence2';
-import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-cadence2';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile3';
+import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile3';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -32,8 +32,12 @@ export class MultiplayerGameRenderer {
     this.frameCancel = frameCancel;
     this.frameGate = new FrameGate({ request: frameRequest, cancel: frameCancel, later: timerRequest, clear: timerCancel });
     this.viewPaused = false;
-    const coarse = !!window.matchMedia?.('(any-pointer: coarse)').matches;
-    this.cadence = new GridCadence({ enabled: cadenceEnabled ?? coarse });
+    this.coarsePointer = !!window.matchMedia?.('(any-pointer: coarse)').matches;
+    // Delivery pacing on a jittery tunnel can add 30–60 ms of receive-to-
+    // paint delay. It improved spacing in synthetic traces, but made the
+    // actual phone feel late. Start in lowest-latency mode; smoothing remains
+    // an explicit opt-in in Movement diagnostics.
+    this.cadence = new GridCadence({ enabled: cadenceEnabled ?? false });
     this.timings = new MovementTimings();
     this.receivedAt = new WeakMap();
     // The first context request determines its attributes for its lifetime.
@@ -185,7 +189,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step10-cadence2', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step10-mobile3', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -284,7 +288,17 @@ export class MultiplayerGameRenderer {
     // paced or paused. Only the visual frame goes through the tiny queue.
     if (!this.hidden && !this.viewPaused) {
       this.cadence.receive(snapshot, at, important);
-      if (important) {
+      if (!this.cadence.enabled && this.coarsePointer) {
+        // The existing frame gate races rAF against a 32ms watchdog. On a
+        // phone this is an avoidable receive-to-paint delay even with pacing
+        // OFF; real clean-link measurements were 34ms p95 with pacing and
+        // ~15ms p95 without. A mobile canvas paint is <1ms in that profile.
+        // Draw the just-received complete frame now. Browser scanout is still
+        // up to the device and the server remains sole movement authority.
+        this.frameGate.cancel();
+        const frame = this.cadence.take(at);
+        if (frame) this.present(frame, at);
+      } else if (important) {
         // A confirmed turn, elimination, freeze, reconnect or result must not
         // acquire another display-queue delay. Ordinary motion is coalesced.
         this.frameGate.cancel();

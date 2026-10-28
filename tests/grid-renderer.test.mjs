@@ -4,14 +4,14 @@ import { JSDOM } from 'jsdom';
 import { MultiplayerGameRenderer } from '../public/multiplayer/game-renderer.js';
 import { createPlayBudget } from '../public/multiplayer/play-budget.js';
 
-function setup({ enabled = true } = {}) {
+function setup({ enabled = true, coarse = false } = {}) {
   const dom = new JSDOM('<!doctype html><canvas></canvas><ol></ol>', { pretendToBeVisual: true });
   const { window } = dom;
   globalThis.window = window;
   globalThis.document = window.document;
   globalThis.MutationObserver = window.MutationObserver;
   globalThis.getComputedStyle = window.getComputedStyle.bind(window);
-  window.matchMedia = () => ({ matches: false });
+  window.matchMedia = (query) => ({ matches: coarse && query === '(any-pointer: coarse)' });
   let at = 0, id = 0;
   const callbacks = new Map(), calls = [];
   const request = (cb) => { const key = ++id; callbacks.set(key, cb); return key; };
@@ -136,4 +136,33 @@ test('HUD works on browsers without ES2025 iterator helper methods', () => {
     if (original) Object.defineProperty(prototype, 'map', original);
     s.close();
   }
+});
+
+
+test('mobile defaults to zero extra frame hold even on jittery arrivals', () => {
+  const s = setup({ enabled: null, coarse: true });
+  try {
+    assert.equal(s.renderer.cadence.enabled, false);
+    s.renderer.accept(frame(1));
+    s.at(52); s.renderer.accept(frame(2));
+    s.at(260); s.renderer.accept(frame(3));
+    assert.deepEqual(s.paintTicks, [1, 2, 3], 'every RECEIVED cell frame is presented without a display queue');
+    assert.equal(s.renderer.cadence.pending, false);
+    assert.equal(s.queued, 0, 'rAF/watchdog adds no extra latency in default mobile mode');
+    assert.equal(s.renderer.movementDiagnostics().receiveToPaintMs.max, 0);
+  } finally { s.close(); }
+});
+
+test('users can still explicitly opt into smoothing bursty delivery', () => {
+  const s = setup({ enabled: true, coarse: true });
+  try {
+    s.renderer.accept(frame(1));
+    s.at(55); s.renderer.accept(frame(2));
+    assert.deepEqual(s.paintTicks, [1], 'opt-in mode coalesces ordinary motion at refresh');
+    s.refresh(110);
+    assert.deepEqual(s.paintTicks, [1, 2]);
+    s.renderer.setCadenceEnabled(false);
+    s.at(152); s.renderer.accept(frame(3));
+    assert.deepEqual(s.paintTicks, [1, 2, 3], 'turning pacing off restores immediate phone frames');
+  } finally { s.close(); }
 });

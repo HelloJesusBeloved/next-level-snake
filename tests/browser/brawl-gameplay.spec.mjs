@@ -55,9 +55,15 @@ test('two browsers play one synchronized Brawl on the server-authoritative canva
   // Server snapshots advance the shared tick on both clients.
   await expect(pageA.locator('#mp-game-tick')).toHaveText(/^Tick [1-9]\d*$/, { timeout: 15_000 });
   await expect(pageB.locator('#mp-game-tick')).toHaveText(/^Tick [1-9]\d*$/, { timeout: 15_000 });
-  const tickA = Number((await pageA.locator('#mp-game-tick').textContent()).replace('Tick ', ''));
-  const tickB = Number((await pageB.locator('#mp-game-tick').textContent()).replace('Tick ', ''));
-  expect(Math.abs(tickA - tickB)).toBeLessThanOrEqual(5), 'both clients show the same simulation clock';
+  // The human-readable Tick label is intentionally sampled at 1Hz on phones.
+  // Compare the authoritative per-snapshot data-tick instead: HUD sampling
+  // is not a network synchronization test and may differ by a whole second.
+  const [tickA, tickB] = await Promise.all([
+    pageA.locator('#mp-game').getAttribute('data-tick'),
+    pageB.locator('#mp-game').getAttribute('data-tick'),
+  ]);
+  expect(Math.abs(Number(tickA) - Number(tickB))).toBeLessThanOrEqual(5),
+    'both clients receive the same authoritative simulation clock';
 
   // Keyboard steering sends only a direction; the server remains authoritative.
   await pageA.locator('#mp-game-canvas').click();
