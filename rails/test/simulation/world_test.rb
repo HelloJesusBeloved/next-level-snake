@@ -226,20 +226,29 @@ class WorldInputTest < Minitest::Test
     Simulation::Direction.parse("left")
   end
 
+  def right
+    Simulation::Direction.parse("right")
+  end
+
   def test_accepts_a_valid_turn_and_applies_it_on_the_next_tick
     assert_equal :accepted, @world.apply_input(player_id: @snake.id, direction: down, tick: 0, seq: 1)
     @world.step!
     assert_equal [5, 6], @snake.head
   end
 
-  def test_queues_two_turns_and_applies_them_in_order
+  # A Brawl buffers four turns (a fast touch gesture can produce several inside
+  # one movement tick). The turns still apply one per tick, in order.
+  def test_queues_turns_and_applies_them_in_order
     assert_equal :accepted, @world.apply_input(player_id: @snake.id, direction: down, tick: 0, seq: 1)
     assert_equal :accepted, @world.apply_input(player_id: @snake.id, direction: left, tick: 0, seq: 2)
-    assert_equal :queue_full, @world.apply_input(player_id: @snake.id, direction: up, tick: 0, seq: 3)
-    @world.step!
-    assert_equal [5, 6], @snake.head, "first queued turn"
-    @world.step!
-    assert_equal [4, 6], @snake.head, "second queued turn"
+    assert_equal :accepted, @world.apply_input(player_id: @snake.id, direction: up, tick: 0, seq: 3)
+    assert_equal :accepted, @world.apply_input(player_id: @snake.id, direction: right, tick: 0, seq: 4)
+    assert_equal :queue_full, @world.apply_input(player_id: @snake.id, direction: down, tick: 0, seq: 5)
+
+    assert_equal [5, 6], head_after_step(1), "first queued turn"
+    assert_equal [4, 6], head_after_step(1), "second queued turn"
+    assert_equal [4, 5], head_after_step(1), "third queued turn"
+    assert_equal [5, 5], head_after_step(1), "fourth queued turn"
   end
 
   def test_rejects_immediate_180_degree_reversal

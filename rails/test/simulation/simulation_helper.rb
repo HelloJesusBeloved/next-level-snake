@@ -45,3 +45,10 @@ module SimulationTestSupport
     snake.food = Simulation::Food.new(x: cell[0], y: cell[1], owner_id: snake.id)
   end
 end
+
+  # Steps the world +count+ times and returns the first snake's head cell.
+  # Keeps multi-turn queue tests readable without duplicating step/assert pairs.
+  def head_after_step(count = 1)
+    count.times { @world.step! }
+    @world.snakes.first.head
+  end

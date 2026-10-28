@@ -91,14 +91,18 @@ module Simulation
       grow.positive? ? body.dup : body[0...-1]
     end
 
-    # Direction intake enforces the same rules as the single player:
-    # no duplicates, no 180-degree reversal, and at most two queued turns.
+    # Direction intake enforces the same rules as the single player: no
+    # duplicates and no 180-degree reversals. How many turns may be buffered is
+    # a MODE rule, not a law of the engine — the caller passes the mode's limit
+    # so a fast touch gesture can queue several turns inside one movement tick
+    # without silently losing its tail.
     # Returns :accepted or a rejection symbol (the caller reports it).
-    def queue_direction(direction)
+    def queue_direction(direction, capacity: MAX_QUEUED_DIRECTIONS)
       reference = queue.last || self.direction
       return :duplicate_direction if direction.same_as?(reference)
       return :reversal if direction.reverse_of?(reference)
-      return :queue_full if queue.length >= MAX_QUEUED_DIRECTIONS
+      limit = [Integer(capacity), 1].max
+      return :queue_full if queue.length >= limit
 
       queue << direction
       :accepted

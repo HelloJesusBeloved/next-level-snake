@@ -10,8 +10,8 @@
 // stale history rather than playing catch-up. Clean links have no intentional
 // hold; jittery links can hold a frame <= min(50ms, half a tick) plus the next
 // refresh. This trade-off is observable and switchable in Movement diagnostics.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile3';
-import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile3';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
+import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 

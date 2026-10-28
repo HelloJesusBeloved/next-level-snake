@@ -158,7 +158,7 @@ module Simulation
       # is ignored (duplicate/reversal/queue full). Otherwise one sequence could
       # be replayed later with a different direction.
       snake.last_seq = seq
-      snake.queue_direction(direction)
+      snake.queue_direction(direction, capacity: rules.max_queued_directions)
     end
 
     # Removes a participant from the simulation (left the room / grace expired).

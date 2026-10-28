@@ -227,3 +227,12 @@ before due movement ticks (now bounded and scheduled behind publication).
 Server authority, multi-tab grace, results and discrete grid drawing remain
 unchanged. See `rails/docs/multiplayer-step-10-mobile-3.md` for the measured
 latency/spacing tradeoff and cross-process PostgreSQL/browser checks.
+
+## Mobile follow-up 4 (step 10): fast multi-turn swipes
+
+Swipe geometry now re-anchors after every emitted turn, so a fast L- or
+Z-shaped gesture commits each leg instead of waiting for the second leg to
+out-travel the first. The own-player cache uses the snapshot's field names (a
+bug in the previous add-on silently dropped every steering intent), and a Brawl
+buffers four turns per player while Duels keep two. See
+`rails/docs/multiplayer-step-10-mobile-4.md`.

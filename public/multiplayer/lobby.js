@@ -13,10 +13,11 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step10-mobile3';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-mobile3';
-import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile3';
-import { createPlayBudget, text } from './play-budget.js?v=step10-mobile3';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile3';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-mobile4';
+import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
+import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
+import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -520,6 +521,7 @@ export function mountLobby(root) {
       }
       if (state.match && state.match.id !== previousMatchId) {
         snapshotChunks.reset();
+        swipes.cancel();
         // A rematch is a NEW round. Reset every piece of round-local state in
         // the browser (renderer, results, banners, sequence mirror) so the
         // server's new snapshots render immediately — no page refresh.
@@ -1048,7 +1050,10 @@ export function mountLobby(root) {
       // Authoritative own-state mirror: useful when debugging a live client
       // (and in tests). Never used to steer or to compute game state.
       const own = message.p?.find((player) => player.i === state.member?.match_participant_id);
-      state.controls = own ? { id: own.i, alive: own.a, frozen: own.fr, direction: own.d } : null;
+      // SAME field names as the snapshot player (a, fr, d). An earlier cache
+      // used alive/frozen/direction, so the send guard's `!own.a` never matched
+      // and every steering intent was dropped client-side.
+      state.controls = own ? { id: own.i, a: own.a, fr: own.fr, d: own.d } : null;
       if (el.gameStatus && !state.match?.spectator && message.s === 'running') {
         if (!own?.a) text(el.gameStatus, 'Eliminated · watching the Brawl');
         else if (own.fr) text(el.gameStatus, 'Your snake is frozen · reconnecting');
@@ -1133,11 +1138,11 @@ export function mountLobby(root) {
     const ownId = state.member?.match_participant_id;
     const own = state.controls && state.controls.id === ownId
       ? state.controls : snapshot?.p?.find((player) => player.i === ownId);
-    if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.alive && !own?.a) return;
+    if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.a) return;
     // Frozen/dead/spectating snakes never send: the server would reject these
     // anyway, and any pre-disconnect command still in flight is discarded on
     // the server when the socket is released.
-    if (own.frozen || own.fr || state.match?.spectator) return;
+    if (own.fr || state.match?.spectator) return;
     // Every intent is sent. The server de-duplicates the direction queue
     // itself and the input path no longer takes a lock, so swallowing a
     // keypress here could only ever lose a real turn.
@@ -1516,42 +1521,31 @@ export function mountLobby(root) {
   //     held back by tap-delay/double-tap-zoom heuristics.
   // touchmove is registered non-passive on the canvas only, so a swipe never
   // scrolls the page; everywhere else the page still scrolls normally.
-  let swipeStart = null;
-  let swipeSent = null;
-  const SWIPE_THRESHOLD = 20;
-
-  function swipeDirection(start, end) {
-    const dx = end.x - start.x; const dy = end.y - start.y;
-    if (Math.max(Math.abs(dx), Math.abs(dy)) < SWIPE_THRESHOLD) return null;
-    return Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
-  }
+  // The steering geometry lives in swipe-steering.js so the exact finger path
+  // is testable. The essential property: the origin is re-anchored after every
+  // emitted turn, so a fast L-shaped swipe (down then left) commits BOTH turns
+  // instead of waiting for the second leg to out-travel the first.
+  const swipes = new SwipeSteering({ send: (direction) => sendDirection(direction) });
 
   on(el.gameCanvas, 'pointerdown', (event) => {
     if (event.pointerType === 'mouse') return;
-    swipeStart = { x: event.clientX, y: event.clientY };
-    swipeSent = null;
+    swipes.begin({ x: event.clientX, y: event.clientY });
     if (el.gameCanvas.setPointerCapture) { try { el.gameCanvas.setPointerCapture(event.pointerId); } catch (err) { /* unsupported */ } }
   });
   on(el.gameCanvas, 'pointermove', (event) => {
-    if (!swipeStart || event.pointerType === 'mouse') return;
-    const direction = swipeDirection(swipeStart, { x: event.clientX, y: event.clientY });
-    // One intent per direction per drag: a continuing drag in the same
-    // direction is a duplicate the server would reject anyway.
-    if (direction && direction !== swipeSent) { swipeSent = direction; sendDirection(direction); }
+    if (event.pointerType === 'mouse') return;
+    swipes.move({ x: event.clientX, y: event.clientY });
   });
   on(el.gameCanvas, 'pointerup', (event) => {
-    // A short flick that never crossed the threshold mid-drag still counts.
-    if (swipeStart && !swipeSent) {
-      const direction = swipeDirection(swipeStart, { x: event.clientX, y: event.clientY });
-      if (direction) sendDirection(direction);
-    }
-    swipeStart = null; swipeSent = null;
+    // A short flick that never crossed the threshold mid-drag still counts, and
+    // so does the second leg of a very fast L-swipe.
+    swipes.end({ x: event.clientX, y: event.clientY });
   });
-  on(el.gameCanvas, 'pointercancel', () => { swipeStart = null; swipeSent = null; });
+  on(el.gameCanvas, 'pointercancel', () => { swipes.cancel(); });
   if (el.gameCanvas) {
     // iOS Safari without touch-action support still needs a preventDefault to
     // stop the arena swipe from scrolling/zooming the page.
-    el.gameCanvas.addEventListener('touchmove', (event) => { if (swipeStart) event.preventDefault(); }, { passive: false });
+    el.gameCanvas.addEventListener('touchmove', (event) => { if (swipes.active) event.preventDefault(); }, { passive: false });
   }
 
   document.querySelectorAll('[data-game-dir]').forEach((button) => {

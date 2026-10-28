@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, devices } from '@playwright/test';
 
 // Real server-authoritative Brawl: two separate browser contexts (separate
 // guest identities), one real Rails server, real Action Cable snapshots and a
@@ -91,6 +91,74 @@ test('two browsers play one synchronized Brawl on the server-authoritative canva
   expect(errors).toEqual([]);
   await contextA.close();
   await contextB.close();
+});
+
+// The reported mobile failure: "going right, I swipe down and left immediately
+// and end up one square away from myself." Drives GENUINE touch events (the
+// arena ignores mouse pointers) against the real server and simulator, and
+// asserts BOTH turns left the browser and were accepted by Rails.
+test('a fast down-then-left touch swipe commits both turns', async ({ browser, baseURL, isMobile }) => {
+  test.skip(!isMobile, 'touch steering is a phone-only input path');
+  const hostContext = await browser.newContext({ ...devices['Pixel 7'], baseURL });
+  const peerContext = await browser.newContext({ baseURL });
+  const page = await hostContext.newPage();
+  const peer = await peerContext.newPage();
+  const errors = [];
+  page.on('pageerror', (error) => errors.push(error.message));
+
+  try {
+    const code = await hostRoom(page, 'SwipeAda');
+    await joinRoom(peer, code, 'SwipeGrace');
+    await page.click('#mp-start');
+    await expect(page.locator('#mp-game-canvas')).toBeVisible();
+    await page.waitForFunction(() => Number(document.querySelector('#mp-game')?.dataset.tick) > 3,
+      null, { timeout: 15_000 });
+
+    const sent = [];
+    const acks = [];
+    const cdp = await hostContext.newCDPSession(page);
+    await cdp.send('Network.enable');
+    cdp.on('Network.webSocketFrameSent', (event) => {
+      try {
+        const envelope = JSON.parse(event.response.payloadData);
+        if (envelope.command !== 'message' || !envelope.data) return;
+        const payload = JSON.parse(envelope.data);
+        if (payload.action === 'input') sent.push(payload.dir);
+      } catch { /* not a steering frame */ }
+    });
+    cdp.on('Network.webSocketFrameReceived', (event) => {
+      try {
+        const message = JSON.parse(event.response.payloadData).message;
+        if (message?.type === 'input_ack') acks.push(message);
+      } catch { /* not an ack */ }
+    });
+
+    // The arena sits below the lobby controls on a phone; CDP touch dispatch
+    // uses viewport coordinates, so the canvas must be scrolled into view first.
+    await page.locator('#mp-game-canvas').scrollIntoViewIfNeeded();
+    const box = await page.locator('#mp-game-canvas').boundingBox();
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    const at = (px, py) => [{ x: px, y: py }];
+
+    // One continuous touch: down, then left — the exact reported gesture.
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at(x, y) });
+    for (let step = 1; step <= 6; step++) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(x, y + (36 * step / 6)) });
+    }
+    for (let step = 1; step <= 6; step++) {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: at(x - (36 * step / 6), y + 38) });
+    }
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+
+    await expect.poll(() => sent, { timeout: 5_000 }).toEqual(['down', 'left']);
+    await expect.poll(() => acks.filter((ack) => ack.accepted).length, { timeout: 5_000 }).toBeGreaterThanOrEqual(2);
+    expect(acks.filter((ack) => !ack.accepted)).toEqual([]);
+    expect(errors).toEqual([]);
+  } finally {
+    await hostContext.close();
+    await peerContext.close();
+  }
 });
 
 test('keyboard steering does not hijack username inputs', async ({ page }) => {
