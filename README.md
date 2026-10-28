@@ -65,7 +65,7 @@ one-command setup, plus a bare-metal installer for Fedora/Ubuntu.
 
 ```
 .
-├── compose.yaml            #    app + postgres:16-alpine, one volume (Podman or Docker compose)
+├── compose.yaml            #    app + postgres:16-alpine (+ optional cloudflared tunnel profile)
 ├── Dockerfile              #    the canonical app as a container (Rails); both engines build it
 ├── .env.example            #    copy to .env; set SECRET_KEY_BASE
 ├── install.sh              # bare-metal alternative (Fedora/Ubuntu, mise + systemd)
@@ -234,6 +234,118 @@ database volume or disable SELinux to fix a missing source file.
   build caches and preview dependencies; it explicitly includes optional photos.
 * The entrypoint's `pg_isready` loop is the startup gate even on older Compose
   providers that do not fully enforce `condition: service_healthy`.
+
+## Expose it with a Cloudflare Tunnel (optional)
+
+The stack ships the **official Cloudflare Tunnel connector**
+(`docker.io/cloudflare/cloudflared`) as a Compose service that is **off by
+default**. When enabled, the connector opens an *outbound* connection from the
+container network to Cloudflare and serves your public hostname from there —
+no router port-forwarding, no inbound firewall rule, no reverse proxy to run,
+and TLS is terminated at Cloudflare's edge for free. WebSockets are proxied,
+so live lobbies and Brawls (`/cable`) work unchanged; the page dials a
+relative `/cable` URL and upgrades to `wss://` on its own once it is served
+over https. Transient tunnel reconnects are already handled by the step-10
+freeze/grace logic and never disband a room.
+
+Everything is configured from `.env` — the compose file never needs editing.
+
+| `.env` key | Meaning |
+| --- | --- |
+| `COMPOSE_PROFILES` | The on/off switch. Empty (default) = tunnel disabled. `tunnel` = the cloudflared container starts with the stack. |
+| `CLOUDFLARE_TUNNEL_TOKEN` | The connector token from the Cloudflare dashboard. Required once the profile is on. |
+| `MULTIPLAYER_PUBLIC_ORIGIN` | Your public origin, e.g. `https://snake.example.com`. Makes invitation links and QR codes use the tunnel hostname. |
+| `ACTION_CABLE_ALLOWED_ORIGINS` | Rarely needed: extra comma-separated origins for the WebSocket if another proxy rewrites `Origin`. |
+
+### 1. Create the tunnel and copy its token
+
+You need a free Cloudflare account **with your domain added to it** (the
+domain's nameservers must point at Cloudflare — that is what "Add a site" on
+the dashboard walks you through).
+
+1. Open the [Cloudflare dashboard](https://one.dash.cloudflare.com/) and go to
+   **Networks → Tunnels** (on older accounts this lives under
+   **Zero Trust → Networks → Tunnels**).
+2. **Create a tunnel** → choose **Cloudflared** as the connector → name it
+   after the machine (e.g. `snake-home`).
+3. On the connector page pick the **Docker** environment. Do **not** run the
+   shown command — copy only the long token after `--token` (it starts with
+   `eyJ`). The same token is shown again later under the tunnel's
+   **Edit → Overview** page if you need it twice.
+
+### 2. Enable it in `.env`
+
+```bash
+# .env, next to your existing settings
+COMPOSE_PROFILES=tunnel
+CLOUDFLARE_TUNNEL_TOKEN=eyJ...paste-the-whole-token...
+MULTIPLAYER_PUBLIC_ORIGIN=https://snake.example.com
+```
+
+Then start (or restart) the stack from the repository root:
+
+```bash
+podman compose up --build -d          # docker compose works identically
+podman compose ps                     # app, db AND cloudflared should be Up
+podman compose logs -f cloudflared    # "Registered tunnel connection" = online
+```
+
+With `COMPOSE_PROFILES` empty the same commands run exactly the two original
+containers — nothing about the non-tunnel setup changes. Older
+`podman-compose` releases without profile support can pass the profile
+explicitly instead: `podman-compose --profile tunnel up -d`.
+
+The token is passed to the container as the officially documented
+`TUNNEL_TOKEN` environment variable rather than on the command line, so it
+does not appear in `ps` output. Treat it like a password: anyone holding it
+can serve traffic on your hostname. If it leaks, rotate it in the tunnel's
+dashboard page and update `.env`.
+
+### 3. Link it to your Cloudflare domain
+
+Routing lives in the Cloudflare dashboard, not in a config file:
+
+1. Open your tunnel → **Public Hostname** tab → **Add a public hostname**.
+2. **Subdomain/domain:** pick the hostname players will use, e.g.
+   `snake` + `example.com` → `snake.example.com`.
+3. **Service:** type `HTTP` and URL `app:3000`.
+   `app` is the Compose service name — cloudflared resolves it over the
+   private `snakenet` network, so the game port never has to be published to
+   the host at all.
+4. Save. Cloudflare creates the DNS record for the hostname automatically and
+   issues the edge certificate; `https://snake.example.com` is usually live
+   within a minute.
+
+Finally make the share links match: set
+`MULTIPLAYER_PUBLIC_ORIGIN=https://snake.example.com` in `.env` and
+`podman compose up -d --force-recreate app` so invitation URLs and lobby QR
+codes point at the public hostname instead of a LAN address.
+
+### Notes, hardening and troubleshooting
+
+* **Lock out LAN access (optional).** Once the tunnel is the only intended
+  entrance, set `BIND_ADDRESS=127.0.0.1` in `.env` so the raw port 3000 stops
+  being published beyond the host; cloudflared reaches the app over the
+  container network regardless.
+* **`RAILS_FORCE_SSL` can stay `false`.** Visitors already get https at the
+  edge, and cloudflared forwards `X-Forwarded-Proto`, so enabling it also
+  works — it is simply not required for the tunnel.
+* **WebSocket check:** open the lobby from the public hostname in two
+  browsers; the connection chip must read *Live* and a started Brawl must
+  animate in both. Cloudflare proxies WebSockets on all plans; there is no
+  switch to flip for `/cable`.
+* **`cloudflared` restarts immediately:** the profile is on but
+  `CLOUDFLARE_TUNNEL_TOKEN` is empty or truncated — the container logs say so
+  explicitly. Paste the full token (several hundred characters).
+* **Error 1033 / 502 at the hostname:** the tunnel is up but the service URL
+  is wrong. It must be `http://app:3000` (the Compose service name), not
+  `localhost` — `localhost` inside the cloudflared container is cloudflared
+  itself.
+* **Share links still show a LAN IP:** `MULTIPLAYER_PUBLIC_ORIGIN` is unset or
+  the app container was not recreated after changing it.
+* The connector image follows Cloudflare's own `latest` tag guidance for
+  up-to-date edge protocol support; `podman compose pull cloudflared` upgrades
+  it independently of the game image.
 
 ## Bare metal (Fedora / Ubuntu) — wouldn't personally recommend
 

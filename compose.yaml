@@ -30,6 +30,13 @@ services:
       RAILS_FORCE_SSL: ${RAILS_FORCE_SSL:-false}
       RAILS_MAX_THREADS: ${RAILS_MAX_THREADS:-5}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-0}
+      # Absolute public origin used for invitation links and QR codes when the
+      # app is served through a proxy or Cloudflare Tunnel (e.g.
+      # https://snake.example.com). Empty means "use the request's own origin".
+      MULTIPLAYER_PUBLIC_ORIGIN: ${MULTIPLAYER_PUBLIC_ORIGIN:-}
+      # Comma-separated origins allowed to open the /cable WebSocket when a
+      # proxy rewrites Origin. Same-origin already works without this.
+      ACTION_CABLE_ALLOWED_ORIGINS: ${ACTION_CABLE_ALLOWED_ORIGINS:-}
     depends_on:
       db:
         condition: service_healthy
@@ -60,6 +67,37 @@ services:
       interval: 5s
       timeout: 3s
       retries: 12
+
+  # Official Cloudflare Tunnel connector (remotely-managed, token-based).
+  # DISABLED by default: it belongs to the "tunnel" Compose profile and only
+  # starts when .env sets COMPOSE_PROFILES=tunnel. The connector dials OUT to
+  # Cloudflare, so no inbound port, port-forward or firewall rule is needed.
+  # The token is deliberately guarded with :- (not :?) because Compose
+  # interpolates the whole file even for profile-disabled services; a hard
+  # guard here would break plain `compose up` for people not using the tunnel.
+  cloudflared:
+    image: docker.io/cloudflare/cloudflared:latest
+    restart: unless-stopped
+    profiles:
+      - tunnel
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+      # Local-only metrics endpoint; also what the health probe asks "ready?".
+      TUNNEL_METRICS: 127.0.0.1:20241
+    networks:
+      - snakenet
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      # The cloudflared binary probes its own metrics server; the distroless
+      # image has no shell, curl or wget, so this is the supported check.
+      test: ["CMD", "cloudflared", "tunnel", "--metrics", "127.0.0.1:20241", "ready"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 networks:
   snakenet:

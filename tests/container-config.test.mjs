@@ -113,3 +113,53 @@ test('both page templates keep the heading and document native Podman commands',
     assert.match(text, /controls-card/);
   }
 });
+
+// ---- Cloudflare Tunnel (optional profile) -----------------------------------
+// The connector must be the OFFICIAL image, strictly opt-in via the Compose
+// "tunnel" profile (read from .env as COMPOSE_PROFILES), fed its token through
+// the documented TUNNEL_TOKEN variable, and must never weaken the default
+// stack: a soft ${VAR:-} default, because Compose interpolates the whole file
+// even for profile-disabled services — a :? guard here would break plain
+// `compose up` for everyone not using the tunnel.
+test('the Cloudflare Tunnel connector is official, opt-in and token-configured from .env', async () => {
+  const source = await contents('compose.yaml');
+  const config = yaml.load(source);
+  const tunnel = config.services.cloudflared;
+  assert.ok(tunnel, 'compose.yaml must define the cloudflared service');
+  assert.equal(tunnel.image, 'docker.io/cloudflare/cloudflared:latest');
+  assert.deepEqual(tunnel.profiles, ['tunnel'], 'disabled unless the tunnel profile is enabled');
+  assert.equal(tunnel.command, 'tunnel --no-autoupdate run');
+  assert.match(tunnel.environment.TUNNEL_TOKEN, /\$\{CLOUDFLARE_TUNNEL_TOKEN:-\}/,
+    'token comes from .env via the documented TUNNEL_TOKEN variable');
+  assert.doesNotMatch(source, /CLOUDFLARE_TUNNEL_TOKEN:\?/,
+    'a hard :? guard would break non-tunnel startups during interpolation');
+  assert.equal(tunnel.ports, undefined, 'the connector dials out; it never publishes a port');
+  assert.deepEqual(tunnel.networks, ['snakenet'], 'reaches the app over the private network');
+  assert.deepEqual(tunnel.depends_on, { app: { condition: 'service_healthy' } });
+  assert.equal(tunnel.restart, 'unless-stopped');
+  // Distroless image: the health probe must be the cloudflared binary itself.
+  assert.deepEqual(tunnel.healthcheck.test,
+    ['CMD', 'cloudflared', 'tunnel', '--metrics', '127.0.0.1:20241', 'ready']);
+  assert.equal(tunnel.environment.TUNNEL_METRICS, '127.0.0.1:20241');
+  // The app already understands proxy deployments; compose must pass the
+  // knobs through so a tunnel setup is .env-only.
+  assert.match(config.services.app.environment.MULTIPLAYER_PUBLIC_ORIGIN, /\$\{MULTIPLAYER_PUBLIC_ORIGIN:-\}/);
+  assert.match(config.services.app.environment.ACTION_CABLE_ALLOWED_ORIGINS, /\$\{ACTION_CABLE_ALLOWED_ORIGINS:-\}/);
+});
+
+test('.env.example and the README document the tunnel switch, token and domain linking', async () => {
+  const env = await contents('.env.example');
+  for (const key of ['COMPOSE_PROFILES=', 'CLOUDFLARE_TUNNEL_TOKEN=', 'MULTIPLAYER_PUBLIC_ORIGIN=', 'ACTION_CABLE_ALLOWED_ORIGINS=']) {
+    assert.ok(env.includes(key), `.env.example must document ${key}`);
+  }
+  const readme = await contents('README.md');
+  assert.match(readme, /## Expose it with a Cloudflare Tunnel \(optional\)/);
+  assert.match(readme, /COMPOSE_PROFILES=tunnel/);
+  assert.match(readme, /CLOUDFLARE_TUNNEL_TOKEN=/);
+  assert.match(readme, /Networks → Tunnels/, 'dashboard path for creating the tunnel');
+  assert.match(readme, /Public Hostname/, 'domain linking happens on the tunnel page');
+  assert.match(readme, /`app:3000`/, 'the service URL is the Compose service name, not localhost');
+  assert.match(readme, /MULTIPLAYER_PUBLIC_ORIGIN=https:\/\/snake\.example\.com/);
+  assert.match(readme, /podman-compose --profile tunnel up -d/, 'fallback for providers without COMPOSE_PROFILES');
+  assert.match(readme, /BIND_ADDRESS=127\.0\.0\.1/, 'hardening note once the tunnel is the only entrance');
+});
