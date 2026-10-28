@@ -26,7 +26,7 @@ namespace :multiplayer do
         # Leases expire on their own and are re-claimed on the next iteration.
         warn "tick failed: #{error.class}: #{error.message}"
       end
-      sleep(MatchRunner.supervisor.match_ids.empty? ? 0.25 : 0.005)
+      sleep(MatchRunner.next_wake_ms / 1_000.0)
     end
     MatchRunner.shutdown!
     puts "Simulator stopped."

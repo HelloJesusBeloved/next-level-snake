@@ -2,34 +2,44 @@
 // collision, score or winner; it draws only versioned server snapshots from
 // Simulation::Protocol v1, which the leased simulator owns.
 //
-// RENDERING MODEL — discrete, grid-locked, no tweening.
-// Snake is a grid game: a snake occupies whole cells and jumps one cell per
-// logical tick. The renderer therefore draws exactly what the latest
-// authoritative frame says, snapped to the grid, the moment that frame
-// arrives. There is deliberately NO interpolation, NO prediction and NO
-// easing: tweening between two ticks delays every frame by up to a tick and
-// makes a late frame or a server correction visibly slide and snap back
-// (rubberbanding). Crisp cell-to-cell movement is both the correct look and
-// the lowest-latency one. The server emits one frame per movement tick, so
-// the visual cadence is exactly the simulation cadence.
-//
-// Performance (all of it invisible, none of it changes what is drawn):
-//   * theme colours are read on theme change, geometry on resize — never per frame;
-//   * the grid is rasterised once per size/theme into an offscreen canvas;
-//   * snapshot frames paint immediately; only incidental redraws coalesce into
-//     one requestAnimationFrame;
-//   * the scoreboard is diffed by signature and patched in place.
-import { createPlayBudget, text, hudKey } from './play-budget.js';
+// RENDERING MODEL: whole authoritative frames, grid locked. The latest
+// received state updates controls immediately. The display uses one rAF per
+// refresh and a bounded cadence queue on coarse pointers when arrival jitter
+// is measured; it NEVER fabricates cells, interpolates, or advances time.
+// A turn/death/freeze/status change bypasses the queue. Long stalls discard
+// stale history rather than playing catch-up. Clean links have no intentional
+// hold; jittery links can hold a frame <= min(50ms, half a tick) plus the next
+// refresh. This trade-off is observable and switchable in Movement diagnostics.
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-cadence2';
+import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-cadence2';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
 export class MultiplayerGameRenderer {
-  constructor({ canvas, scoreboard, status, ownParticipantId, budget = null }) {
+  constructor({ canvas, scoreboard, status, ownParticipantId, budget = null,
+                cadenceEnabled = null, clock = () => performance.now(),
+                frameRequest = (cb) => requestAnimationFrame(cb),
+                frameCancel = (id) => cancelAnimationFrame(id),
+                timerRequest = (cb, ms) => setTimeout(cb, ms), timerCancel = (id) => clearTimeout(id) }) {
     this.canvas = canvas;
     this.scoreboard = scoreboard;
     this.status = status;
     this.ownParticipantId = ownParticipantId ?? null;
-    this.snapshot = null;
+    this.snapshot = null; // newest RECEIVED frame; controls must never wait on display
+    this.paintSnapshot = null; // newest PRESENTED complete server frame
+    this.clock = clock;
+    this.frameRequest = frameRequest;
+    this.frameCancel = frameCancel;
+    this.frameGate = new FrameGate({ request: frameRequest, cancel: frameCancel, later: timerRequest, clear: timerCancel });
+    this.viewPaused = false;
+    const coarse = !!window.matchMedia?.('(any-pointer: coarse)').matches;
+    this.cadence = new GridCadence({ enabled: cadenceEnabled ?? coarse });
+    this.timings = new MovementTimings();
+    this.receivedAt = new WeakMap();
+    // The first context request determines its attributes for its lifetime.
+    // The whole board is opaque: avoid an unnecessary alpha-compositing pass.
+    // Do NOT request desynchronized: it can tear/flicker on some devices.
+    this.context = canvas.getContext('2d', { alpha: false });
     // Death dust: spawned LOCALLY from the authoritative body cells of a newly
     // eliminated snake. Coordinates are never transmitted.
     this.dust = [];
@@ -39,9 +49,10 @@ export class MultiplayerGameRenderer {
     this.frozenTimer = 0;
     this.serverOffsetMs = 0;
     this.paintFrame = 0;
+    this.dirty = false;
     this.scoreSignature = '';
     this.scoreRows = new Map();
-    this.active = false;
+    this.active = true; // mounted renderers are active; the lobby explicitly pauses hidden panes
     this.hidden = document.hidden;
     this.hudBudget = budget || createPlayBudget();
     // Only the canvas and the network move at tick cadence. HUD labels update
@@ -52,9 +63,13 @@ export class MultiplayerGameRenderer {
       if (this.hidden) {
         this.hudBudget.stop();
         this.stopFreezeRings();
+        this.discardPendingFrames();
       } else {
         this.hudBudget.start();
         this.hudBudget.add('scores', () => this.drawScoreboard());
+        // Do not replay any frames collected while the tab was suspended.
+        this.cadence.reset();
+        if (this.snapshot) this.cadence.receive(this.snapshot, this.clock(), true);
         this.requestDraw();
       }
     };
@@ -113,7 +128,11 @@ export class MultiplayerGameRenderer {
   }
 
   reset() {
+    this.discardPendingFrames();
     this.snapshot = null;
+    this.paintSnapshot = null;
+    this.timings = new MovementTimings();
+    this.receivedAt = new WeakMap();
     this.dust = [];
     this.followId = null;
     this.serverOffsetMs = 0;
@@ -128,19 +147,70 @@ export class MultiplayerGameRenderer {
   }
 
   setActive(active) {
+    const wasPaused = this.viewPaused;
     this.active = active;
-    if (active) this.hudBudget.flush('scores');
+    this.viewPaused = !active;
+    if (!active) this.discardPendingFrames();
+    if (active) {
+      this.hudBudget.flush('scores');
+      if (wasPaused && this.snapshot) {
+        this.cadence.receive(this.snapshot, this.clock(), true);
+        this.requestDraw();
+      }
+    }
+  }
+
+  discardPendingFrames() {
+    this.frameGate.cancel();
+    this.paintFrame = 0;
+    this.cadence.reset();
+  }
+
+  // User steering bypasses display pacing. The next server-confirmed turn is
+  // urgent too (see accept). This does NOT predict the requested direction.
+  expedite() {
+    this.discardPendingFrames();
+    if (this.snapshot) {
+      const at = this.clock();
+      this.cadence.receive(this.snapshot, at, true);
+      const frame = this.cadence.take(at);
+      if (frame && frame !== this.paintSnapshot && !this.hidden && !this.viewPaused) this.present(frame, at);
+    }
+  }
+
+  setCadenceEnabled(enabled) {
+    this.cadence.configure({ enabled });
+    this.expedite();
+  }
+
+  movementDiagnostics() {
+    return {
+      ...this.timings.summary(), release: 'step10-cadence2', cadenceEnabled: this.cadence.enabled,
+      maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
+      queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
+      displayWatchdog: this.frameGate.fallbacks,
+      receivedTick: this.snapshot?.t ?? null, displayedTick: this.paintSnapshot?.t ?? null,
+      lastSnapshotAgeMs: this.timings.previous ? Math.round(this.clock() - this.timings.previous.at) : null,
+      context: this.context?.getContextAttributes?.() || null,
+    };
   }
 
   setOwnParticipant(id) {
-    this.ownParticipantId = id == null ? null : Number(id);
+    const nextId = id == null ? null : Number(id);
+    if (nextId === this.ownParticipantId) return;
+    this.ownParticipantId = nextId;
     this.scoreSignature = '';
     this.hudBudget.add('scores', () => this.drawScoreboard());
     this.requestDraw();
   }
 
   setTickMs(ms) {
-    if (Number.isFinite(ms) && ms > 0) this.tickMs = ms;
+    if (Number.isFinite(ms) && ms > 0 && ms !== this.tickMs) {
+      this.tickMs = ms;
+      this.cadence.configure({ tickMs: ms });
+      if (this.snapshot) this.cadence.receive(this.snapshot, this.clock(), true);
+      this.requestDraw();
+    }
   }
 
   setFollow(id) {
@@ -155,14 +225,29 @@ export class MultiplayerGameRenderer {
     return `${minutes}:${String(seconds).padStart(2, '0')}`;
   }
 
-  // Incidental redraws (resize, theme, follow, dust) coalesce into one frame.
-  // Authoritative snapshots do NOT go through here: they paint immediately.
-  requestDraw() {
-    if (this.paintFrame || this.hidden) return;
-    this.paintFrame = requestAnimationFrame(() => {
-      this.paintFrame = 0;
-      this.draw();
+  // At most one canvas submission per refresh. WebSocket messages delivered
+  // in a TCP burst must not each repaint a frame that can never be displayed.
+  requestDraw(invalidate = true) {
+    if (invalidate) this.dirty = true;
+    if (this.frameGate.pending || this.hidden || this.viewPaused) return;
+    this.frameGate.schedule(() => {
+      const at = this.clock();
+      const frame = this.cadence.take(at);
+      if (frame) this.present(frame, at);
+      else if (this.paintSnapshot && this.dirty) {
+        this.draw();
+        this.dirty = false;
+      }
+      if (this.cadence.pending) this.requestDraw(false);
     });
+  }
+
+  present(frame, at) {
+    this.paintSnapshot = frame;
+    const start = this.clock();
+    this.draw();
+    this.dirty = false;
+    this.timings.draw(this.clock() - start, at - (this.receivedAt.get(frame) ?? at));
   }
 
   accept(snapshot) {
@@ -179,14 +264,35 @@ export class MultiplayerGameRenderer {
       if (player.b.some((cell) => !Number.isInteger(cell) || cell < 0 || cell >= total)) return false;
     }
     if (snapshot.f.some((food) => !Number.isInteger(food.c) || food.c < 0 || food.c >= total)) return false;
-    this.spawnDustForNewlyEliminated(snapshot);
+    const previous = this.snapshot;
+    // Elimination is an authoritative receipt-time event, even if alive and
+    // dead frames arrived in one browser task before a visible refresh.
+    this.spawnDustForNewlyEliminated(snapshot, previous);
+    const important = !previous || snapshot.s !== previous.s || snapshot.p.some((player) => {
+      const before = previous.p.find((p) => p.i === player.i);
+      if (!before || before.a !== player.a || !!before.fr !== !!player.fr || before.cy !== player.cy) return true;
+      return player.i === this.ownParticipantId && (before.d !== player.d || before.sc !== player.sc);
+    });
+    const at = this.clock();
+    this.receivedAt.set(snapshot, at);
+    this.timings.receive(snapshot, at);
     if (Number.isFinite(snapshot.ts) && snapshot.ts > 0) this.serverOffsetMs = snapshot.ts - Date.now();
 
     this.snapshot = snapshot;
     this.hudBudget.add('scores', () => this.drawScoreboard());
-    if (this.paintFrame) { cancelAnimationFrame(this.paintFrame); this.paintFrame = 0; }
-    this.draw();
-    if (snapshot.s === 'completed' || snapshot.s === 'interrupted') {
+    // Keep authoritative receipt/control state current even if display is
+    // paced or paused. Only the visual frame goes through the tiny queue.
+    if (!this.hidden && !this.viewPaused) {
+      this.cadence.receive(snapshot, at, important);
+      if (important) {
+        // A confirmed turn, elimination, freeze, reconnect or result must not
+        // acquire another display-queue delay. Ordinary motion is coalesced.
+        this.frameGate.cancel();
+        const frame = this.cadence.take(at);
+        if (frame) this.present(frame, at);
+      } else this.requestDraw(false);
+    }
+    if (important) {
       this.hudBudget.flush('scores');
     }
     if (snapshot.p.some((player) => player.fr)) this.startFreezeRings();
@@ -194,9 +300,9 @@ export class MultiplayerGameRenderer {
     return true;
   }
 
-  spawnDustForNewlyEliminated(snapshot) {
-    if (this.reducedMotion || !this.snapshot) return;
-    const wasAlive = new Map(this.snapshot.p.map((player) => [player.i, player.a]));
+  spawnDustForNewlyEliminated(snapshot, previous) {
+    if (this.reducedMotion || !previous) return;
+    const wasAlive = new Map(previous.p.map((player) => [player.i, player.a]));
     for (const player of snapshot.p) {
       if (wasAlive.get(player.i) === true && player.a === false && Array.isArray(player.b)) {
         const cells = player.b.slice(0, 64);
@@ -230,7 +336,7 @@ export class MultiplayerGameRenderer {
         particle.life -= particle.decay;
       }
       this.dust = this.dust.filter((particle) => particle.life > 0);
-      this.draw();
+      this.requestDraw();
       if (this.dust.length) this.dustFrame = requestAnimationFrame(step);
     };
     this.dustFrame = requestAnimationFrame(step);
@@ -247,7 +353,7 @@ export class MultiplayerGameRenderer {
   // head. Snakes themselves never animate between ticks. Runs at 20 fps and
   // only while somebody is actually frozen.
   startFreezeRings() {
-    if (this.frozenTimer || this.reducedMotion) return;
+    if (this.frozenTimer || this.reducedMotion || this.hidden || this.viewPaused) return;
     this.frozenTimer = window.setInterval(() => {
       if (!this.snapshot || !this.snapshot.p.some((player) => player.fr)) {
         this.stopFreezeRings();
@@ -335,7 +441,7 @@ export class MultiplayerGameRenderer {
     const previousIds = [...this.scoreboard.children].map((row) => row.dataset.playerId);
     const order = [...nextRows.keys()].map(String);
     if (structureChanged || previousIds.join(',') !== order.join(',')) {
-      this.scoreboard.replaceChildren(...nextRows.values().map((entry) => entry.row));
+      this.scoreboard.replaceChildren(...Array.from(nextRows.values(), (entry) => entry.row));
     }
   }
 
@@ -352,11 +458,11 @@ export class MultiplayerGameRenderer {
     }
   }
 
-  // Direct zero-allocation drawing synced to display refresh.
+  // Whole, server-confirmed cells only. No interpolation or extrapolation.
   draw() {
-    const snapshot = this.snapshot;
+    const snapshot = this.paintSnapshot;
     const canvas = this.canvas;
-    if (!snapshot || !canvas || this.hidden) return;
+    if (!snapshot || !canvas || this.hidden || this.viewPaused) return;
     if (!this.view.width || !this.view.height) {
       this.measure();
       if (!this.view.width || !this.view.height) return;
@@ -367,7 +473,7 @@ export class MultiplayerGameRenderer {
     if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
       canvas.width = pixelWidth; canvas.height = pixelHeight;
     }
-    const ctx = canvas.getContext('2d');
+    const ctx = this.context;
     if (!ctx) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -496,7 +602,7 @@ export class MultiplayerGameRenderer {
     this.hudBudget.stop();
     document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
-    if (this.paintFrame) cancelAnimationFrame(this.paintFrame);
+    this.discardPendingFrames();
     this.stopFreezeRings();
     this.dustFrame = 0;
     this.paintFrame = 0;

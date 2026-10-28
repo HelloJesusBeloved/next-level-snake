@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=2026-10-20.1">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step10-cadence2">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -233,6 +233,14 @@
       </nav>
       <p class="mp-game__hint">Keyboard: arrows / WASD. Touch: swipe or use the steering pad. Only your direction is sent; positions, food and scores come from the server.</p>
       <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite"></p>
+      <details class="mp-movement-diagnostics" id="mp-movement-diagnostics">
+        <summary>Movement diagnostics</summary>
+        <label><input type="checkbox" id="mp-movement-pacing"> Absorb short network bursts</label>
+        <p>Only complete server frames are paced, never snake cells. Clean links add no intentional hold.
+          On a jittery link a frame may wait up to 50 ms (or half a tick) plus a display refresh.
+          Turns, elimination, freeze and results bypass the hold. Disable to compare immediate delivery.</p>
+        <pre id="mp-movement-metrics" aria-live="off">Open during a match to measure server, network and drawing intervals.</pre>
+      </details>
     </section>
 
     <p class="mp-game__follow-row" id="mp-back-to-board-row" hidden>
@@ -336,5 +344,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step6"></script>
+  <script type="module" src="/multiplayer/page.js?v=step10-cadence2"></script>
 <% end %>

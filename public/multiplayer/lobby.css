@@ -530,3 +530,11 @@
     contain-intrinsic-size: auto 400px;
   }
 }
+
+/* Local opt-in diagnostic text is outside the canvas and sampled at 1 Hz,
+   never a per-tick live region or a new network request. */
+.mp-movement-diagnostics { margin-top: 10px; color: var(--muted); font-size: 12px; }
+.mp-movement-diagnostics summary { cursor: pointer; padding: 6px 0; }
+.mp-movement-diagnostics p { max-width: 70ch; line-height: 1.5; }
+.mp-movement-diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
+.mp-movement-diagnostics label { display: flex; gap: 7px; align-items: center; padding-top: 8px; }

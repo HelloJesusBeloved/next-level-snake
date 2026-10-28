@@ -159,6 +159,26 @@ class MatchRunner
       end
     end
 
+    # Wake for the next actual movement/input deadline, not every fixed 5ms.
+    # Work already spent in the previous pass is subtracted from the deadline;
+    # sleeping "5ms after work" cannot guarantee a 5ms movement cadence and
+    # needlessly repeats claim queries up to 200 times/sec under load.
+    # The 1ms floor prevents an overdue scheduler from busy-spinning.
+    def next_wake_ms(now_ms: Simulation::Scheduler.monotonic_ms)
+      entries = supervisor.entries.values
+      return 250 if entries.empty?
+
+      deadlines = entries.flat_map do |entry|
+        scheduler = entry.scheduler
+        elapsed = [now_ms - (scheduler.last_at_ms || now_ms), 0].max
+        tick_due = scheduler.tick_ms - scheduler.accumulator_ms - elapsed
+        polled_at = input_poll_at[entry.world.id]
+        input_due = polled_at ? INPUT_POLL_INTERVAL_MS - (now_ms - polled_at) : 0
+        [tick_due, input_due]
+      end
+      [1, [INPUT_POLL_INTERVAL_MS, deadlines.min].min].max
+    end
+
     # Applies any waiting direction intents to the owned worlds. Bounded by the
     # same 30 ms throttle used by the pre-tick drain, so this cannot turn into a
     # per-request query storm.

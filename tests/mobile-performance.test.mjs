@@ -105,7 +105,7 @@ test('identical labels never mutate the DOM or re-trigger the screen reader', ()
   assert.equal(writes, 1);
 });
 
-// Rendering on the phone is immediate; secondary HUD changes follow the
+// Receipt and controls are immediate; paints occur at the next display refresh, while HUD changes follow the
 // budget. This tests the *real renderer* with a tiny DOM and a fake clock.
 const { MultiplayerGameRenderer } = await import('../public/multiplayer/game-renderer.js');
 
@@ -164,13 +164,19 @@ test('real renderer keeps every authoritative tick but only writes HUD once per 
   };
   globalThis.getComputedStyle = () => ({ getPropertyValue: () => '' });
   globalThis.MutationObserver = class { observe() {} disconnect() {} };
-  globalThis.requestAnimationFrame = (cb) => { cb(); return 1; };
-  globalThis.cancelAnimationFrame = () => {};
+  let id = 0, at = 0;
+  const callbacks = new Map();
+  const request = (cb) => { const token = ++id; callbacks.set(token, cb); return token; };
+  const cancel = (token) => callbacks.delete(token);
+  const refresh = () => { for (const [token, cb] of [...callbacks]) { callbacks.delete(token); cb(at); } };
+  globalThis.requestAnimationFrame = request;
+  globalThis.cancelAnimationFrame = cancel;
   const budgetClock = clock();
   const hud = createPlayBudget({ now: budgetClock.now, schedule: budgetClock.schedule, cancel: budgetClock.cancel });
   const scores = mockScores;
   const renderer = new MultiplayerGameRenderer({
     canvas: mockBoard, scoreboard: scores, ownParticipantId: 1, budget: hud,
+    clock: () => at, frameRequest: request, frameCancel: cancel,
   });
   renderer.setActive(true);
   let draws = 0, mutations = 0;
@@ -180,16 +186,18 @@ test('real renderer keeps every authoritative tick but only writes HUD once per 
   scores.replaceChildren = (...args) => { mutations += 1; originalRebuild(...args); };
 
   for (let tick = 1; tick <= 20; tick += 1) {
+    at = tick * 105;
     const player = { i: 1, n: 'P1', c: '#00ff00', a: true, sc: 2, l: 3, b: [tick + 1, tick, tick - 1], sv: tick,
                      d: 'right', fr: false, cy: 'connected', gu: null, fz: 0, lg: 3 };
     const frame = { v: 1, type: 'snapshot', m: 9, t: tick, s: 'running', b: { c: 24, r: 18 },
                     p: [player], q: [{ i: 1, p: 1, sc: 2, sv: tick, lg: 3 }], f: [] };
     assert.equal(renderer.accept(frame), true);
+    refresh(); // real asynchronous display boundary, never a synchronous rAF mock
   }
   assert.equal(draws, 20, 'every authoritative tick is painted (no prediction or interpolation)');
-  assert.equal(mutations, 0, 'no DOM reflow before the HUD budget releases it');
+  assert.equal(mutations, 1, 'initial state is immediate, then the budget avoids rebuilding rows per tick');
   budgetClock.advance(1000);
-  assert.equal(mutations, 1, 'HUD updated once per second, not once per tick');
+  assert.equal(mutations, 1, 'survival text is patched without detaching and rebuilding the rows');
   assert.equal(scores.querySelector('li').dataset.playerId, '1');
   assert.equal(scores.querySelector('strong').textContent, '2 pts');
   renderer.destroy();

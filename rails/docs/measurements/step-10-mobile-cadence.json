@@ -1,0 +1,1066 @@
+{
+  "method": "Headless browser engines, emulated device metrics, synthetic CPU throttling and message delay. Not a real handset, Cloudflare path, or physical scanout.",
+  "environment": "Local production Rails 8.1 / PostgreSQL / Puma; Action Cable PostgreSQL adapter. Captured 2026-10-28.",
+  "notes": [
+    "installed_snapshot_jitter delayed snapshots in order but let non-snapshot ACKs bypass; do not compare its ACK timings with the final full-FIFO test.",
+    "candidate_fifo_jitter_on/off delay all messages behind earlier held messages, preserving full TCP order.",
+    "Input ACKs are local test-server observations, not a mobile WAN latency promise.",
+    "WebKit does not support the Long Tasks API in this test; its empty longTasks array means unobserved, not certified no stalls.",
+    "No universal 0.01ms drawing, +/-2ms tick cadence, or actual-phone scanout claim is supported."
+  ],
+  "runs": {
+    "installed_clean": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 3,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "errors": [],
+      "arrivals": {
+        "count": 66,
+        "min": 94.9000000001397,
+        "median": 104.89999999990687,
+        "p95": 111.60000000009313,
+        "max": 114.39999999990687
+      },
+      "displayOpportunities": {
+        "count": 67,
+        "min": 16.700000000000728,
+        "median": 100,
+        "p95": 116.70000000000073,
+        "max": 116.80000000000018
+      },
+      "drawCost": {
+        "count": 67,
+        "min": 0,
+        "median": 0.09999999986030161,
+        "p95": 0.6999999999534339,
+        "max": 0.9000000001396984
+      },
+      "arrivalToDraw": {
+        "count": 67,
+        "min": 0,
+        "median": 0,
+        "p95": 0.10000000009313226,
+        "max": 3
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 92,
+      "serverIntervals": {
+        "count": 66,
+        "min": 99,
+        "median": 105,
+        "p95": 109,
+        "max": 110
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0,
+        "p95": 0.09999999986030161,
+        "max": 0.09999999986030161
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 24.199999999953434,
+        "median": 90,
+        "p95": 125.0999999998603,
+        "max": 125.0999999998603
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 12.39694800000143,
+        "median": 17.34748099999888,
+        "p95": 21.9803780000002,
+        "max": 21.9803780000002
+      },
+      "meanSpacingErrorMs": 8.14
+    },
+    "installed_snapshot_jitter": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 3,
+      "jitter": true,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "errors": [],
+      "arrivals": {
+        "count": 101,
+        "min": 3.5,
+        "median": 87.5,
+        "p95": 152.4000000001397,
+        "max": 330.69999999995343
+      },
+      "displayOpportunities": {
+        "count": 100,
+        "min": 16.700000000000273,
+        "median": 116.69999999999982,
+        "p95": 150.0999999999999,
+        "max": 316.7000000000007
+      },
+      "drawCost": {
+        "count": 103,
+        "min": 0,
+        "median": 0.10000000009313226,
+        "p95": 1.0999999998603016,
+        "max": 1.1000000000931323
+      },
+      "arrivalToDraw": {
+        "count": 102,
+        "min": 0,
+        "median": 0,
+        "p95": 0.5999999998603016,
+        "max": 1
+      },
+      "tickGaps": [
+        45
+      ],
+      "longTasks": [],
+      "mutations": 141,
+      "serverIntervals": {
+        "count": 101,
+        "min": 99,
+        "median": 105,
+        "p95": 110,
+        "max": 112
+      },
+      "turnReceiveToPaint": {
+        "count": 3,
+        "min": 0,
+        "median": 0,
+        "p95": 0.10000000009313226,
+        "max": 0.10000000009313226
+      },
+      "touchToConfirmedPaint": {
+        "count": 3,
+        "min": 41.5,
+        "median": 63.10000000009313,
+        "p95": 91.69999999995343,
+        "max": 91.69999999995343
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 9.360655000000406,
+        "median": 10.351944999998523,
+        "p95": 13.800632000000405,
+        "max": 13.800632000000405
+      },
+      "meanSpacingErrorMs": 39.17
+    },
+    "installed_webkit": {
+      "engine": "webkit",
+      "cpuRate": 1,
+      "speed": 3,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "errors": [],
+      "arrivals": {
+        "count": 66,
+        "min": 17,
+        "median": 105,
+        "p95": 116,
+        "max": 187
+      },
+      "displayOpportunities": {
+        "count": 62,
+        "min": 45,
+        "median": 101,
+        "p95": 207,
+        "max": 275
+      },
+      "drawCost": {
+        "count": 69,
+        "min": 0,
+        "median": 0,
+        "p95": 1,
+        "max": 1
+      },
+      "arrivalToDraw": {
+        "count": 68,
+        "min": 0,
+        "median": 0,
+        "p95": 0,
+        "max": 1
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 92,
+      "serverIntervals": {
+        "count": 66,
+        "min": 98,
+        "median": 106,
+        "p95": 110,
+        "max": 111
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 15,
+        "median": 34,
+        "p95": 61,
+        "max": 61
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 7.69419999999991,
+        "median": 9.861625999999887,
+        "p95": 11.412680999999793,
+        "max": 11.412680999999793
+      },
+      "meanSpacingErrorMs": 27.58
+    },
+    "installed_nine_rooms_fast": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 6,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 8,
+      "errors": [],
+      "arrivals": {
+        "count": 212,
+        "min": 2.6000000000931323,
+        "median": 41.699999999953434,
+        "p95": 63.800000000046566,
+        "max": 96.89999999990687
+      },
+      "displayOpportunities": {
+        "count": 207,
+        "min": 16.600000000000364,
+        "median": 49.899999999999636,
+        "p95": 66.70000000000073,
+        "max": 100
+      },
+      "drawCost": {
+        "count": 213,
+        "min": 0,
+        "median": 0,
+        "p95": 0.6999999999534339,
+        "max": 1.3000000000465661
+      },
+      "arrivalToDraw": {
+        "count": 213,
+        "min": 0,
+        "median": 0,
+        "p95": 0.30000000004656613,
+        "max": 0.6999999999534339
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 244,
+      "serverIntervals": {
+        "count": 212,
+        "min": 19,
+        "median": 41,
+        "p95": 57,
+        "max": 70
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0,
+        "p95": 0,
+        "max": 0
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 47.699999999953434,
+        "median": 52.699999999953434,
+        "p95": 53.299999999813735,
+        "max": 53.299999999813735
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 13.637472999998863,
+        "median": 15.11824500000148,
+        "p95": 46.014194999999745,
+        "max": 46.014194999999745
+      },
+      "meanSpacingErrorMs": 12.02
+    },
+    "candidate_clean": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 3,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "errors": [],
+      "arrivals": {
+        "count": 85,
+        "min": 77.39999999990687,
+        "median": 105,
+        "p95": 107.9000000001397,
+        "max": 130.69999999995343
+      },
+      "displayOpportunities": {
+        "count": 85,
+        "min": 33.399999999999636,
+        "median": 100,
+        "p95": 116.70000000000073,
+        "max": 133.3000000000011
+      },
+      "refreshIntervals": {
+        "count": 538,
+        "min": 16.5,
+        "median": 16.69999999999891,
+        "p95": 16.799999999999272,
+        "max": 16.80000000000109
+      },
+      "drawCost": {
+        "count": 85,
+        "min": 0,
+        "median": 0,
+        "p95": 0.5,
+        "max": 1.0999999998603016
+      },
+      "arrivalToDraw": {
+        "count": 85,
+        "min": 0,
+        "median": 7.800000000046566,
+        "p95": 20.100000000093132,
+        "max": 50.799999999813735
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 117,
+      "diagnostics": {
+        "received": 93,
+        "painted": 92,
+        "skippedServerTicks": 0,
+        "serverTickMs": {
+          "samples": 92,
+          "p50": 105,
+          "p95": 106,
+          "max": 107
+        },
+        "arrivalGapMs": {
+          "samples": 92,
+          "p50": 105,
+          "p95": 107.9,
+          "max": 130.8
+        },
+        "deliveryVariationMs": {
+          "samples": 92,
+          "p50": 0.7,
+          "p95": 10.5,
+          "max": 27.7
+        },
+        "drawCostMs": {
+          "samples": 92,
+          "p50": 0.1,
+          "p95": 0.5,
+          "max": 18.1
+        },
+        "receiveToPaintMs": {
+          "samples": 92,
+          "p50": 8.1,
+          "p95": 37.6,
+          "max": 50.7
+        },
+        "cadenceEnabled": true,
+        "maxHoldMs": 50,
+        "phaseMs": 0,
+        "queued": 1,
+        "coalesced": 0,
+        "displayWatchdog": 0,
+        "receivedTick": 136,
+        "displayedTick": 135,
+        "context": {
+          "alpha": false,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        }
+      },
+      "serverIntervals": {
+        "count": 85,
+        "min": 103,
+        "median": 105,
+        "p95": 106,
+        "max": 107
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0.09999999986030161,
+        "p95": 0.39999999990686774,
+        "max": 0.39999999990686774
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 54.39999999990687,
+        "median": 84,
+        "p95": 109.19999999995343,
+        "max": 109.19999999995343
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 11.90109399999892,
+        "median": 12.606571000000258,
+        "p95": 14.350930999999036,
+        "max": 14.350930999999036
+      },
+      "meanSpacingErrorMs": 8.6
+    },
+    "candidate_fifo_jitter_on": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 3,
+      "jitter": true,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "players": 2,
+      "errors": [],
+      "arrivals": {
+        "count": 84,
+        "min": 0.09999999986030161,
+        "median": 81.5,
+        "p95": 152.60000000009313,
+        "max": 324.89999999990687
+      },
+      "displayOpportunities": {
+        "count": 82,
+        "min": 50,
+        "median": 100,
+        "p95": 133.40000000000146,
+        "max": 283.2999999999993
+      },
+      "refreshIntervals": {
+        "count": 538,
+        "min": 16.5,
+        "median": 16.69999999999891,
+        "p95": 16.700000000000728,
+        "max": 16.80000000000109
+      },
+      "drawCost": {
+        "count": 82,
+        "min": 0,
+        "median": 0,
+        "p95": 0.5,
+        "max": 1.2000000001862645
+      },
+      "arrivalToDraw": {
+        "count": 82,
+        "min": 0.20000000018626451,
+        "median": 27.4000000001397,
+        "p95": 61.199999999953434,
+        "max": 63.5
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 116,
+      "diagnostics": {
+        "received": 92,
+        "painted": 89,
+        "skippedServerTicks": 0,
+        "serverTickMs": {
+          "samples": 91,
+          "p50": 105,
+          "p95": 107,
+          "max": 108
+        },
+        "arrivalGapMs": {
+          "samples": 91,
+          "p50": 81.7,
+          "p95": 153,
+          "max": 325
+        },
+        "deliveryVariationMs": {
+          "samples": 91,
+          "p50": 38.4,
+          "p95": 103.9,
+          "max": 220
+        },
+        "drawCostMs": {
+          "samples": 89,
+          "p50": 0,
+          "p95": 0.8,
+          "max": 4.2
+        },
+        "receiveToPaintMs": {
+          "samples": 89,
+          "p50": 26.9,
+          "p95": 61.2,
+          "max": 63.5
+        },
+        "cadenceEnabled": true,
+        "maxHoldMs": 50,
+        "phaseMs": 0,
+        "queued": 0,
+        "coalesced": 0,
+        "displayWatchdog": 0,
+        "receivedTick": 135,
+        "displayedTick": 135,
+        "lastSnapshotAgeMs": 54,
+        "context": {
+          "alpha": false,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        }
+      },
+      "serverIntervals": {
+        "count": 84,
+        "min": 102,
+        "median": 105,
+        "p95": 107,
+        "max": 108
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0.5,
+        "median": 0.8000000000465661,
+        "p95": 0.8000000000465661,
+        "max": 0.8000000000465661
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 28.300000000046566,
+        "median": 137.39999999990687,
+        "p95": 146.0999999998603,
+        "max": 146.0999999998603
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 10.166422000000239,
+        "median": 12.923397000000477,
+        "p95": 12.963297999998758,
+        "max": 12.963297999998758
+      },
+      "meanSpacingErrorMs": 18.09
+    },
+    "candidate_fifo_jitter_off": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 3,
+      "jitter": true,
+      "pacingOff": true,
+      "extraRooms": 0,
+      "players": 2,
+      "errors": [],
+      "arrivals": {
+        "count": 85,
+        "min": 1,
+        "median": 83.5999999998603,
+        "p95": 154.30000000004657,
+        "max": 320.5
+      },
+      "displayOpportunities": {
+        "count": 83,
+        "min": 49.899999999999636,
+        "median": 100,
+        "p95": 150.0999999999999,
+        "max": 316.60000000000036
+      },
+      "refreshIntervals": {
+        "count": 538,
+        "min": 16.5,
+        "median": 16.699999999999818,
+        "p95": 16.799999999999272,
+        "max": 16.80000000000109
+      },
+      "drawCost": {
+        "count": 83,
+        "min": 0,
+        "median": 0.09999999986030161,
+        "p95": 0.8000000000465661,
+        "max": 1
+      },
+      "arrivalToDraw": {
+        "count": 83,
+        "min": 0,
+        "median": 7.5,
+        "p95": 14.800000000046566,
+        "max": 15.800000000046566
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 117,
+      "diagnostics": {
+        "received": 95,
+        "painted": 92,
+        "skippedServerTicks": 8,
+        "serverTickMs": {
+          "samples": 94,
+          "p50": 105,
+          "p95": 107,
+          "max": 115
+        },
+        "arrivalGapMs": {
+          "samples": 94,
+          "p50": 92.3,
+          "p95": 156.4,
+          "max": 932.4
+        },
+        "deliveryVariationMs": {
+          "samples": 94,
+          "p50": 38.6,
+          "p95": 104,
+          "max": 215.6
+        },
+        "drawCostMs": {
+          "samples": 92,
+          "p50": 0.1,
+          "p95": 0.8,
+          "max": 4.3
+        },
+        "receiveToPaintMs": {
+          "samples": 92,
+          "p50": 7.3,
+          "p95": 14.7,
+          "max": 37.3
+        },
+        "cadenceEnabled": false,
+        "maxHoldMs": 50,
+        "phaseMs": 0,
+        "queued": 0,
+        "coalesced": 0,
+        "displayWatchdog": 0,
+        "receivedTick": 103,
+        "displayedTick": 103,
+        "lastSnapshotAgeMs": 27,
+        "context": {
+          "alpha": false,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        }
+      },
+      "serverIntervals": {
+        "count": 85,
+        "min": 102,
+        "median": 105,
+        "p95": 107,
+        "max": 108
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0,
+        "p95": 0.5,
+        "max": 0.5
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 51.0999999998603,
+        "median": 128,
+        "p95": 150.30000000004657,
+        "max": 150.30000000004657
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 9.868397000000186,
+        "median": 11.326804999998785,
+        "p95": 11.717000000000553,
+        "max": 11.717000000000553
+      },
+      "meanSpacingErrorMs": 37.34
+    },
+    "candidate_webkit": {
+      "engine": "webkit",
+      "cpuRate": 1,
+      "speed": 3,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "errors": [],
+      "arrivals": {
+        "count": 84,
+        "min": 95,
+        "median": 105,
+        "p95": 110,
+        "max": 117
+      },
+      "displayOpportunities": {
+        "count": 83,
+        "min": 33,
+        "median": 103,
+        "p95": 154,
+        "max": 188
+      },
+      "refreshIntervals": {
+        "count": 321,
+        "min": 1,
+        "median": 16,
+        "p95": 68,
+        "max": 188
+      },
+      "drawCost": {
+        "count": 86,
+        "min": 0,
+        "median": 0,
+        "p95": 1,
+        "max": 1
+      },
+      "arrivalToDraw": {
+        "count": 86,
+        "min": 0,
+        "median": 9,
+        "p95": 33,
+        "max": 33
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 116,
+      "diagnostics": {
+        "received": 97,
+        "painted": 97,
+        "skippedServerTicks": 8,
+        "serverTickMs": {
+          "samples": 96,
+          "p50": 105,
+          "p95": 106,
+          "max": 107
+        },
+        "arrivalGapMs": {
+          "samples": 96,
+          "p50": 105,
+          "p95": 114,
+          "max": 898
+        },
+        "deliveryVariationMs": {
+          "samples": 96,
+          "p50": 1,
+          "p95": 12,
+          "max": 61
+        },
+        "drawCostMs": {
+          "samples": 97,
+          "p50": 0,
+          "p95": 1,
+          "max": 3
+        },
+        "receiveToPaintMs": {
+          "samples": 97,
+          "p50": 10,
+          "p95": 33,
+          "max": 34
+        },
+        "cadenceEnabled": true,
+        "maxHoldMs": 50,
+        "phaseMs": 0,
+        "queued": 0,
+        "coalesced": 0,
+        "displayWatchdog": 22,
+        "receivedTick": 104,
+        "displayedTick": 104,
+        "context": {
+          "colorSpace": "srgb",
+          "desynchronized": false,
+          "willReadFrequently": false
+        }
+      },
+      "serverIntervals": {
+        "count": 84,
+        "min": 103,
+        "median": 105,
+        "p95": 106,
+        "max": 107
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0,
+        "p95": 1,
+        "max": 1
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 12,
+        "median": 30,
+        "p95": 52,
+        "max": 52
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 5.519591999998738,
+        "median": 8.454556000000593,
+        "p95": 9.73898999999983,
+        "max": 9.73898999999983
+      },
+      "meanSpacingErrorMs": 19.59
+    },
+    "candidate_nine_rooms_fast": {
+      "engine": "chromium",
+      "cpuRate": 4,
+      "speed": 6,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 8,
+      "errors": [],
+      "arrivals": {
+        "count": 213,
+        "min": 2.4000000001396984,
+        "median": 42.199999999953434,
+        "p95": 52.800000000046566,
+        "max": 98.60000000009313
+      },
+      "displayOpportunities": {
+        "count": 211,
+        "min": 16.600000000000364,
+        "median": 49.899999999999636,
+        "p95": 50.100000000000364,
+        "max": 66.70000000000073
+      },
+      "refreshIntervals": {
+        "count": 538,
+        "min": 16.5,
+        "median": 16.69999999999891,
+        "p95": 16.799999999999272,
+        "max": 16.80000000000109
+      },
+      "drawCost": {
+        "count": 212,
+        "min": 0,
+        "median": 0,
+        "p95": 0.39999999990686774,
+        "max": 1.3999999999068677
+      },
+      "arrivalToDraw": {
+        "count": 212,
+        "min": 0,
+        "median": 10.700000000186265,
+        "p95": 27.300000000046566,
+        "max": 35.89999999990687
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 245,
+      "diagnostics": {
+        "received": 231,
+        "painted": 229,
+        "skippedServerTicks": 0,
+        "serverTickMs": {
+          "samples": 180,
+          "p50": 42,
+          "p95": 49,
+          "max": 51
+        },
+        "arrivalGapMs": {
+          "samples": 180,
+          "p50": 42.3,
+          "p95": 52.8,
+          "max": 98.6
+        },
+        "deliveryVariationMs": {
+          "samples": 180,
+          "p50": 2,
+          "p95": 12.8,
+          "max": 52.6
+        },
+        "drawCostMs": {
+          "samples": 180,
+          "p50": 0,
+          "p95": 0.4,
+          "max": 1.2
+        },
+        "receiveToPaintMs": {
+          "samples": 180,
+          "p50": 9.6,
+          "p95": 22.5,
+          "max": 30.8
+        },
+        "cadenceEnabled": true,
+        "maxHoldMs": 21,
+        "phaseMs": 0,
+        "queued": 1,
+        "coalesced": 1,
+        "displayWatchdog": 0,
+        "receivedTick": 344,
+        "displayedTick": 343,
+        "context": {
+          "alpha": false,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        }
+      },
+      "serverIntervals": {
+        "count": 213,
+        "min": 30,
+        "median": 42,
+        "p95": 48,
+        "max": 53
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0.10000000009313226,
+        "p95": 0.30000000004656613,
+        "max": 0.30000000004656613
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 53.5,
+        "median": 55.5,
+        "p95": 61.699999999953434,
+        "max": 61.699999999953434
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 12.364886999999726,
+        "median": 14.820294000001013,
+        "p95": 15.774225999999544,
+        "max": 15.774225999999544
+      },
+      "meanSpacingErrorMs": 9.02
+    },
+    "candidate_eight_players_fast": {
+      "engine": "chromium",
+      "cpuRate": 6,
+      "speed": 6,
+      "jitter": false,
+      "pacingOff": false,
+      "extraRooms": 0,
+      "players": 8,
+      "errors": [],
+      "arrivals": {
+        "count": 214,
+        "min": 4.699999999953434,
+        "median": 42,
+        "p95": 48.89999999990687,
+        "max": 89
+      },
+      "displayOpportunities": {
+        "count": 213,
+        "min": 16.599999999998545,
+        "median": 49.899999999999636,
+        "p95": 50.100000000000364,
+        "max": 83.29999999999927
+      },
+      "refreshIntervals": {
+        "count": 542,
+        "min": 16.5,
+        "median": 16.69999999999891,
+        "p95": 16.799999999999272,
+        "max": 16.80000000000109
+      },
+      "drawCost": {
+        "count": 215,
+        "min": 0,
+        "median": 0.09999999986030161,
+        "p95": 0.8000000000465661,
+        "max": 1.8000000000465661
+      },
+      "arrivalToDraw": {
+        "count": 215,
+        "min": 0,
+        "median": 9.5,
+        "p95": 30.199999999953434,
+        "max": 36.5999999998603
+      },
+      "tickGaps": [],
+      "longTasks": [],
+      "mutations": 300,
+      "diagnostics": {
+        "received": 235,
+        "painted": 233,
+        "skippedServerTicks": 0,
+        "serverTickMs": {
+          "samples": 180,
+          "p50": 42,
+          "p95": 43,
+          "max": 44
+        },
+        "arrivalGapMs": {
+          "samples": 180,
+          "p50": 42,
+          "p95": 48.8,
+          "max": 89.1
+        },
+        "deliveryVariationMs": {
+          "samples": 180,
+          "p50": 1.6,
+          "p95": 10.8,
+          "max": 47.1
+        },
+        "drawCostMs": {
+          "samples": 180,
+          "p50": 0.1,
+          "p95": 0.9,
+          "max": 1.8
+        },
+        "receiveToPaintMs": {
+          "samples": 180,
+          "p50": 8.9,
+          "p95": 16.2,
+          "max": 30.4
+        },
+        "cadenceEnabled": true,
+        "maxHoldMs": 21,
+        "phaseMs": 0,
+        "queued": 0,
+        "coalesced": 0,
+        "displayWatchdog": 0,
+        "receivedTick": 343,
+        "displayedTick": 343,
+        "lastSnapshotAgeMs": 23,
+        "context": {
+          "alpha": false,
+          "colorSpace": "srgb",
+          "colorType": "unorm8",
+          "desynchronized": false,
+          "toneMapping": {
+            "mode": "standard"
+          },
+          "willReadFrequently": false
+        }
+      },
+      "serverIntervals": {
+        "count": 214,
+        "min": 40,
+        "median": 42,
+        "p95": 43,
+        "max": 44
+      },
+      "turnReceiveToPaint": {
+        "count": 4,
+        "min": 0,
+        "median": 0.09999999986030161,
+        "p95": 0.10000000009313226,
+        "max": 0.10000000009313226
+      },
+      "touchToConfirmedPaint": {
+        "count": 4,
+        "min": 48.39999999990687,
+        "median": 55.5,
+        "p95": 59.60000000009313,
+        "max": 59.60000000009313
+      },
+      "inputAck": {
+        "count": 4,
+        "min": 11.653936000000613,
+        "median": 17.170153000000937,
+        "p95": 47.925444000000425,
+        "max": 47.925444000000425
+      },
+      "meanSpacingErrorMs": 8.87
+    }
+  }
+}

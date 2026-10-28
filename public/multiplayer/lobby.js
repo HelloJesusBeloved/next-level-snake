@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step6';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step8';
-import { createPlayBudget, text } from './play-budget.js';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js';
+import { mountConfiguration } from './configuration.js?v=step10-cadence2';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-cadence2';
+import { createPlayBudget, text } from './play-budget.js?v=step10-cadence2';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-cadence2';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -108,6 +108,9 @@ export function mountLobby(root) {
     gameCanvas: $('mp-game-canvas'),
     gameScores: $('mp-game-scores'),
     gameStatus: $('mp-game-status'),
+    movementDetails: $('mp-movement-diagnostics'),
+    movementMetrics: $('mp-movement-metrics'),
+    movementPacing: $('mp-movement-pacing'),
     brawlConn: $('mp-brawl-conn'),
     brawlConnText: $('mp-brawl-conn-text'),
     gameTick: $('mp-game-tick'),
@@ -172,6 +175,7 @@ export function mountLobby(root) {
   let matchSubscriptionId = null;
   let heartbeatTimer = null;
   let matchHeartbeatTimer = null;
+  let movementDiagnosticsTimer = null;
   let refreshTimer = null;
   const pollInterval = Math.max(2, parseInt(root.dataset.pollInterval, 10) || 5) * 1000;
   let timer = null;
@@ -262,6 +266,28 @@ export function mountLobby(root) {
   function markSpectating() {
     stopFreezeCountdown();
     setBrawlConn('spectating', 'Spectating — your snake is out; the Brawl continues.');
+  }
+
+  // Local-only measurements: no new HTTP polling, analytics or authority.
+  // Sample only while the player has explicitly opened the details panel.
+  function renderMovementDiagnostics() {
+    if (!el.movementDetails?.open || !gameRenderer) return;
+    const d = gameRenderer.movementDiagnostics();
+    const stat = (v) => `p50 ${v.p50} · p95 ${v.p95} · max ${v.max} ms`;
+    text(el.movementMetrics, [
+      `Client release: ${d.release}`,
+      `Received tick ${d.receivedTick ?? '–'} · displayed ${d.displayedTick ?? '–'}`,
+      `Last snapshot: ${d.lastSnapshotAgeMs ?? '–'} ms ago`,
+      `Server tick interval: ${stat(d.serverTickMs)}`,
+      `Snapshot arrival gaps: ${stat(d.arrivalGapMs)}`,
+      `Delivery variation: ${stat(d.deliveryVariationMs)}`,
+      `Canvas draw cost: ${stat(d.drawCostMs)}`,
+      `Receive → draw: ${stat(d.receiveToPaintMs)}`,
+      `Adaptive hold: ${d.cadenceEnabled ? 'on' : 'off'} (limit ${d.maxHoldMs} ms + one display refresh)`,
+      `Queue ${d.queued}/3 · coalesced ${d.coalesced} · server tick gaps ${d.skippedServerTicks}`,
+      `Delayed display callbacks bypassed: ${d.displayWatchdog}`,
+      'Browser timing only; physical scanout and true one-way network latency are not measurable here.',
+    ].join('\n'));
   }
 
   function render() {
@@ -925,6 +951,7 @@ export function mountLobby(root) {
           refresh();
         },
         disconnected() {
+          gameRenderer?.discardPendingFrames();
           stopMatchHeartbeat();
           setBrawlConn('lost', 'Connection lost — reconnecting… your snake may be frozen for up to 30s.');
         },
@@ -955,6 +982,7 @@ export function mountLobby(root) {
 
   function disconnectMatchCable() {
     gameRenderer?.setActive(false);
+    gameRenderer?.discardPendingFrames();
     state.liveHudBudget.stop();
     stopMatchHeartbeat();
     stopFreezeCountdown();
@@ -1000,6 +1028,7 @@ export function mountLobby(root) {
       state.gameSnapshot = message;
       state.match = { ...(state.match || {}), id: Number(message.m), status: message.s,
                       tick: message.t, columns: message.b?.c, rows: message.b?.r };
+      state.liveHudBudget.add('movement-metrics', renderMovementDiagnostics);
       state.liveHudBudget.add('tick', () => {
       text(el.gameTick, `Tick ${state.gameSnapshot?.t}`);
       // No aria-live announcement of every tick. The board is visible and
@@ -1102,6 +1131,7 @@ export function mountLobby(root) {
     // Every intent is sent. The server de-duplicates the direction queue
     // itself and the input path no longer takes a lock, so swallowing a
     // keypress here could only ever lose a real turn.
+    gameRenderer?.expedite(); // display pacing never waits on a local turn
     state.inputSeq = Math.max(state.inputSeq, Number(state.member.last_input_seq || 0)) + 1;
     matchSubscription.perform('input', {
       v: 1, type: 'input', match: state.match.id,
@@ -1446,6 +1476,26 @@ export function mountLobby(root) {
   // ---- wiring -----------------------------------------------------------------
 
   function on(node, event, handler) { if (node) node.addEventListener(event, handler); }
+
+  if (el.movementPacing && gameRenderer) {
+    el.movementPacing.checked = gameRenderer.cadence.enabled;
+    el.movementPacing.addEventListener('change', () => {
+      gameRenderer.setCadenceEnabled(el.movementPacing.checked);
+      renderMovementDiagnostics();
+    });
+  }
+  el.movementDetails?.addEventListener('toggle', () => {
+    if (movementDiagnosticsTimer) clearInterval(movementDiagnosticsTimer);
+    movementDiagnosticsTimer = null;
+    renderMovementDiagnostics();
+    // Also samples during a transport stall; this never pings the server.
+    if (el.movementDetails.open) movementDiagnosticsTimer = setInterval(() => {
+      if (!document.hidden) renderMovementDiagnostics();
+    }, 1000);
+  });
+  window.addEventListener('pagehide', () => {
+    if (movementDiagnosticsTimer) clearInterval(movementDiagnosticsTimer);
+  });
 
   document.addEventListener('keydown', onGameKeydown);
   // Mobile steering. Two latency sources are removed here:

@@ -50,9 +50,9 @@ after_booted do
         rescue StandardError => error
           Rails.logger.error("Multiplayer simulator pass failed: #{error.class}: #{error.message}")
         end
-        # Tight cadence while a Brawl is live so movement ticks land on time;
-        # idle processes sleep longer instead of spinning on the database.
-        sleep(MatchRunner.supervisor.match_ids.empty? ? 0.25 : 0.005)
+        # Account for work already spent, and wake on the next tick/input
+        # deadline. Fixed high-frequency polling just amplifies DB load.
+        sleep(MatchRunner.next_wake_ms / 1_000.0)
       end
     end
   end

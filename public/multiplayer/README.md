@@ -204,3 +204,15 @@ died is healed back to the lobby instead of being left stuck in `in_match`.
 ## Mobile responsiveness follow-up
 
 See `rails/docs/multiplayer-step-10-mobile.md` for the phone trace. The live canvas is no longer forced to wait on `drawScoreboard`: secondary HUD text is sampled at 1Hz, while movement frames still arrive and paint immediately at tick cadence. The phone pane is contained with an opaque background; unchanged DOM text is not reassigned, and every input queue is drained before the next movement tick.
+
+
+## Mobile cadence investigation (follow-up 2)
+
+`grid-cadence.js` separates newest **received** state (controls) from whole-frame
+presentation. It measures arrival jitter and, on coarse pointers, absorbs short
+bursts with a bounded three-frame queue; turns/freeze/death/results bypass it.
+It never interpolates or predicts. **Movement diagnostics** below the controls
+shows server vs network vs drawing timing and can switch the hold off. Server
+loops now wake on deadlines rather than a fixed 5ms polling sleep.
+See `rails/docs/multiplayer-step-10-mobile-cadence.md` for the measured results,
+limits, source research, and reproducible Chromium/WebKit probe.
