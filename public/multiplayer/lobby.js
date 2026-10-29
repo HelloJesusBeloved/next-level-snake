@@ -15,6 +15,7 @@ import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step10-mobile3';
 import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-mobile4';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
+import { responsivePredictionEnabled } from './prediction.js?v=step2-prediction';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -273,6 +274,30 @@ export function mountLobby(root) {
 
   // Local-only measurements: no new HTTP polling, analytics or authority.
   // Sample only while the player has explicitly opened the details panel.
+  // Step 2: what prediction actually did, in numbers. Printed only while the
+  // panel is open (the existing 1 Hz HUD budget), never per animation frame.
+  function predictionDiagnosticLines(pr) {
+    if (!pr) return ['Prediction: unavailable in this build'];
+    if (!pr.enabled) {
+      return [`Prediction: off (server strategy ${state.match?.presentation_strategy || 'classic'} — Classic Brawl paints server frames only)`];
+    }
+    const pct = (pr.correctionRate * 100).toFixed(1);
+    const lines = [
+      `Prediction: ${pr.mode} · painted ${pr.painted ? 'LOCAL' : 'server frame'} · armed by ${pr.mode === 'test override' ? 'TEST OVERRIDE (not a Responsive match)' : 'server strategy'}`,
+      `Confirmed tick ${pr.confirmedTick ?? '–'} → predicted ${pr.predictedTick ?? '–'} (lead ${pr.lead}/${pr.limits.maxLeadTicks}) · pending seq [${pr.pendingSeqs.join(', ') || '–'}]`,
+      `Inputs: submitted ${pr.submitted} · queued-ack ${pr.queuedAcks} · applied ${pr.appliedAcks} · rejected ${pr.rejectedAcks} · refused locally ${pr.refused}`,
+      `Reconciliation: ${pr.reconciliations} frames · ${pr.corrections} corrections (${pct}% of frames) · largest ${pr.maxCorrectionCells} cells · stale/dup ignored ${pr.staleFrames}/${pr.duplicateFrames}`,
+      `Boundaries: lead stalls ${pr.leadStalls} · horizon refusals ${pr.horizonRefusals} · pending overflow ${pr.droppedPending} · catch-up discarded ${pr.catchupDiscards} · other-tab sequences ${pr.foreignApplied}`
+    ];
+    if (pr.predictedFood || pr.predictedGrowths) {
+      lines.push(`Food: ${pr.predictedFood} eaten locally (score and respawn stay server-confirmed)`);
+    }
+    if (pr.frozenPauses || pr.blockedTurns) {
+      lines.push(`Authority: frozen pauses ${pr.frozenPauses} · blocked/holding turns ${pr.blockedTurns}`);
+    }
+    return lines;
+  }
+
   function renderMovementDiagnostics() {
     if (!el.movementDetails?.open || !gameRenderer) return;
     const d = gameRenderer.movementDiagnostics();
@@ -290,6 +315,7 @@ export function mountLobby(root) {
       `Adaptive hold: ${d.cadenceEnabled ? 'on' : 'off'} (limit ${d.maxHoldMs} ms + one display refresh)`,
       `Queue ${d.queued}/3 · coalesced ${d.coalesced} · buffered tick gaps ${d.skippedServerTicks}`,
       `Authoritative snapshots: missing ${d.missingSnapshots} · duplicate ${d.duplicateSnapshots} · stale/out-of-order ${d.staleSnapshots}`,
+      ...predictionDiagnosticLines(d.prediction),
       `Delayed display callbacks bypassed: ${d.displayWatchdog}`,
       'Browser timing only; physical scanout and true one-way network latency are not measurable here.',
     ].join('\n'));
@@ -415,6 +441,26 @@ export function mountLobby(root) {
     gameRenderer?.setActive(state.gamePane === 'board');
     state.liveHudBudget.start();
     gameRenderer?.setTickMs(match.tick_ms);
+    // Step 2: Responsive Brawl arms local prediction; Classic does not, and
+    // cannot be nudged into it by a query string on a real game. The strategy is
+    // read off the LOCKED match record (`presentation_strategy`), never off the
+    // lobby preference, so the client can never predict a match the server is
+    // presenting some other way. `testOnly` is the one deliberate exception and
+    // it announces itself in Movement diagnostics.
+    const prediction = responsivePredictionEnabled({
+      strategy: match.presentation_strategy,
+      search: window.location.search,
+      storage: window.sessionStorage
+    });
+    if (gameRenderer?.setPredictionMode(prediction, match)) {
+      if (prediction.active) {
+        state.inputSeq = Math.max(state.inputSeq, Number(state.member?.last_input_seq || 0));
+        gameRenderer.noteInputSequence(Number(state.member?.last_input_seq || 0));
+        flash(prediction.testOnly
+          ? 'TEST MODE: local prediction is armed for measurement while the server still presents this Brawl as classic. Remote snakes and every result stay server-authoritative.'
+          : 'Responsive Brawl: your own snake moves on your key press; the server still owns everything else.', 'info');
+      }
+    }
     if (el.gameTick && state.gameSnapshot) text(el.gameTick, `Tick ${state.gameSnapshot.t}`);
     // Roster/palette/board are lobby-only, and must not schedule any
     // background work on a moving snake. A match's controls already do not
@@ -535,6 +581,9 @@ export function mountLobby(root) {
       }
       if (state.match && state.match.id !== previousMatchId) {
         snapshotChunks.reset();
+        // A rematch is a new tick/sequence space: drop every unconfirmed
+        // prediction instead of replaying it into a different match.
+        gameRenderer?.resetPrediction();
         swipes.cancel();
         // A rematch is a NEW round. Reset every piece of round-local state in
         // the browser (renderer, results, banners, sequence mirror) so the
@@ -542,6 +591,10 @@ export function mountLobby(root) {
         state.gameSnapshot = null;
         state.controls = null;
         state.inputSeq = Number(state.member?.last_input_seq || 0);
+        // The server's per-player sequence mirror is the tie-breaker between
+        // tabs: one identity has ONE counter that only the server advances, so
+        // the newest snapshot's applied sequence always outranks a local buffer.
+        gameRenderer?.noteInputSequence(state.inputSeq);
         state.standingsSignature = '';
         state.resultsSignature = '';
         gameRenderer?.reset();
@@ -1118,6 +1171,11 @@ export function mountLobby(root) {
     }
     if (message.type === 'input_ack') {
       if (Number(message.participant) !== Number(state.member?.match_participant_id)) return;
+      // An ack only ever means QUEUED. The predictor keeps the envelope pending
+      // until input_applied or a frame whose "is" covers it retires it, so a
+      // round trip can never be mistaken for server confirmation.
+      if (message.accepted) gameRenderer?.noteInputQueued(Number(message.seq));
+      else gameRenderer?.noteInputRejected(Number(message.seq), message.reason);
       if (message.accepted) {
         if (el.gameInputStatus) {
           text(el.gameInputStatus, `Direction queued (sequence ${message.seq ?? '–'}).`);
@@ -1137,6 +1195,7 @@ export function mountLobby(root) {
     if (message.type === 'input_applied' &&
         Number(message.participant) === Number(state.member?.match_participant_id)) {
       if (Number.isInteger(message.seq)) state.inputSeq = Math.max(state.inputSeq, message.seq);
+      gameRenderer?.noteInputApplied(Number(message.seq), Number(message.tick));
       if (el.gameInputStatus) {
         text(el.gameInputStatus, `Direction applied to the server queue for tick ${message.tick} (sequence ${message.seq}).`);
         if (el.gameInputStatus.dataset.kind) el.gameInputStatus.removeAttribute('data-kind');
@@ -1146,6 +1205,7 @@ export function mountLobby(root) {
     if (message.type === 'input_rejected' &&
         Number(message.participant) === Number(state.member?.match_participant_id)) {
       if (Number.isInteger(message.seq)) state.inputSeq = Math.max(state.inputSeq, message.seq);
+      gameRenderer?.noteInputRejected(Number(message.seq), message.reason);
       if (el.gameInputStatus) {
         el.gameInputStatus.textContent = `Direction not accepted (${message.reason}).`;
         el.gameInputStatus.dataset.kind = 'error';
@@ -1170,10 +1230,25 @@ export function mountLobby(root) {
     // keypress here could only ever lose a real turn.
     gameRenderer?.expedite(); // display pacing never waits on a local turn
     state.inputSeq = Math.max(state.inputSeq, Number(state.member.last_input_seq || 0)) + 1;
+    const seq = state.inputSeq;
+    // 1-3. Capture immediately, assign the unique sequence, and hand it to the
+    //      predictor, which associates it with the tick it intends to move on
+    //      (never a confirmed one) and tells us what it decided.
+    const prediction = gameRenderer?.predict(direction, seq) || null;
+    // 4. Send. Sent regardless of the local verdict: a locally refused
+    //    duplicate/reversal is still the server's call, and a horizon refusal is
+    //    a PIXEL policy, not an input policy.
     matchSubscription.perform('input', {
       v: 1, type: 'input', match: state.match.id,
-      tick: Number(snapshot.t), seq: state.inputSeq, dir: direction,
+      tick: Number(snapshot.t), seq, dir: direction,
     });
+    // 5-6. The predicted tick is already in the local queue, so the next paint
+    //      shows it — no network wait. Only say "predicted" when it is true.
+    if (el.gameInputStatus && prediction && !prediction.rejectedReason) {
+      text(el.gameInputStatus,
+        `Predicted ${direction} on tick ${prediction.scheduledTick} (sequence ${seq}) — awaiting the server.`);
+      if (el.gameInputStatus.dataset.kind) el.gameInputStatus.removeAttribute('data-kind');
+    }
   }
 
   function onGameKeydown(event) {

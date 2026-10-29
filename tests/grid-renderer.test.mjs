@@ -181,3 +181,92 @@ test('users can still explicitly opt into smoothing bursty delivery', () => {
     assert.deepEqual(s.paintTicks, [1, 2, 3], 'turning pacing off restores immediate phone frames');
   } finally { s.close(); }
 });
+
+
+// ---- step 2: local prediction inside the renderer -------------------------
+// These cover the RENDERER's side of Responsive Brawl: which cells get painted,
+// that remote snakes and the scoreboard stay authoritative, that Classic is
+// byte-for-byte the old path, and that a reset/destroy leaves nothing running.
+
+const settle = (h, frame1) => { h.at(0); h.renderer.accept(frame1); h.refresh(0); };
+
+test('classic Brawl paints the authoritative frame object and never a predicted one', () => {
+  const h = setup({ enabled: false });
+  const first = frame(0);
+  settle(h, first);
+  assert.equal(h.renderer.local, null, 'no predictor exists until a match is Responsive');
+  assert.equal(h.renderer.paintOverride, null, 'nothing is substituted for Classic');
+  assert.equal(h.renderer.localDisplay, false);
+  assert.deepEqual(h.renderer.paintSnapshot.p[0].b, first.p[0].b);
+  assert.equal(h.renderer.movementDiagnostics().prediction, null,
+    'classic diagnostics do not claim a prediction state');
+  h.at(10_000);
+  assert.equal(h.renderer.paintSnapshot.p[0].b[0], 3, 'Classic advances only on a server frame');
+  h.close();
+});
+
+test('responsive paints predicted cells for the own snake and authoritative cells for everyone else', () => {
+  const h = setup({ enabled: false });
+  const remote = { i: 2, n: 'P2', c: '#0000FF', b: [100, 99, 98], l: 3, a: true, d: 'left', sc: 4,
+                   sv: 0, lg: 3, fr: false, cy: 'connected' };
+  const base = frame(0);
+  const first = { ...base, p: [base.p[0], remote], tick_ms: 105 };
+  h.renderer.setPredictionMode({ active: true, source: 'server', testOnly: false },
+    { columns: 24, rows: 18, mode: 'brawl', presentation_strategy: 'responsive' });
+  assert.equal(h.renderer.local.enabled, true);
+  settle(h, first);
+  assert.equal(h.renderer.local.active, true, 'a running, alive, unfrozen snake may be predicted');
+  // The player presses: locally immediate, still unconfirmed.
+  assert.equal(h.renderer.predict('down', 1).rejectedReason, null);
+  // Two refreshes: the first establishes the predictor's monotonic phase, the
+  // second crosses one logical tick. That is the fixed-step contract — a tick
+  // boundary is defined by elapsed time, not by how many frames were drawn.
+  h.at(105); h.refresh(105);
+  h.at(210); h.refresh(210);
+  assert.ok(h.renderer.local.summary().predictedTicks >= 1, 'the local view ran a tick');
+  const painted = h.renderer.paintOverride;
+  assert.ok(painted, 'a predicted display frame is in use');
+  assert.notEqual(painted.p[0].b[0], h.renderer.paintSnapshot.p[0].b[0],
+    'the own snake moved locally before the server agreed');
+  assert.equal(painted.p[0].pr, 1, 'the substituted cells are marked as predicted');
+  assert.equal(painted.p[1].b[0], 100, 'remote snakes are painted from the authoritative frame only');
+  assert.deepEqual(painted.p[1], remote, 'remote player is the identical object, untouched');
+  assert.equal(h.renderer.paintSnapshot.p[0].b[0], 3,
+    'the authoritative snapshot stays authoritative for HUD, scoreboard and results');
+  assert.equal(h.renderer.movementDiagnostics().prediction.painted, true);
+  h.close();
+});
+
+test('disarming restores the classic paint path exactly, and reset drops unconfirmed inputs', () => {
+  const h = setup({ enabled: false });
+  const first = frame(0);
+  first.tick_ms = 105;
+  h.renderer.setPredictionMode({ active: true, source: 'test', testOnly: true }, { columns: 24, rows: 18 });
+  settle(h, first);
+  h.renderer.predict('down', 1);
+  h.at(105); h.refresh(105);
+  assert.ok(h.renderer.paintOverride, 'predicted frame while armed');
+  assert.ok(h.renderer.local.summary().pending >= 1);
+  // A reconnect seed: nothing may survive the gap.
+  h.renderer.resetPrediction({ reconnect: true });
+  assert.equal(h.renderer.local.summary().pending, 0, 'obsolete predictions are discarded');
+  assert.ok(h.renderer.local.summary().resetForReconnect >= 1);
+  assert.equal(h.renderer.paintOverride, null, 'no stale substituted frame is left painted');
+  // Step 2 stays unreachable for players: disarming must return Classic verbatim.
+  h.renderer.setPredictionMode({ active: false, source: 'off' });
+  assert.equal(h.renderer.paintOverride, null);
+  assert.equal(h.renderer.localDisplay, false);
+  assert.equal(h.renderer.local.enabled, false);
+  h.at(500); h.refresh(500);
+  assert.equal(h.renderer.paintSnapshot.p[0].b[0], 3, 'only a server frame can move it again');
+  h.close();
+});
+
+test('the prediction loop never outlives the renderer', () => {
+  const h = setup({ enabled: false });
+  h.renderer.setPredictionMode({ active: true, source: 'server' }, { columns: 24, rows: 18 });
+  settle(h, frame(0));
+  assert.ok(h.queued >= 1, 'the loop is scheduled while armed');
+  // close() asserts destroy() left zero queued repaints: the loop must be cancelled.
+  h.close();
+});

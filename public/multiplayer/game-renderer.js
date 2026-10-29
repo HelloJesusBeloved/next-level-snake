@@ -12,6 +12,7 @@
 // refresh. This trade-off is observable and switchable in Movement diagnostics.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
+import { LocalPredictor } from './prediction.js?v=step2-prediction';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -29,6 +30,19 @@ export class MultiplayerGameRenderer {
     this.paintSnapshot = null; // newest PRESENTED complete server frame
     this.snapshotDiagnostics = { missing: 0, duplicate: 0, stale: 0 };
     this.snapshotSignature = null;
+    this.snapshotVerdict = { applied: false, stale: false, duplicate: false, missingTicks: 0 };
+    // ---- step 2: local prediction for THIS player's snake -------------------
+    // One predictor per renderer, so canvas painting and steering share a single
+    // tick phase. It stays inert (null-free, but disabled) for Classic Brawl:
+    // every draw path below checks `localDisplay` before it changes a pixel, so
+    // the shipped Classic behaviour is the same code that ran before this file.
+    this.local = null;
+    this.predictionMode = { active: false, source: 'off', testOnly: false };
+    this.paintOverride = null; // frame actually painted (authoritative + predicted cells). Named apart
+    // from paintFrame, which is the display frame-gate handle: two owners for one
+    // field would silently break the rAF gate (and Classic with it).
+    this.localDisplay = false;
+    this.predictionLoop = null;
     this.clock = clock;
     this.frameRequest = frameRequest;
     this.frameCancel = frameCancel;
@@ -139,6 +153,15 @@ export class MultiplayerGameRenderer {
     this.paintSnapshot = null;
     this.snapshotDiagnostics = { missing: 0, duplicate: 0, stale: 0 };
     this.snapshotSignature = null;
+    this.snapshotVerdict = { applied: false, stale: false, duplicate: false, missingTicks: 0 };
+    // A new round, a resubscribe or a reconnect: every unconfirmed prediction is
+    // obsolete the moment this renderer resets. Nothing is replayed from before
+    // the gap — the next authoritative frame restarts prediction from server
+    // state only.
+    this.stopPredictionLoop();
+    this.paintOverride = null;
+    this.localDisplay = false;
+    this.local?.reset('renderer reset', { reconnect: true });
     this.timings = new MovementTimings();
     this.receivedAt = new WeakMap();
     this.dust = [];
@@ -186,6 +209,96 @@ export class MultiplayerGameRenderer {
     }
   }
 
+  // ---- step 2: prediction control -----------------------------------------
+  // The mode comes from the caller, which reads it off the AUTHORITATIVE match
+  // strategy (or the explicit test override). Nothing here can infer or assume
+  // Responsive: no strategy, no prediction.
+  setPredictionMode(mode, match = null) {
+    const next = { active: !!(mode && mode.active), source: mode?.source || 'off',
+                   testOnly: !!(mode && mode.testOnly) };
+    const changed = next.active !== this.predictionMode.active || next.source !== this.predictionMode.source;
+    this.predictionMode = next;
+    if (!next.active) {
+      if (this.local) this.local.disable(match?.presentation_strategy || 'classic');
+      this.stopPredictionLoop();
+      this.paintOverride = null;
+      this.localDisplay = false;
+      return changed;
+    }
+    this.local = this.local || new LocalPredictor({
+      tickMs: this.tickMs, columns: match?.columns, rows: match?.rows,
+      ownParticipantId: this.ownParticipantId, clock: this.clock
+    });
+    this.local.enable(next.source === 'test' ? 'test override' : 'responsive');
+    this.configureLocal(match);
+    this.startPredictionLoop();
+    return changed;
+  }
+
+  configureLocal(match) {
+    if (!this.local) return;
+    this.local.configure({
+      tickMs: this.tickMs, columns: match?.columns ?? this.snapshot?.b?.c,
+      rows: match?.rows ?? this.snapshot?.b?.r, ownParticipantId: this.ownParticipantId,
+      growth: Number.isInteger(match?.growth) ? match.growth : undefined,
+      mode: match?.mode
+    });
+    if (this.snapshot) this.local.observe(this.snapshot, { applied: true });
+  }
+
+  // Steers the LOCAL view only. It never sends anything and never claims the
+  // turn happened: the return value is this module's own bounded scheduling
+  // decision, which is exactly why a refused prediction still goes to the
+  // server (the server owns turns; this only owns pixels).
+  predict(direction, seq) {
+    if (!this.local || !this.local.enabled) return null;
+    const record = this.local.submit(direction, seq);
+    if (record && !record.rejectedReason) this.expedite();
+    return record;
+  }
+
+  noteInputQueued(seq) { this.local?.noteQueued(seq); }
+  noteInputApplied(seq, tick) { this.local?.noteApplied(seq, tick); }
+  noteInputRejected(seq, reason) {
+    if (this.local?.noteRejected(seq, reason)) this.expedite();
+  }
+
+  noteInputSequence(lastInputSeq) { this.local?.noteSequenceMirror(lastInputSeq); }
+
+  resetPrediction({ reconnect = false } = {}) {
+    this.stopPredictionLoop();
+    this.paintOverride = null;
+    this.localDisplay = false;
+    return this.local?.reset(reconnect ? 'reconnect' : 'reset', { reconnect }) ?? false;
+  }
+
+  // Fixed-step prediction on a MONOTONIC clock, deliberately not tied to the
+  // authoritative frame cadence: turns are consumed only at tick boundaries by
+  // the engine's own rules, so a snake never rotates between grid ticks. The
+  // rAF callback only decides WHEN to advance; elapsed time decides HOW MUCH.
+  startPredictionLoop() {
+    if (this.predictionLoop !== null || !this.local?.enabled) return false;
+    const step = () => {
+      this.predictionLoop = null;
+      if (!this.local?.enabled) return;
+      const at = this.clock();
+      const ticks = this.local.advance(at);
+      if (ticks > 0 && !this.hidden && !this.viewPaused && this.snapshot) {
+        this.present(this.snapshot, at);
+      }
+      if (this.local.enabled) this.predictionLoop = this.frameRequest(step);
+    };
+    this.predictionLoop = this.frameRequest(step);
+    return true;
+  }
+
+  stopPredictionLoop() {
+    if (this.predictionLoop === null) return false;
+    this.frameCancel(this.predictionLoop);
+    this.predictionLoop = null;
+    return true;
+  }
+
   setCadenceEnabled(enabled) {
     this.cadence.configure({ enabled });
     this.expedite();
@@ -201,6 +314,11 @@ export class MultiplayerGameRenderer {
       missingSnapshots: this.snapshotDiagnostics.missing,
       duplicateSnapshots: this.snapshotDiagnostics.duplicate,
       staleSnapshots: this.snapshotDiagnostics.stale,
+      // Step 2: is the own snake currently being painted from prediction, and
+      // what did reconciliation have to fix? Read from the predictor, never
+      // guessed, so a claimed Responsive state always has a number behind it.
+      prediction: this.local ? { ...this.local.summary(), painted: this.localDisplay,
+                                 mode: this.predictionMode } : null,
       lastSnapshotAgeMs: this.timings.previous ? Math.round(this.clock() - this.timings.previous.at) : null,
       context: this.context?.getContextAttributes?.() || null,
     };
@@ -218,6 +336,9 @@ export class MultiplayerGameRenderer {
   setTickMs(ms) {
     if (Number.isFinite(ms) && ms > 0 && ms !== this.tickMs) {
       this.tickMs = ms;
+      // The predictor must run at the SAME fixed interval the engine steps at,
+      // or "predicted" would just mean "drifted".
+      this.local?.configure({ tickMs: ms });
       this.cadence.configure({ tickMs: ms });
       if (this.snapshot) this.cadence.receive(this.snapshot, this.clock(), true);
       this.requestDraw();
@@ -255,6 +376,14 @@ export class MultiplayerGameRenderer {
 
   present(frame, at) {
     this.paintSnapshot = frame;
+    // Only the own snake's cells/direction/length may come from prediction; the
+    // frame painted is otherwise this exact authoritative frame, so remote
+    // snakes, food, freeze rings, dust, themes and the canvas cache are all
+    // still 100% server-confirmed. `paintSnapshot` stays authoritative so the
+    // HUD, scoreboard and results never read a predicted value.
+    const predicted = this.local && this.local.active ? this.local.displayFrame(frame) : null;
+    this.paintOverride = predicted && predicted !== frame ? predicted : null;
+    this.localDisplay = !!this.paintOverride;
     const start = this.clock();
     this.draw();
     this.dirty = false;
@@ -266,8 +395,10 @@ export class MultiplayerGameRenderer {
         !Number.isInteger(snapshot.t) || !snapshot.b || !Array.isArray(snapshot.p) ||
         !Array.isArray(snapshot.f)) return false;
     if (this.snapshot && snapshot.m !== this.snapshot.m) return false;
+    this.snapshotVerdict = { applied: false, stale: false, duplicate: false, missingTicks: 0 };
     if (this.snapshot && snapshot.t < this.snapshot.t) {
       this.snapshotDiagnostics.stale += 1; // stale or out-of-order authoritative tick
+      this.snapshotVerdict.stale = true;
       return false;
     }
     const cols = snapshot.b.c; const rows = snapshot.b.r;
@@ -286,12 +417,14 @@ export class MultiplayerGameRenderer {
         previous.e, previous.w, previous.q, previous.p, previous.f]);
       if (signature === previousSignature) {
         this.snapshotDiagnostics.duplicate += 1;
+        this.snapshotVerdict.duplicate = true;
         return false;
       }
       this.snapshotSignature = signature;
     } else {
       if (previous && snapshot.t > previous.t + 1) {
         this.snapshotDiagnostics.missing += snapshot.t - previous.t - 1;
+        this.snapshotVerdict.missingTicks = snapshot.t - previous.t - 1;
       }
       // Same-tick comparisons are rare (idle keepalives or connection changes),
       // so don't serialize every growing snake on every movement frame.
@@ -311,6 +444,13 @@ export class MultiplayerGameRenderer {
     if (Number.isFinite(snapshot.ts) && snapshot.ts > 0) this.serverOffsetMs = snapshot.ts - Date.now();
 
     this.snapshot = snapshot;
+    this.snapshotVerdict.applied = true;
+    // Reconcile prediction against the frame that was just accepted — and only
+    // that one. Stale and duplicate frames returned above, so a repeated or
+    // out-of-order update can never rewind a predicted snake (nor "confirm" a
+    // tick the server has not run).
+    this.local?.observe(snapshot, this.snapshotVerdict);
+    if (this.local?.enabled && !this.local.active) this.stopPredictionLoop();
     this.hudBudget.add('scores', () => this.drawScoreboard());
     // Keep authoritative receipt/control state current even if display is
     // paced or paused. Only the visual frame goes through the tiny queue.
@@ -502,7 +642,7 @@ export class MultiplayerGameRenderer {
 
   // Whole, server-confirmed cells only. No interpolation or extrapolation.
   draw() {
-    const snapshot = this.paintSnapshot;
+    const snapshot = this.paintOverride || this.paintSnapshot;
     const canvas = this.canvas;
     if (!snapshot || !canvas || this.hidden || this.viewPaused) return;
     if (!this.view.width || !this.view.height) {
@@ -641,6 +781,13 @@ export class MultiplayerGameRenderer {
   }
 
   destroy() {
+    // Step 2: the prediction loop owns one animation-frame callback, so it
+    // must be released here too. The existing teardown assertion (no queued
+    // repaint after destroy) is the guarantee that this is not optional.
+    this.stopPredictionLoop();
+    this.local?.disable('destroyed');
+    this.paintOverride = null;
+    this.localDisplay = false;
     this.hudBudget.stop();
     document.removeEventListener('visibilitychange', this.onVisibility);
     if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
