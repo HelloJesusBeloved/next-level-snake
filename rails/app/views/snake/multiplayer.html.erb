@@ -284,12 +284,12 @@
           <label for="mp-presentation-choice">Presentation strategy</label>
           <select id="mp-presentation-choice" disabled>
             <option value="classic">Classic Brawl · fully server-synchronized</option>
-            <option value="responsive">Responsive Brawl · unavailable until Step 3</option>
+            <option value="responsive">Responsive Brawl · instant local movement + smooth remote playback</option>
           </select>
           <button id="mp-presentation-save" type="submit" class="btn btn--small" disabled>Save presentation</button>
         </form>
         <p class="mp-config-status" id="mp-presentation-status" role="status" aria-live="polite"></p>
-        <p class="mp-card__hint" id="mp-presentation-availability">Classic Brawl is available. Responsive Brawl is not implemented yet; selecting it will prevent this match from starting.</p>
+        <p class="mp-card__hint" id="mp-presentation-availability">Both strategies run the same authoritative Ruby simulation: same rules, same scores, same results. Classic paints each confirmed frame as it arrives. Responsive predicts your own snake locally and plays other players back smoothly from buffered confirmed movement.</p>
       </section>
     </div>
 

@@ -270,3 +270,202 @@ test('the prediction loop never outlives the renderer', () => {
   // close() asserts destroy() left zero queued repaints: the loop must be cancelled.
   h.close();
 });
+
+
+// ---- step 3: buffered remote playback inside the renderer ------------------
+// These prove the two halves of Responsive Brawl stay separate: this player's
+// snake is painted from prediction, every other snake from the confirmed
+// playback buffer, and Classic paints the server frame untouched.
+
+const boardFrame = (t, { own = [30, 29, 28], remote = [100, 99, 98], extra = {} } = {}) => ({
+  v: 1, type: 'snapshot', m: 7, s: 'running', t, b: { c: 24, r: 18 }, f: [], tick_ms: 100,
+  p: [
+    { i: 1, n: 'P1', c: '#00FF00', b: own, l: own.length, a: true, d: 'right', sc: 0, sv: t, lg: 3, fr: false, cy: 'connected' },
+    { i: 2, n: 'P2', c: '#0000FF', b: remote, l: remote.length, a: true, d: 'right', sc: 3, sv: t, lg: 3, fr: false, cy: 'connected' }
+  ],
+  q: [{ i: 1, p: 1, sc: 0 }, { i: 2, p: 2, sc: 3 }], ...extra
+});
+
+function responsiveRenderer(h) {
+  h.renderer.setPredictionMode({ active: true, source: 'server', testOnly: false },
+    { columns: 24, rows: 18, mode: 'brawl', presentation_strategy: 'responsive' });
+  h.renderer.local?.enable('responsive');
+  return h.renderer;
+}
+
+test('responsive arms a playback buffer; classic never creates one', () => {
+  const classic = setup({ enabled: false });
+  classic.renderer.accept(boardFrame(0));
+  assert.equal(classic.renderer.playback, null, 'Classic allocates no playback state at all');
+  assert.equal(classic.renderer.smoothPlayers(), null);
+  assert.equal(classic.renderer.movementDiagnostics().playback, null);
+  classic.close();
+
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  assert.ok(r.playback, 'Responsive owns a playback buffer');
+  assert.equal(r.playback.enabled, true);
+  // Prediction and playback are separate objects with separate state.
+  assert.notEqual(r.local, r.playback);
+  h.close();
+});
+
+test('a compact movement frame extends remote bodies and never touches the own snake', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  const first = boardFrame(0);
+  r.accept(first);
+  const ownBefore = r.snapshot.p[0].b.slice();
+  // The server's compact frame: heads, lengths and scalars only.
+  const added = r.acceptMovement({
+    v: 1, type: 'movement', m: 7, s: 'running', t: 1, ts: 1000,
+    f: [], p: [
+      { i: 1, h: 31, d: 'right', l: 3, sc: 0, a: true, fr: false, cy: 'connected', is: 1, it: 1 },
+      { i: 2, h: 101, d: 'right', l: 3, sc: 3, a: true, fr: false, cy: 'connected', is: 0, it: null }
+    ]
+  });
+  assert.equal(added, true, 'the frame rebuilt both bodies');
+  const stored = r.playback.byTick.get(1);
+  assert.deepEqual(stored.players.get(1).cells, [31, 30, 29], 'own body follows the confirmed head');
+  assert.deepEqual(stored.players.get(2).cells, [101, 100, 99], 'remote body follows its confirmed head');
+  // The authoritative snapshot is untouched by playback intake.
+  assert.deepEqual(r.snapshot.p[0].b, ownBefore);
+  assert.equal(r.playback.summary().reconstructed, 2);
+  h.close();
+});
+
+test('a refused movement frame asks the server for a snapshot instead of guessing', () => {
+  const h = setup({ enabled: false });
+  const requests = [];
+  h.renderer.onResyncNeeded = (reason) => requests.push(reason);
+  const r = responsiveRenderer(h);
+  // No seed snapshot yet, so nothing can be reconstructed.
+  assert.equal(r.acceptMovement({ v: 1, type: 'movement', m: 7, t: 4, p: [{ i: 1, h: 5, l: 3 }] }), false);
+  assert.ok(requests.length >= 1, 'the renderer must ask for an authoritative frame');
+  assert.equal(r.playback.summary().frames, 0, 'nothing invented is stored');
+  h.close();
+});
+
+test('resync requests are throttled so a bad link cannot become a request storm', () => {
+  const h = setup({ enabled: false });
+  const requests = [];
+  h.renderer.onResyncNeeded = () => requests.push(1);
+  const r = responsiveRenderer(h);
+  for (let index = 0; index < 5; index += 1) r.requestResync('test');
+  assert.equal(requests.length, 1, 'one request per interval');
+  h.close();
+});
+
+test('remote playback is drawn only for remote players, with continuous coordinates', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  // Three adjacent confirmed ticks: interpolation needs a NEXT tick that exists.
+  r.accept(boardFrame(0));
+  r.accept(boardFrame(1, { own: [31, 30, 29], remote: [101, 100, 99] }));
+  r.accept(boardFrame(2, { own: [32, 31, 30], remote: [102, 101, 100] }));
+  // Drive the shared animation loop and record every sample. The FINAL sample is
+  // legitimately a hold once the fixture's last frame has been reached, so the
+  // interpolation assertion is made over the samples that had history ahead of
+  // them — which is the case the feature exists for.
+  const samples = [];
+  for (let at = 0; at <= 240; at += 20) {
+    h.at(at);
+    h.refresh(at);
+    if (r.lastPlaybackSample) samples.push(r.lastPlaybackSample);
+  }
+  assert.ok(samples.length > 0, 'the loop produced playback samples');
+  const interpolated = samples.filter((sample) => sample.interpolated && sample.players?.get(2)?.smooth);
+  assert.ok(interpolated.length > 0, 'the remote snake must be interpolated between confirmed ticks');
+  const remote = interpolated[0].players.get(2);
+  for (const segment of remote.smooth) {
+    if (!segment.smooth) continue;
+    assert.ok(Number.isFinite(segment.x) && Number.isFinite(segment.y));
+    // Never more than the single cell the confirmed tick actually moved.
+    assert.ok(Math.abs(segment.x - (segment.from % 24)) <= 1);
+    assert.ok(Math.abs(segment.y - Math.floor(segment.from / 24)) <= 1);
+  }
+  // And once history runs out the board holds a confirmed state rather than
+  // continuing to move on its own.
+  const last = samples.at(-1);
+  assert.equal(last.interpolated, false);
+  assert.ok(last.players?.get(2), 'a real confirmed body is still displayed');
+  h.close();
+});
+
+test('classic keeps painting server cells: no playback draw path is taken', () => {
+  const h = setup({ enabled: false });
+  h.renderer.accept(boardFrame(0));
+  h.at(100); h.renderer.accept(boardFrame(1, { remote: [101, 100, 99] }));
+  h.at(500); h.refresh(500);
+  assert.equal(h.renderer.smoothPlayers(), null);
+  assert.equal(h.renderer.playbackDraws, 0, 'Classic never runs an interpolation-only draw');
+  assert.deepEqual(h.renderer.paintSnapshot.p[1].b, [101, 100, 99],
+    'the remote body painted is the confirmed one, verbatim');
+  h.close();
+});
+
+test('reconnect and destroy drop remote history without breaking the renderer', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  r.accept(boardFrame(0));
+  r.accept(boardFrame(1, { remote: [101, 100, 99] }));
+  assert.ok(r.playback.frames.length > 0);
+  r.resetPrediction({ reconnect: true });
+  assert.equal(r.playback.frames.length, 0, 'stale confirmed history is discarded');
+  assert.equal(r.playback.byTick.size, 0);
+  assert.equal(r.lastPlaybackSample, null);
+  // A fresh seed then rebuilds it, and the renderer still works.
+  r.accept(boardFrame(5, { remote: [120, 119, 118] }));
+  assert.equal(r.playback.frames.length, 1);
+  h.close();
+});
+
+
+test('diagnostics differ by strategy in the way the brief asks for', () => {
+  // The same confirmed frames, replayed once as Classic and once as Responsive.
+  const frames = [
+    boardFrame(0), boardFrame(1, { remote: [101, 100, 99] }), boardFrame(2, { remote: [102, 101, 100] })
+  ];
+  const run = (responsive) => {
+    const h = setup({ enabled: false });
+    if (responsive) responsiveRenderer(h);
+    for (const [index, frame] of frames.entries()) { h.at(index * 100); h.renderer.accept(frame); }
+    h.at(300);
+    for (let at = 300; at <= 500; at += 20) h.refresh(at);
+    const d = h.renderer.movementDiagnostics();
+    h.close();
+    return d;
+  };
+  const classic = run(false);
+  const responsive = run(true);
+
+  // Classic: no prediction, no playback, and it says so instead of showing zeros
+  // that could be mistaken for measurements.
+  assert.equal(classic.prediction, null);
+  assert.equal(classic.playback, null);
+
+  // Responsive: every block the brief lists is present and self-labelled.
+  assert.ok(responsive.prediction, 'prediction is reported');
+  assert.ok(responsive.playback, 'playback is reported');
+  assert.ok(Number.isInteger(responsive.prediction.confirmedTick));
+  assert.ok(Number.isInteger(responsive.prediction.predictedTick));
+  assert.ok(Number.isInteger(responsive.prediction.pending));
+  assert.ok(Number.isInteger(responsive.prediction.corrections));
+  assert.ok(Number.isInteger(responsive.prediction.maxCorrectionCells));
+  // Remote playback delay / buffer / underruns / resyncs.
+  assert.ok(Number.isInteger(responsive.playback.delayMs));
+  assert.ok(Number.isInteger(responsive.playback.targetDelayMs));
+  assert.ok(Number.isInteger(responsive.playback.buffered));
+  assert.ok(Number.isInteger(responsive.playback.underruns));
+  assert.ok(Number.isInteger(responsive.playback.missingTicks));
+  assert.ok(Number.isInteger(responsive.playback.resyncs));
+  // Measured vs estimated are not mixed together.
+  assert.ok(responsive.playback.measured && responsive.playback.estimated);
+  assert.deepEqual(Object.keys(responsive.playback.measured).sort(),
+    ['buffered', 'delayMs', 'jitterMs']);
+  // Canvas cost is tracked for both, and playback draws are only counted when
+  // playback actually painted.
+  assert.equal(classic.playback, null);
+  assert.ok(responsive.playback.playbackDraws >= 0);
+  assert.ok(responsive.playback.playbackDrawCostMs >= 0);
+});

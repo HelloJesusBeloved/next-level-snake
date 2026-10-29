@@ -157,6 +157,10 @@ export function mountLobby(root) {
     match: null,
     gameSnapshot: null,
     inputSeq: 0,
+    // Step 3 diagnostics: measured input round trips (see noteRoundTrip).
+    inputSentAt: new Map(),
+    rttMs: null,
+    rttSamples: [],
     buffered: [],
     cable: { status: 'idle', reason: null },
     // Step 10: presentation-only mirror of the server's connection state.
@@ -185,6 +189,7 @@ export function mountLobby(root) {
   const configuration = mountConfiguration({ api, apply, getState: () => state });
   const snapshotChunks = new SnapshotChunks();
   const gameRenderer = el.gameCanvas ? new MultiplayerGameRenderer({
+    onResyncNeeded: (reason) => requestMatchResync(reason),
     canvas: el.gameCanvas,
     scoreboard: el.gameScores,
     status: el.gameStatus,
@@ -298,12 +303,56 @@ export function mountLobby(root) {
     return lines;
   }
 
+  // Step 3: remote playback, split into what this browser MEASURED and what it
+  // ESTIMATED from tick cadence. Nothing here is sent anywhere; the whole block
+  // is only produced while the details panel is open (the existing 1 Hz HUD
+  // budget), never per animation frame.
+  function playbackDiagnosticLines(pb) {
+    if (!pb) return ['Remote playback: unavailable in this build'];
+    if (!pb.enabled) {
+      return ['Remote playback: off (Classic Brawl paints each confirmed frame as it arrives)'];
+    }
+    return [
+      `Remote playback: ${pb.reason} · ${pb.painted ? 'interpolating' : 'holding at confirmed tick'}` +
+        ` · delay ${pb.delayMs}ms measured (target ${pb.targetDelayMs}ms estimated)`,
+      `Remote buffer: ${pb.buffered}/${pb.maxBufferTicks} confirmed ticks` +
+        ` (${pb.oldestTick ?? '–'}–${pb.newestTick ?? '–'}) · playhead ${pb.playheadTick ?? '–'}` +
+        ` · arrival jitter ${pb.jitterMs}ms estimated`,
+      `Remote gaps: ${pb.missingTicks} missing ticks (${pb.gaps} gaps) · buffer underruns ${pb.underruns}` +
+        ` · resyncs ${pb.resyncs} · stale discards ${pb.staleDrops}`,
+      `Remote intake: ${pb.snapshotFrames} full / ${pb.movementFrames} compact frames` +
+        ` · bodies rebuilt ${pb.reconstructed} · refused ${pb.reconstructRejects}` +
+        ` · duplicates ${pb.duplicates} · out-of-order ${pb.outOfOrder}`,
+      `Remote wrap frames ${pb.wrapSegments} · interpolated ${pb.interpolatedFrames}` +
+        ` · held ${pb.heldFrames} · canvas ${pb.playbackDrawCostMs}ms over ${pb.playbackDraws} playback draws`,
+    ];
+  }
+
+  // Measured network numbers, clearly separated from estimates: the RTT is a
+  // real input round trip, the tick lag is derived from ticks and the local
+  // clock.
+  function networkDiagnosticLines() {
+    const rtt = state.rttMs === null ? null : Math.round(state.rttMs);
+    const jitter = rttJitter();
+    const d = gameRenderer?.movementDiagnostics();
+    const confirmed = d?.prediction?.confirmedTick ?? null;
+    const predicted = d?.prediction?.predictedTick ?? null;
+    return [
+      `Network RTT: ${rtt === null ? 'no sample yet' : `${rtt}ms measured (input round trip)${jitter === null ? '' : ` · spread ${jitter}ms`}`}` +
+        ` · propagation to this board ≈ ${rtt === null ? '–' : `${Math.round(rtt / 2)}ms estimated`}`,
+      `Ticks: predicted ${predicted ?? '–'} vs confirmed ${confirmed ?? '–'}` +
+        ` · remote playhead ${d?.playback?.lastSample?.tick ?? '–'}` +
+        ` · strategy ${state.match?.presentation_strategy || 'classic'} (server-locked)`,
+    ];
+  }
+
   function renderMovementDiagnostics() {
     if (!el.movementDetails?.open || !gameRenderer) return;
     const d = gameRenderer.movementDiagnostics();
     const stat = (v) => `p50 ${v.p50} · p95 ${v.p95} · max ${v.max} ms`;
     text(el.movementMetrics, [
-      `Presentation strategy: ${state.match?.presentation_strategy || state.room?.presentation_strategy || 'classic'}`,
+      `Presentation strategy: ${state.match?.presentation_strategy || state.room?.presentation_strategy || 'classic'}` +
+        `${state.match?.presentation_strategy === 'responsive' ? ' (active: local prediction + buffered remote playback)' : ' (active: every frame painted as it arrives)'}`,
       `Client release: ${d.release}`,
       `Received tick ${d.receivedTick ?? '–'} · displayed ${d.displayedTick ?? '–'}`,
       `Last snapshot: ${d.lastSnapshotAgeMs ?? '–'} ms ago`,
@@ -316,6 +365,8 @@ export function mountLobby(root) {
       `Queue ${d.queued}/3 · coalesced ${d.coalesced} · buffered tick gaps ${d.skippedServerTicks}`,
       `Authoritative snapshots: missing ${d.missingSnapshots} · duplicate ${d.duplicateSnapshots} · stale/out-of-order ${d.staleSnapshots}`,
       ...predictionDiagnosticLines(d.prediction),
+      ...playbackDiagnosticLines(d.playback),
+      ...networkDiagnosticLines(),
       `Delayed display callbacks bypassed: ${d.displayWatchdog}`,
       'Browser timing only; physical scanout and true one-way network latency are not measurable here.',
     ].join('\n'));
@@ -361,10 +412,9 @@ export function mountLobby(root) {
       el.readyCount.textContent = `${counts.ready} ready`;
     }
     if (el.startState) {
-      el.startState.textContent = start.blockers?.includes('responsive_strategy_unavailable')
-        ? 'Responsive Brawl is unavailable in this step. Choose Classic Brawl to start.'
-        : start.eligible ? 'Enough players to start'
-          : `Needs ${start.minimum_players} connected players`;
+      el.startState.textContent = start.eligible
+        ? `Enough players to start · ${start.presentation_strategy === 'responsive' ? 'Responsive' : 'Classic'} Brawl`
+        : `Needs ${start.minimum_players} connected players`;
     }
 
     if (el.roster) {
@@ -1066,8 +1116,28 @@ export function mountLobby(root) {
     matchSubscriptionId = null;
   }
 
+  // Step 3: ask for one complete authoritative frame when remote playback loses
+  // its tick chain. Throttled on the renderer side; sent over the existing
+  // socket action, so no new endpoint or transport is introduced.
+  function requestMatchResync(reason) {
+    if (!matchSubscription) return;
+    matchSubscription.perform('resync');
+    if (el.gameInputStatus) {
+      text(el.gameInputStatus, `Remote history gap (${reason}) — re-synchronised from the server.`);
+      el.gameInputStatus.dataset.kind = 'warn';
+    }
+  }
+
   function onMatchMessage(message) {
     if (!message || Number(message.m || message.match) !== Number(state.match && state.match.id)) return;
+    if (message.type === 'movement') {
+      // Compact tick-ordered movement: heads, lengths and scalars only. The
+      // renderer rebuilds each body from its own confirmed history, so a wrong
+      // or missing link is refused there and recovered with a full snapshot
+      // rather than rendered.
+      gameRenderer?.acceptMovement(message);
+      return;
+    }
     if (message.type === 'snapshot_chunk') {
       const full = snapshotChunks.receive(message, Number(state.match.id), state.gameSnapshot?.t ?? -1);
       if (full) onMatchMessage(full); // one complete authoritative frame only
@@ -1195,6 +1265,7 @@ export function mountLobby(root) {
     if (message.type === 'input_applied' &&
         Number(message.participant) === Number(state.member?.match_participant_id)) {
       if (Number.isInteger(message.seq)) state.inputSeq = Math.max(state.inputSeq, message.seq);
+      noteRoundTrip(message.seq);
       gameRenderer?.noteInputApplied(Number(message.seq), Number(message.tick));
       if (el.gameInputStatus) {
         text(el.gameInputStatus, `Direction applied to the server queue for tick ${message.tick} (sequence ${message.seq}).`);
@@ -1205,6 +1276,7 @@ export function mountLobby(root) {
     if (message.type === 'input_rejected' &&
         Number(message.participant) === Number(state.member?.match_participant_id)) {
       if (Number.isInteger(message.seq)) state.inputSeq = Math.max(state.inputSeq, message.seq);
+      noteRoundTrip(message.seq);
       gameRenderer?.noteInputRejected(Number(message.seq), message.reason);
       if (el.gameInputStatus) {
         el.gameInputStatus.textContent = `Direction not accepted (${message.reason}).`;
@@ -1215,6 +1287,26 @@ export function mountLobby(root) {
 
   // Only a direction name leaves the browser. The server resolves identity,
   // validates the tick/seq envelope, and the simulator applies it before a tick.
+  // Measured RTT (input round trip) with a light EWMA, plus the spread of recent
+  // samples as a jitter estimate. Both are labelled "measured" in diagnostics;
+  // the playback buffer's own jitter figure is derived from arrival spacing and
+  // is labelled as an estimate.
+  function noteRoundTrip(seq) {
+    const sentAt = state.inputSentAt.get(Number(seq));
+    if (sentAt === undefined) return;
+    state.inputSentAt.delete(Number(seq));
+    const rtt = Math.max(0, performance.now() - sentAt);
+    state.rttMs = state.rttMs === null ? rtt : state.rttMs * 0.8 + rtt * 0.2;
+    state.rttSamples.push(rtt);
+    if (state.rttSamples.length > 12) state.rttSamples.shift();
+  }
+
+  function rttJitter() {
+    if (state.rttSamples.length < 2) return null;
+    const sorted = state.rttSamples.slice().sort((a, b) => a - b);
+    return Math.round(sorted[sorted.length - 1] - sorted[0]);
+  }
+
   function sendDirection(direction) {
     const snapshot = state.gameSnapshot;
     const ownId = state.member?.match_participant_id;
@@ -1235,6 +1327,11 @@ export function mountLobby(root) {
     //      predictor, which associates it with the tick it intends to move on
     //      (never a confirmed one) and tells us what it decided.
     const prediction = gameRenderer?.predict(direction, seq) || null;
+    // A real, measured round trip: this is the only place the browser learns how
+    // long the server actually took to answer one of its own packets. It is
+    // reported in diagnostics as measured, never as a guess.
+    state.inputSentAt.set(seq, performance.now());
+    while (state.inputSentAt.size > 24) state.inputSentAt.delete(state.inputSentAt.keys().next().value);
     // 4. Send. Sent regardless of the local verdict: a locally refused
     //    duplicate/reversal is still the server's call, and a horizon refusal is
     //    a PIXEL policy, not an input policy.

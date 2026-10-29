@@ -44,6 +44,10 @@ class MatchRunner
   # A keepalive still refreshes an idle board (pending/paused/all-frozen) so a
   # client that missed a frame re-syncs quickly.
   SNAPSHOT_KEEPALIVE_INTERVAL_MS = 1_000
+  # Step 3: a Responsive match broadcasts compact movement frames between
+  # complete snapshots. A full snapshot still goes out at least this often, so a
+  # client that lost a frame is never more than this many ticks from recovery.
+  MOVEMENT_FULL_INTERVAL_TICKS = 12
   SNAPSHOT_PERSIST_INTERVAL_MS = 2_000
   # Connection reconciliation is a cheap read now, but there is no reason to run
   # it 20 times per second. 150 ms keeps freeze/resume imperceptible.
@@ -89,6 +93,7 @@ class MatchRunner
 
     def forget_match(match_id)
       input_poll_at.delete(match_id)
+      movement_plan.delete(match_id)
       snapshot_broadcast_at.delete(match_id)
       snapshot_broadcast_state.delete(match_id)
       snapshot_persist_at.delete(match_id)
@@ -340,8 +345,11 @@ class MatchRunner
           if due
             world.server_time_ms = (now.to_f * 1000).round
             frame = Simulation::Protocol.encode(world)
+            # live_frames is the reconnect seed and must always be COMPLETE, so
+            # it is written from the full encoding regardless of what goes on the
+            # wire.
             live_frames[match_id] = frame
-            MatchChannel.broadcast_snapshot(match_id, frame)
+            publish_frame(world, frame)
             snapshot_broadcast_state[match_id] = state
             snapshot_broadcast_at[match_id] = monotonic_ms
           end
@@ -361,6 +369,46 @@ class MatchRunner
                             "#{error.class}: #{error.message}")
         end
       end
+    end
+
+    # Step 3 wire policy, in one place.
+    #
+    # Classic: one complete snapshot per published frame, byte for byte what this
+    # method has always sent. Nothing about the Classic stream changes.
+    #
+    # Responsive: complete snapshots stay the recovery channel, but between them
+    # the frame is reduced to the parts that actually moved. A structural change
+    # (elimination, freeze/unfreeze, status) or the periodic full interval forces
+    # a complete snapshot, because those are exactly the moments a client cannot
+    # safely reconstruct from head+length alone.
+    def publish_frame(world, full_frame)
+      unless world.presentation_strategy == "responsive"
+        movement_plan.delete(world.id)
+        MatchChannel.broadcast_snapshot(world.id, full_frame)
+        return :snapshot
+      end
+
+      signature = frame_signature(world)
+      plan = movement_plan[world.id]
+      due_full = plan.nil? || plan[:signature] != signature ||
+                 world.tick - plan[:full_tick] >= MOVEMENT_FULL_INTERVAL_TICKS
+      if !due_full && MatchChannel.broadcast_movement(world.id, Simulation::Protocol.encode_movement(world))
+        return :movement
+      end
+
+      MatchChannel.broadcast_snapshot(world.id, full_frame)
+      movement_plan[world.id] = { signature: signature, full_tick: world.tick }
+      :snapshot
+    ensure
+      movement_plan.delete(world.id) if world.status != :running
+    end
+
+    def frame_signature(world)
+      [world.status, world.end_reason, world.snakes.map { |snake| [snake.alive, snake.frozen?] }]
+    end
+
+    def movement_plan
+      @movement_plan ||= {}
     end
 
     def claim_matches(now:, monotonic_ms:, limit:)
@@ -423,6 +471,7 @@ class MatchRunner
       @room_sweep_at = 0
       @claim_scan_at = nil
       @live_frames = {}
+      @movement_plan = {}
       input_poll_at.clear
       snapshot_broadcast_at.clear
       snapshot_broadcast_state.clear
@@ -443,6 +492,7 @@ class MatchRunner
       @presence_full_sweep_at = nil
       @claim_scan_at = nil
       live_frames.clear
+      movement_plan.clear
       input_poll_at.clear
       snapshot_broadcast_at.clear
       snapshot_broadcast_state.clear

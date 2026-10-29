@@ -29,7 +29,11 @@ class MatchTest < ActiveSupport::TestCase
 
   # Regression guard: a roster that silently shrinks would start a different
   # match than the host froze. Missing frozen participants must fail loudly.
-  test "the match factory also refuses Responsive until that presentation is implemented" do
+  # Step 3 replaces "Responsive is not implemented" with "Responsive is created
+  # like any other strategy". What must still hold is the honesty requirement:
+  # the match row records the strategy the room froze, so a client can never be
+  # told Classic while the simulator runs Responsive.
+  test "the match factory creates a Responsive match carrying the frozen strategy" do
     room = make_room_with_guest_host
     room.join!(guest_session: make_guest.first, display_name: "Rival")
     now = Time.current
@@ -45,9 +49,11 @@ class MatchTest < ActiveSupport::TestCase
       }
     )
 
-    error = assert_raises(Room::InvalidTransition) { Match.open_for_room!(room.reload) }
-    assert_match(/Responsive Brawl is unavailable/, error.message)
-    assert_equal 0, Match.where(room_id: room.id).count
+    match = Match.open_for_room!(room.reload)
+    assert_equal "responsive", match.presentation_strategy
+    assert_equal "responsive", match.simulation_config.mode.to_s == "brawl" ? match.presentation_strategy : nil
+    assert_equal "responsive", match.build_world.presentation_strategy
+    assert_equal 1, Match.where(room_id: room.id).count
   end
 
   test "match creation refuses to silently drop a frozen participant" do

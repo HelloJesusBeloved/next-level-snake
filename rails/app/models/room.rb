@@ -304,8 +304,11 @@ class Room < ApplicationRecord
       raise InvalidTransition, "only Brawls are available in this step" unless mode == "brawl"
       host_id = room_memberships.active.where(role: "host").pick(:id)
       raise InvalidTransition, "Only the current host can start a Brawl." if actor && actor.id != host_id
-      if presentation_strategy == "responsive"
-        raise InvalidTransition, "Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start."
+      # Step 3: both strategies are playable. Nothing is silently substituted:
+      # whatever the host froze is what the match record carries, and the client
+      # is told which one is running through `strategy` on every frame.
+      unless PRESENTATION_STRATEGIES.include?(presentation_strategy)
+        raise InvalidTransition, "That Brawl presentation strategy is not available."
       end
 
       eligibility = start_eligibility
@@ -554,7 +557,6 @@ class Room < ApplicationRecord
     blockers << "room_closed" if closed?
     blockers << "match_in_progress" if in_match?
     blockers << "room_not_in_lobby" unless lobby? || closed? || in_match?
-    blockers << "responsive_strategy_unavailable" if mode == "brawl" && presentation_strategy == "responsive"
     players = eligible_players(at: at)
     blockers << "needs_#{MIN_PLAYERS_TO_START}_players" if players.size < MIN_PLAYERS_TO_START
 
@@ -563,7 +565,9 @@ class Room < ApplicationRecord
       blockers: blockers,
       engine_ready: false,
       presentation_strategy: presentation_strategy,
-      presentation_strategy_available: presentation_strategy == "classic",
+      # Step 3: every strategy the room may select is implemented, so the Start
+      # control is never blocked by the presentation choice.
+      presentation_strategy_available: PRESENTATION_STRATEGIES.include?(presentation_strategy),
       players: players.size,
       minimum_players: MIN_PLAYERS_TO_START
     }

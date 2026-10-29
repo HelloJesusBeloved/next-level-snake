@@ -85,10 +85,11 @@ module RoomConfiguration
 
   # Presentation is a Brawl renderer choice, separate from game mode. It is
   # room-owned for the next match and can never alter a running match's frozen
-  # configuration. Responsive remains selectable so the unavailable state is
-  # explicit, but Room#start_match! refuses to start it until Step 3.
+  # configuration. As of step 3 BOTH strategies are implemented, so this is a
+  # real preference rather than a reserved slot: the host's choice is frozen into
+  # the match configuration on start, and the next Brawl may choose differently.
   def update_presentation_strategy!(actor, strategy:)
-    selected = strategy.to_s
+    selected = strategy.to_s.strip.downcase
     unless Room::PRESENTATION_STRATEGIES.include?(selected)
       raise ArgumentError, "Choose Classic Brawl or Responsive Brawl."
     end

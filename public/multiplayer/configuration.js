@@ -174,11 +174,18 @@ export function mountConfiguration({ api, apply, getState }) {
       : room.state === 'in_match'
         ? 'This match’s presentation is locked. Choose a strategy for the next Brawl after it ends.'
         : 'Classic and Responsive are presentation strategies, independent of game rules.';
-    $('mp-presentation-availability').textContent = !brawlRoom
-      ? 'The Brawl presentation strategy does not change or configure Duel mode.'
-      : selected === 'responsive'
-        ? 'Responsive Brawl is unavailable in this step. The server will refuse to start while it is selected; choose Classic Brawl to play.'
-        : 'Classic Brawl is available and remains fully server-synchronized. Responsive Brawl is not implemented yet and cannot start a match.';
+    // Step 3: both strategies are implemented. The copy states what each one
+    // DOES rather than what it lacks, and never implies a fallback: the strategy
+    // is frozen into the match, and diagnostics name the one actually running.
+    const availability = $('mp-presentation-availability');
+    if (availability) {
+      availability.textContent = !brawlRoom
+        ? 'The Brawl presentation strategy does not change or configure Duel mode.'
+        : selected === 'responsive'
+          ? 'Responsive Brawl: your own snake moves the moment you press, and other players are played back smoothly from buffered server-confirmed movement (slightly behind live). Scores, collisions, food and results stay server-authoritative.'
+          : 'Classic Brawl: every frame is painted exactly as the server sends it, with no local prediction or playback buffer. This is the original behaviour.';
+      availability.dataset.kind = 'info';
+    }
   }
 
   function render(room, member) {

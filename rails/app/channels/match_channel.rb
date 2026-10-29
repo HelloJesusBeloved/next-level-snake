@@ -51,6 +51,29 @@ class MatchChannel < ApplicationCable::Channel
     ActionCable.server.broadcast(stream_for(match_id), event)
   end
 
+  # Movement frames are tiny (a head cell, a length and a handful of scalars per
+  # player), so they are never chunked. If one ever did approach the NOTIFY
+  # ceiling — a 64-player Brawl — this returns nil and the caller sends a full
+  # snapshot instead, which already knows how to chunk. That keeps the "no
+  # partially applied frame" guarantee without teaching the chunk assembler a
+  # second frame type.
+  MAX_MOVEMENT_BYTES = 7_000
+
+  def self.movement_messages(frame)
+    payload = frame.merge("type" => Simulation::Protocol::MOVEMENT_TYPE)
+    return nil if ActiveSupport::JSON.encode(payload).bytesize > MAX_MOVEMENT_BYTES
+
+    [payload]
+  end
+
+  def self.broadcast_movement(match_id, frame)
+    messages = movement_messages(frame)
+    return false unless messages
+
+    messages.each { |message| ActionCable.server.broadcast(stream_for(match_id), message) }
+    true
+  end
+
   def subscribed
     @match = Match.find_by(id: params[:match]) if params[:match].to_s.match?(/\A\d+\z/)
     return reject_with("match_not_found", "This Brawl no longer exists.") unless @match
@@ -97,6 +120,18 @@ class MatchChannel < ApplicationCable::Channel
     touch_presence!(now: now)
     transmit({ type: "presence", at: now.iso8601(6), participant: @participant&.id,
                connection: @participant&.connection_state })
+  end
+
+  # A client that detects a tick gap in its playback history (or has just been
+  # promoted from spectator, or resumed from a hidden tab) asks for one complete
+  # authoritative frame. This is a READ of server-owned state, exactly like the
+  # seed a fresh subscription receives; it cannot ask for a specific tick, a
+  # position or a score, so it adds no authority to the browser.
+  def resync
+    return unless @match
+
+    touch_presence!(now: Time.current)
+    transmit(seed_payload)
   end
 
   # ActionCable dispatches the untrusted action hash here. There are no actions

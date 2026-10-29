@@ -13,6 +13,7 @@
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { LocalPredictor } from './prediction.js?v=step2-prediction';
+import { RemotePlayback } from './playback.js?v=step3-playback';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -43,6 +44,19 @@ export class MultiplayerGameRenderer {
     // field would silently break the rAF gate (and Classic with it).
     this.localDisplay = false;
     this.predictionLoop = null;
+    // ---- step 3: smooth playback of OTHER players --------------------------
+    // Independent of `local` in both directions: prediction owns this player's
+    // snake, playback owns the rest of the board. Neither reads the other's
+    // state, so a correction to one can never move the other.
+    this.playback = null;
+    this.playbackDraws = 0;
+    this.playbackDrawCost = 0;
+    this.lastPlaybackSample = null;
+    this.onResyncNeeded = null;
+    // null, not 0: the FIRST request must be allowed through. Starting at 0 made
+    // every request inside the first second of a match look throttled, which is
+    // exactly when a fresh subscription is most likely to need a seed.
+    this.lastResyncAt = null;
     this.clock = clock;
     this.frameRequest = frameRequest;
     this.frameCancel = frameCancel;
@@ -162,6 +176,9 @@ export class MultiplayerGameRenderer {
     this.paintOverride = null;
     this.localDisplay = false;
     this.local?.reset('renderer reset', { reconnect: true });
+    this.playback?.reset('renderer reset');
+    this.lastPlaybackSample = null;
+    this.lastPaintedPlaybackTick = null;
     this.timings = new MovementTimings();
     this.receivedAt = new WeakMap();
     this.dust = [];
@@ -220,6 +237,8 @@ export class MultiplayerGameRenderer {
     this.predictionMode = next;
     if (!next.active) {
       if (this.local) this.local.disable(match?.presentation_strategy || 'classic');
+      if (this.playback) this.playback.disable(match?.presentation_strategy || 'classic');
+      this.lastPlaybackSample = null;
       this.stopPredictionLoop();
       this.paintOverride = null;
       this.localDisplay = false;
@@ -230,6 +249,11 @@ export class MultiplayerGameRenderer {
       ownParticipantId: this.ownParticipantId, clock: this.clock
     });
     this.local.enable(next.source === 'test' ? 'test override' : 'responsive');
+    this.playback = this.playback || new RemotePlayback({
+      tickMs: this.tickMs, columns: this.snapshot?.b?.c, rows: this.snapshot?.b?.r, clock: this.clock
+    });
+    this.playback.enable(next.source === 'test' ? 'test override' : 'responsive');
+    this.playback.configure({ tickMs: this.tickMs, columns: match?.columns, rows: match?.rows });
     this.configureLocal(match);
     this.startPredictionLoop();
     return changed;
@@ -257,6 +281,28 @@ export class MultiplayerGameRenderer {
     return record;
   }
 
+  // A compact tick-ordered movement frame: only heads, lengths and scalars. The
+  // playback buffer rebuilds each body from its own confirmed history, and
+  // refuses (asking for a snapshot) rather than guessing when it cannot.
+  acceptMovement(frame) {
+    if (!this.playback?.enabled) return false;
+    const added = this.playback.pushMovement(frame, this.clock());
+    const resync = this.playback.takeResyncRequest();
+    if (resync) this.requestResync(resync);
+    return added;
+  }
+
+  requestResync(reason) {
+    if (!this.onResyncNeeded) return false;
+    const now = this.clock();
+    // Never more than one request per resync interval: the answer is a complete
+    // authoritative frame, and asking repeatedly cannot make it arrive sooner.
+    if (this.lastResyncAt !== null && now - this.lastResyncAt < 1_000) return false;
+    this.lastResyncAt = now;
+    this.onResyncNeeded(reason);
+    return true;
+  }
+
   noteInputQueued(seq) { this.local?.noteQueued(seq); }
   noteInputApplied(seq, tick) { this.local?.noteApplied(seq, tick); }
   noteInputRejected(seq, reason) {
@@ -269,6 +315,11 @@ export class MultiplayerGameRenderer {
     this.stopPredictionLoop();
     this.paintOverride = null;
     this.localDisplay = false;
+    // Both halves of Responsive Brawl are reset together: an unconfirmed input
+    // OR a confirmed tick chain from before the gap is equally worthless, and
+    // the fresh seed frame is what rebuilds them.
+    this.playback?.reset(reconnect ? 'reconnect' : 'reset');
+    this.lastPlaybackSample = null;
     return this.local?.reset(reconnect ? 'reconnect' : 'reset', { reconnect }) ?? false;
   }
 
@@ -278,13 +329,24 @@ export class MultiplayerGameRenderer {
   // rAF callback only decides WHEN to advance; elapsed time decides HOW MUCH.
   startPredictionLoop() {
     if (this.predictionLoop !== null || !this.local?.enabled) return false;
+    // One coordinated animation loop for both halves of Responsive Brawl. The
+    // predicted snake only changes on a logical tick; the remote board can move
+    // on every display frame because it is interpolating between confirmed
+    // ticks. Both are driven from the same monotonic reading so the two halves
+    // of the board can never disagree about "now".
     const step = () => {
       this.predictionLoop = null;
       if (!this.local?.enabled) return;
       const at = this.clock();
       const ticks = this.local.advance(at);
-      if (ticks > 0 && !this.hidden && !this.viewPaused && this.snapshot) {
-        this.present(this.snapshot, at);
+      const smooth = this.playback?.enabled ? this.playback.sample(at) : null;
+      this.lastPlaybackSample = smooth;
+      if (!this.hidden && !this.viewPaused && this.snapshot) {
+        const playbackMoved = !!smooth && smooth.interpolated &&
+          (smooth.tick !== this.lastPaintedPlaybackTick || smooth.alpha < 0.999999);
+        if (playbackMoved) this.lastPaintedPlaybackTick = smooth.tick;
+        if (ticks > 0) this.present(this.snapshot, at);
+        else if (playbackMoved) this.presentPlayback(at);
       }
       if (this.local.enabled) this.predictionLoop = this.frameRequest(step);
     };
@@ -319,6 +381,17 @@ export class MultiplayerGameRenderer {
       // guessed, so a claimed Responsive state always has a number behind it.
       prediction: this.local ? { ...this.local.summary(), painted: this.localDisplay,
                                  mode: this.predictionMode } : null,
+      playback: this.playback ? {
+        ...this.playback.summary(),
+        painted: !!this.lastPlaybackSample?.interpolated,
+        playbackDraws: this.playbackDraws,
+        playbackDrawCostMs: Math.round(this.playbackDrawCost * 100) / 100,
+        lastSample: this.lastPlaybackSample ? {
+          tick: this.lastPlaybackSample.tick, alpha: Math.round(this.lastPlaybackSample.alpha * 100) / 100,
+          buffered: this.lastPlaybackSample.buffered, delayMs: this.lastPlaybackSample.delayMs,
+          atLiveEdge: this.lastPlaybackSample.atLiveEdge, interpolated: this.lastPlaybackSample.interpolated
+        } : null
+      } : null,
       lastSnapshotAgeMs: this.timings.previous ? Math.round(this.clock() - this.timings.previous.at) : null,
       context: this.context?.getContextAttributes?.() || null,
     };
@@ -372,6 +445,26 @@ export class MultiplayerGameRenderer {
       }
       if (this.cadence.pending) this.requestDraw(false);
     });
+  }
+
+  // A display frame produced purely by remote interpolation. It is NOT a server
+  // arrival, so it must not enter the receive->paint timing series; only the
+  // canvas cost is measured, separately.
+  presentPlayback(at) {
+    const start = this.clock();
+    this.draw();
+    const cost = this.clock() - start;
+    this.playbackDrawCost = this.playbackDrawCost ? this.playbackDrawCost * 0.9 + cost * 0.1 : cost;
+    this.playbackDraws += 1;
+  }
+
+  // What the canvas should draw for players OTHER than this one. Returns null
+  // unless Responsive playback is armed and has a confirmed sample, which keeps
+  // Classic on the original integer-cell path with no extra work per frame.
+  smoothPlayers() {
+    if (!this.playback?.enabled) return null;
+    const sample = this.lastPlaybackSample;
+    return sample && sample.players ? sample : null;
   }
 
   present(frame, at) {
@@ -450,6 +543,14 @@ export class MultiplayerGameRenderer {
     // out-of-order update can never rewind a predicted snake (nor "confirm" a
     // tick the server has not run).
     this.local?.observe(snapshot, this.snapshotVerdict);
+    // Complete snapshots are the recovery channel for playback too: they carry
+    // whole bodies, so they re-seed remote history and correct any drift that a
+    // compact movement chain could have accumulated.
+    if (this.playback?.enabled) {
+      this.playback.configure({ columns: snapshot.b.c, rows: snapshot.b.r });
+      this.playback.pushSnapshot(snapshot, this.clock());
+      this.playback.takeResyncRequest();
+    }
     if (this.local?.enabled && !this.local.active) this.stopPredictionLoop();
     this.hudBudget.add('scores', () => this.drawScoreboard());
     // Keep authoritative receipt/control state current even if display is
@@ -706,20 +807,55 @@ export class MultiplayerGameRenderer {
     const followAlive = this.followId != null &&
       snapshot.p.some((player) => player.i === this.followId && player.a);
     const pad = Math.max(1, cell * .09);
+    // Step 3: remote players are drawn from the interpolated confirmed history.
+    // `smooth` is null for Classic and whenever this player's own snake is the
+    // predicted one, so the integer-cell path below is exactly the old code.
+    const smooth = this.smoothPlayers();
     for (let p = 0; p < snapshot.p.length; p++) {
       const player = snapshot.p[p];
       const color = HEX.test(player.c) ? player.c : '#808080';
       ctx.globalAlpha = (player.a ? 1 : 0.3) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
       ctx.fillStyle = color;
       const body = player.b;
+      const remote = smooth?.players?.get(player.i);
+      const useSmooth = !!(remote?.smooth) && !(player.i === this.ownParticipantId && this.localDisplay);
       ctx.beginPath();
-      for (let part = 0; part < body.length; part++) {
-        const index = body[part];
-        const x = index % cols; const y = Math.floor(index / cols);
-        const left = Math.round(ox + x * cell + pad);
-        const top = Math.round(oy + y * cell + pad);
-        const size = Math.max(1, Math.round(cell - pad * 2));
-        ctx.rect(left, top, size, size);
+      if (useSmooth) {
+        // Every confirmed movement is drawn: each segment travels only to the
+        // cell it occupies in the next confirmed tick, so a Right->Up->Left
+        // sequence is three turns and never a diagonal shortcut.
+        const segs = remote.smooth;
+        const sizeF = Math.max(1, cell - pad * 2);
+        for (let part = 0; part < segs.length; part++) {
+          const seg = segs[part];
+          if (!seg.smooth) {
+            const left = Math.round(ox + seg.x * cell + pad);
+            const top = Math.round(oy + seg.y * cell + pad);
+            ctx.rect(left, top, Math.max(1, Math.round(cell - pad * 2)), Math.max(1, Math.round(cell - pad * 2)));
+            continue;
+          }
+          // A segment straddling an edge is drawn on BOTH sides for one tick, so
+          // it slides off one edge and on to the other. It is never dragged
+          // across the board.
+          const xs = [seg.x];
+          const ys = [seg.y];
+          if (seg.x < 0) xs.push(seg.x + cols);
+          if (seg.x > cols - 1) xs.push(seg.x - cols);
+          if (seg.y < 0) ys.push(seg.y + rows);
+          if (seg.y > rows - 1) ys.push(seg.y - rows);
+          for (const gx of xs) {
+            for (const gy of ys) ctx.rect(ox + gx * cell + pad, oy + gy * cell + pad, sizeF, sizeF);
+          }
+        }
+      } else {
+        for (let part = 0; part < body.length; part += 1) {
+          const index = body[part];
+          const x = index % cols; const y = Math.floor(index / cols);
+          const left = Math.round(ox + x * cell + pad);
+          const top = Math.round(oy + y * cell + pad);
+          const size = Math.max(1, Math.round(cell - pad * 2));
+          ctx.rect(left, top, size, size);
+        }
       }
       ctx.fill();
 
@@ -786,6 +922,9 @@ export class MultiplayerGameRenderer {
     // repaint after destroy) is the guarantee that this is not optional.
     this.stopPredictionLoop();
     this.local?.disable('destroyed');
+    this.playback?.disable('destroyed');
+    this.playback = null;
+    this.lastPlaybackSample = null;
     this.paintOverride = null;
     this.localDisplay = false;
     this.hudBudget.stop();

@@ -60,24 +60,32 @@ class Api::BrawlPresentationStrategyTest < ActionDispatch::IntegrationTest
     assert_equal "responsive", @room.reload.presentation_strategy
   end
 
-  test "Responsive is honestly unavailable and cannot silently start a Classic match" do
+  # Step 3 replaces the step-1 "unavailable" contract with the real one: a
+  # Responsive match STARTS, and the strategy it runs is never silently swapped
+  # for Classic. The guarantee that remains is that the strategy is reported
+  # truthfully everywhere (start response, frozen room configuration, match row
+  # and every frame), so a client can never claim Responsive while Classic runs.
+  test "Responsive starts a real match and is reported truthfully everywhere" do
     choose(@host, "responsive")
     assert_equal 200, status(@host)
-    assert_includes @room.reload.start_eligibility[:blockers], "responsive_strategy_unavailable"
+    assert_empty @room.reload.start_eligibility[:blockers]
+    assert_equal true, @room.start_eligibility[:presentation_strategy_available]
 
-    post_json(@host, "/api/rooms/#{@code}/start")
-    assert_equal 422, status(@host)
-    assert_match(/Responsive Brawl is unavailable/, body(@host)[:error])
-    assert_equal 0, @room.matches.count
-    assert_equal "lobby", @room.reload.state
-    assert_equal "responsive", @room.presentation_strategy
-
-    choose(@host, "classic")
     started = post_json(@host, "/api/rooms/#{@code}/start")
     assert_equal 201, status(@host)
-    assert_equal "classic", started.dig(:match, :presentation_strategy)
-    assert_equal "classic", @room.reload.match_configuration["presentation_strategy"]
-    assert_equal "classic", @room.live_match.presentation_strategy
+    assert_equal "responsive", started.dig(:match, :presentation_strategy)
+    assert_equal "responsive", @room.reload.match_configuration["presentation_strategy"]
+    match = @room.live_match
+    assert_equal "responsive", match.presentation_strategy
+    # The world the simulator steps is labelled Responsive, so every frame it
+    # emits carries "strategy":"responsive".
+    world = match.build_world
+    assert_equal "responsive", world.presentation_strategy
+    assert_equal "responsive", Simulation::Protocol.encode(world)["strategy"]
+    assert_equal "responsive", Simulation::Protocol.encode_movement(world)["strategy"]
+    # ...and no Classic match was created behind the lobby's back.
+    assert_equal 1, @room.matches.count
+    assert_equal ["responsive"], @room.matches.pluck(:presentation_strategy)
   end
 
   test "a match locks its selected strategy while the host may choose for the next Brawl" do

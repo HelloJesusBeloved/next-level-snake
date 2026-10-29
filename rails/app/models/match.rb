@@ -76,9 +76,13 @@ class Match < ApplicationRecord
     end
 
     transaction do
+      # Step 3: the host's frozen choice is created as-is. Validating the VALUE
+      # (rather than rejecting one of them) keeps the match row honest: the
+      # strategy stored here is the strategy the simulator is built with, and it
+      # is what every frame reports.
       strategy = frozen["presentation_strategy"] || room.presentation_strategy || "classic"
-      if strategy == "responsive"
-        raise Room::InvalidTransition, "Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start."
+      unless Room::PRESENTATION_STRATEGIES.include?(strategy)
+        raise Room::InvalidTransition, "That Brawl presentation strategy is not available."
       end
       match = create!(
         room: room, mode: room.mode, presentation_strategy: strategy, status: "pending",

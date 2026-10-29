@@ -60,6 +60,66 @@ module Simulation
       { "c" => food.index(columns), "o" => food.owner_id }
     end
 
+    # ---- step 3: compact, tick-ordered movement frames ----------------------
+    #
+    # A Brawl broadcasts one frame per movement tick. The overwhelming majority
+    # of that traffic was metadata that does not change between ticks: board
+    # dimensions, rules mode, standings, names, colours, placement, longest
+    # length. A "movement" frame carries only what changes when a snake moves —
+    # the head cell, direction, length, score, liveness, freeze state and the
+    # food cells — and the browser rebuilds each body from its own confirmed
+    # history (segment i follows what segment i-1 vacated).
+    #
+    # This is lossless for MOVEMENT: the head sequence plus length fully
+    # determines the body, so Right -> Up -> Left is preserved turn by turn and
+    # wrapping is preserved because the head is a real cell, never a delta.
+    # It is NOT self-sufficient: a client that has never seen the match, or that
+    # detects a tick gap, needs a complete snapshot. Responsive matches therefore
+    # still broadcast full snapshots periodically and on every structural change
+    # (elimination, freeze/unfreeze, status), and every client can ask for one
+    # with MatchChannel#resync. Classic matches never receive movement frames at
+    # all — their byte stream is exactly what it was before step 3.
+    MOVEMENT_TYPE = "movement".freeze
+
+    def encode_movement(world)
+      {
+        "v" => SNAPSHOT_VERSION,
+        "type" => MOVEMENT_TYPE,
+        "m" => world.id,
+        "strategy" => world.presentation_strategy,
+        "s" => world.status.to_s,
+        "t" => world.tick,
+        "ts" => (world.server_time_ms || 0),
+        "f" => world.foods.map { |food| encode_food(food, world.columns) },
+        "p" => world.snakes.map { |snake| encode_movement_player(snake, world.columns) }
+      }
+    end
+
+    def encode_movement_player(snake, columns)
+      head = snake.body.first
+      {
+        "i" => snake.id,
+        "h" => head && (head[1] * columns + head[0]),
+        "d" => snake.direction.name, "l" => snake.length, "sc" => snake.score,
+        "a" => snake.alive, "fr" => snake.frozen?, "gu" => snake.frozen_until_ms,
+        "cy" => snake.connection_state, "is" => snake.last_applied_seq,
+        "it" => snake.last_applied_tick, "el" => snake.eliminated_at_tick,
+        "er" => snake.elimination_reason&.to_s
+      }
+    end
+
+    # Rebuilds a body from a movement frame and the previous confirmed body.
+    # Used by the Rails tests to prove the compact frame is lossless, and mirrored
+    # exactly by public/multiplayer/playback.js. `len` can only grow by one per
+    # tick (Simulation::Snake#advance! moves the head and pops at most one tail
+    # cell), so the previous body is the whole story.
+    def rebuild_body(head:, length:, previous:)
+      return [] if head.nil?
+      return [head] if previous.nil? || previous.empty?
+
+      ([head] + Array(previous).first([Integer(length) - 1, 0].max)).first([Integer(length), 1].max)
+    end
+
     # Strictly parses an inbound input message. Raises InvalidInput with a
     # machine-readable reason. Identity (`player_id`) is NOT accepted from the
     # payload: the channel/controller must derive it from the session.
