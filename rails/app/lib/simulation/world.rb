@@ -39,7 +39,7 @@ module Simulation
     end
 
     attr_reader :id, :config, :rules, :snakes, :tick, :status, :end_reason,
-                :started_at_tick, :ended_at_tick, :columns, :rows
+                :started_at_tick, :ended_at_tick, :columns, :rows, :presentation_strategy
     # Ticks on which at least one alive snake could actually move. The match
     # DURATION limit is measured against this, not against the raw tick
     # counter, so a room where everybody backgrounded their tab simply pauses
@@ -50,8 +50,10 @@ module Simulation
     # freeze starts or ends.
     attr_accessor :server_time_ms
 
-    def initialize(id:, config:, participants:, state: nil)
+    def initialize(id:, config:, participants:, state: nil, presentation_strategy: "classic")
       @id = id
+      @presentation_strategy = %w[classic responsive].include?(presentation_strategy.to_s) ?
+        presentation_strategy.to_s : "classic"
       @config = config
       @rules = config.rules
       @columns = config.columns
@@ -74,8 +76,9 @@ module Simulation
       end
     end
 
-    def self.restore(id:, config:, participants:, state:)
-      new(id: id, config: config, participants: participants, state: state)
+    def self.restore(id:, config:, participants:, state:, presentation_strategy: "classic")
+      new(id: id, config: config, participants: participants, state: state,
+          presentation_strategy: presentation_strategy)
     end
 
     # ---- lifecycle -----------------------------------------------------------
@@ -158,7 +161,14 @@ module Simulation
       # is ignored (duplicate/reversal/queue full). Otherwise one sequence could
       # be replayed later with a different direction.
       snake.last_seq = seq
-      snake.queue_direction(direction, capacity: rules.max_queued_directions)
+      outcome = snake.queue_direction(direction, capacity: rules.max_queued_directions)
+      if outcome == :accepted
+        snake.last_applied_seq = seq
+        # Input is drained immediately before a logical step. Report the exact
+        # authoritative movement tick that will consume the queued direction.
+        snake.last_applied_tick = @tick + 1
+      end
+      outcome
     end
 
     # Removes a participant from the simulation (left the room / grace expired).

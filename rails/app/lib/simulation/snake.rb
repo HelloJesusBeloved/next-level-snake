@@ -14,13 +14,15 @@ module Simulation
 
     attr_reader :id, :name, :color_hex, :color_slot, :body, :queue
     attr_accessor :direction, :grow, :score, :alive, :eliminated_at_tick,
-                  :survived_ticks, :longest_length, :last_seq, :food, :food_eaten_at_tick,
+                  :survived_ticks, :longest_length, :last_seq, :last_applied_seq,
+                  :last_applied_tick, :food, :food_eaten_at_tick,
                   :elimination_reason, :frozen, :frozen_until_ms, :frozen_ticks,
                   :connection_state
 
     def initialize(id:, name:, color_hex:, color_slot:, body:, direction:,
                    grow: 0, score: 0, alive: true, eliminated_at_tick: nil,
                    survived_ticks: 0, longest_length: nil, last_seq: 0,
+                   last_applied_seq: 0, last_applied_tick: nil,
                    food: nil, food_eaten_at_tick: nil, queue: [],
                    elimination_reason: nil, frozen: false, frozen_until_ms: nil,
                    frozen_ticks: 0, connection_state: "connected")
@@ -37,6 +39,8 @@ module Simulation
       @survived_ticks = Integer(survived_ticks)
       @longest_length = longest_length || @body.length
       @last_seq = Integer(last_seq)
+      @last_applied_seq = Integer(last_applied_seq)
+      @last_applied_tick = last_applied_tick.nil? ? nil : Integer(last_applied_tick)
       @food = food
       @food_eaten_at_tick = food_eaten_at_tick
       @queue = queue.dup
@@ -152,7 +156,9 @@ module Simulation
         "grow" => grow, "score" => score, "alive" => alive,
         "eliminated_at" => eliminated_at_tick, "reason" => elimination_reason&.to_s,
         "survived" => survived_ticks, "longest" => longest_length,
-        "last_seq" => last_seq, "food" => food&.to_state, "ate_at" => food_eaten_at_tick,
+        "last_seq" => last_seq, "last_applied_seq" => last_applied_seq,
+        "last_applied_tick" => last_applied_tick,
+        "food" => food&.to_state, "ate_at" => food_eaten_at_tick,
         "frozen" => frozen, "frozen_until" => frozen_until_ms,
         "frozen_ticks" => frozen_ticks, "connection" => connection_state
       }
@@ -168,7 +174,9 @@ module Simulation
         grow: state.fetch("grow"), score: state.fetch("score"), alive: state.fetch("alive"),
         eliminated_at_tick: state["eliminated_at"], elimination_reason: state["reason"]&.to_sym,
         survived_ticks: state.fetch("survived"), longest_length: state["longest"],
-        last_seq: state["last_seq"], food: state["food"] && Food.from_state(state["food"]),
+        last_seq: state["last_seq"], last_applied_seq: state.fetch("last_applied_seq", 0),
+        last_applied_tick: state["last_applied_tick"],
+        food: state["food"] && Food.from_state(state["food"]),
         food_eaten_at_tick: state["ate_at"], frozen: state.fetch("frozen", false),
         frozen_until_ms: state["frozen_until"], frozen_ticks: state.fetch("frozen_ticks", 0),
         connection_state: state.fetch("connection", "connected")

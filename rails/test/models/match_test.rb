@@ -15,6 +15,9 @@ class MatchTest < ActiveSupport::TestCase
     assert match, "Room#start_match! creates the durable match"
     assert_equal "pending", match.status
     assert_equal room.mode, match.mode
+    assert_equal "classic", match.presentation_strategy
+    assert_equal "classic", room.match_configuration["presentation_strategy"]
+    assert_equal "classic", match.client_summary[:presentation_strategy]
     assert_equal [room.brawl_columns, room.brawl_rows], [match.columns, match.rows]
     assert_equal room.match_configuration["participants"].length, match.match_participants.count
     assert_equal room.match_configuration["participants"].map { |p| p["color"] }.sort,
@@ -26,6 +29,27 @@ class MatchTest < ActiveSupport::TestCase
 
   # Regression guard: a roster that silently shrinks would start a different
   # match than the host froze. Missing frozen participants must fail loudly.
+  test "the match factory also refuses Responsive until that presentation is implemented" do
+    room = make_room_with_guest_host
+    room.join!(guest_session: make_guest.first, display_name: "Rival")
+    now = Time.current
+    participants = room.room_memberships.active.map do |member|
+      { "membership_id" => member.id, "color_slot" => member.color_slot,
+        "color" => RoomPalette.color(member.color_slot)[:hex] }
+    end
+    room.update_columns(
+      presentation_strategy: "responsive", state: "in_match", started_at: now,
+      match_configuration: {
+        "columns" => 24, "rows" => 18, "presentation_strategy" => "responsive",
+        "mobile_default" => true, "locked_at" => now.iso8601(6), "participants" => participants
+      }
+    )
+
+    error = assert_raises(Room::InvalidTransition) { Match.open_for_room!(room.reload) }
+    assert_match(/Responsive Brawl is unavailable/, error.message)
+    assert_equal 0, Match.where(room_id: room.id).count
+  end
+
   test "match creation refuses to silently drop a frozen participant" do
     room = make_room_with_guest_host
     room.join!(guest_session: make_guest.first, display_name: "Rival")
@@ -62,6 +86,14 @@ class MatchTest < ActiveSupport::TestCase
     assert_equal match.match_participants.pluck(:color_hex).sort, world.snakes.map(&:color_hex).sort
     assert_equal [match.columns, match.rows], [world.columns, world.rows]
     assert_equal "pending", world.status.to_s
+    assert_equal "classic", world.presentation_strategy
+    snapshot = Simulation::Protocol.encode(world)
+    assert_equal match.id, snapshot["m"]
+    assert_equal 0, snapshot["t"]
+    assert_equal 1, snapshot["v"]
+    assert_equal "classic", snapshot["strategy"]
+    assert_equal 0, snapshot["p"].first["is"]
+    assert_nil snapshot["p"].first["it"]
   end
 
   test "independent matches never share simulation state" do

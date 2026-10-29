@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_14_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -118,12 +118,14 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
     t.datetime "updated_at", null: false
     t.jsonb "live_snapshot"
     t.bigint "snapshot_tick", default: 0, null: false
+    t.string "presentation_strategy", default: "classic", null: false
     t.index ["room_id", "created_at"], name: "matches_room_created_idx"
     t.index ["room_id"], name: "matches_one_live_per_room_idx", unique: true, where: "((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('running'::character varying)::text, ('paused'::character varying)::text]))"
     t.index ["status", "lease_expires_at"], name: "matches_claimable_idx"
     t.check_constraint "columns >= 24 AND columns <= 96 AND rows >= 18 AND rows <= 72", name: "matches_board_check"
     t.check_constraint "growth >= 0 AND growth <= 100", name: "matches_growth_check"
     t.check_constraint "mode::text = ANY (ARRAY['brawl'::character varying::text, 'duel'::character varying::text])", name: "matches_mode_check"
+    t.check_constraint "presentation_strategy::text = ANY (ARRAY['classic'::character varying::text, 'responsive'::character varying::text])", name: "matches_presentation_strategy_check"
     t.check_constraint "snapshot_tick >= 0", name: "matches_snapshot_tick_check"
     t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'running'::character varying::text, 'paused'::character varying::text, 'completed'::character varying::text, 'abandoned'::character varying::text, 'interrupted'::character varying::text])", name: "matches_status_check"
     t.check_constraint "tick >= 0 AND checkpoint_tick >= 0", name: "matches_ticks_check"
@@ -182,6 +184,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
     t.integer "brawl_columns", default: 24, null: false
     t.integer "brawl_rows", default: 18, null: false
     t.jsonb "match_configuration"
+    t.string "presentation_strategy", default: "classic", null: false
     t.index ["invitation_code"], name: "rooms_invitation_code_idx", unique: true
     t.index ["state", "created_at"], name: "rooms_state_created_idx"
     t.check_constraint "brawl_columns >= 24 AND brawl_columns <= 96 AND brawl_rows >= 18 AND brawl_rows <= 72", name: "rooms_board_bounds_check"
@@ -189,6 +192,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_12_000000) do
     t.check_constraint "match_configuration IS NULL OR jsonb_typeof(match_configuration) = 'object'::text AND match_configuration ?& ARRAY['columns'::text, 'rows'::text, 'participants'::text, 'locked_at'::text] AND ((match_configuration ->> 'columns'::text)::integer) >= 24 AND ((match_configuration ->> 'columns'::text)::integer) <= 96 AND ((match_configuration ->> 'rows'::text)::integer) >= 18 AND ((match_configuration ->> 'rows'::text)::integer) <= 72 AND jsonb_typeof(match_configuration -> 'participants'::text) = 'array'::text", name: "rooms_match_configuration_check"
     t.check_constraint "max_members >= 2 AND max_members <= 64", name: "rooms_max_members_check"
     t.check_constraint "mode::text = ANY (ARRAY['brawl'::character varying::text, 'duel'::character varying::text])", name: "rooms_mode_check"
+    t.check_constraint "presentation_strategy::text = ANY (ARRAY['classic'::character varying::text, 'responsive'::character varying::text])", name: "rooms_presentation_strategy_check"
     t.check_constraint "state::text <> 'in_match'::text OR match_configuration IS NOT NULL", name: "rooms_running_board_required"
     t.check_constraint "state::text = ANY (ARRAY['lobby'::character varying::text, 'in_match'::character varying::text, 'finished'::character varying::text, 'disbanded'::character varying::text, 'archived'::character varying::text])", name: "rooms_state_check"
   end

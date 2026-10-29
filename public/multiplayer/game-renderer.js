@@ -27,6 +27,8 @@ export class MultiplayerGameRenderer {
     this.ownParticipantId = ownParticipantId ?? null;
     this.snapshot = null; // newest RECEIVED frame; controls must never wait on display
     this.paintSnapshot = null; // newest PRESENTED complete server frame
+    this.snapshotDiagnostics = { missing: 0, duplicate: 0, stale: 0 };
+    this.snapshotSignature = null;
     this.clock = clock;
     this.frameRequest = frameRequest;
     this.frameCancel = frameCancel;
@@ -135,6 +137,8 @@ export class MultiplayerGameRenderer {
     this.discardPendingFrames();
     this.snapshot = null;
     this.paintSnapshot = null;
+    this.snapshotDiagnostics = { missing: 0, duplicate: 0, stale: 0 };
+    this.snapshotSignature = null;
     this.timings = new MovementTimings();
     this.receivedAt = new WeakMap();
     this.dust = [];
@@ -194,6 +198,9 @@ export class MultiplayerGameRenderer {
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
       receivedTick: this.snapshot?.t ?? null, displayedTick: this.paintSnapshot?.t ?? null,
+      missingSnapshots: this.snapshotDiagnostics.missing,
+      duplicateSnapshots: this.snapshotDiagnostics.duplicate,
+      staleSnapshots: this.snapshotDiagnostics.stale,
       lastSnapshotAgeMs: this.timings.previous ? Math.round(this.clock() - this.timings.previous.at) : null,
       context: this.context?.getContextAttributes?.() || null,
     };
@@ -259,7 +266,10 @@ export class MultiplayerGameRenderer {
         !Number.isInteger(snapshot.t) || !snapshot.b || !Array.isArray(snapshot.p) ||
         !Array.isArray(snapshot.f)) return false;
     if (this.snapshot && snapshot.m !== this.snapshot.m) return false;
-    if (this.snapshot && snapshot.t < this.snapshot.t) return false; // stale/reordered
+    if (this.snapshot && snapshot.t < this.snapshot.t) {
+      this.snapshotDiagnostics.stale += 1; // stale or out-of-order authoritative tick
+      return false;
+    }
     const cols = snapshot.b.c; const rows = snapshot.b.r;
     if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols < 1 || rows < 1 || cols * rows > 96 * 72) return false;
     const total = cols * rows;
@@ -269,6 +279,24 @@ export class MultiplayerGameRenderer {
     }
     if (snapshot.f.some((food) => !Number.isInteger(food.c) || food.c < 0 || food.c >= total)) return false;
     const previous = this.snapshot;
+    if (previous && snapshot.t === previous.t) {
+      const signature = JSON.stringify([snapshot.s, snapshot.r, snapshot.b, snapshot.e,
+        snapshot.w, snapshot.q, snapshot.p, snapshot.f]);
+      const previousSignature = this.snapshotSignature || JSON.stringify([previous.s, previous.r, previous.b,
+        previous.e, previous.w, previous.q, previous.p, previous.f]);
+      if (signature === previousSignature) {
+        this.snapshotDiagnostics.duplicate += 1;
+        return false;
+      }
+      this.snapshotSignature = signature;
+    } else {
+      if (previous && snapshot.t > previous.t + 1) {
+        this.snapshotDiagnostics.missing += snapshot.t - previous.t - 1;
+      }
+      // Same-tick comparisons are rare (idle keepalives or connection changes),
+      // so don't serialize every growing snake on every movement frame.
+      this.snapshotSignature = null;
+    }
     // Elimination is an authoritative receipt-time event, even if alive and
     // dead frames arrived in one browser task before a visible refresh.
     this.spawnDustForNewlyEliminated(snapshot, previous);

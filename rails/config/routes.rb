@@ -31,6 +31,7 @@ Rails.application.routes.draw do
     post "rooms/:code/color", to: "rooms#color", constraints: { code: ROOM_CODE }
     post "rooms/:code/capabilities", to: "rooms#capabilities", constraints: { code: ROOM_CODE }
     post "rooms/:code/board", to: "rooms#board", constraints: { code: ROOM_CODE }
+    post "rooms/:code/presentation_strategy", to: "rooms#presentation_strategy", constraints: { code: ROOM_CODE }
     post "rooms/:code/leave", to: "rooms#leave", constraints: { code: ROOM_CODE }
     post "rooms/:code/start", to: "rooms#start", constraints: { code: ROOM_CODE }
     post "rooms/:code/lobby", to: "rooms#lobby", constraints: { code: ROOM_CODE }

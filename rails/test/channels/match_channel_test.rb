@@ -103,6 +103,10 @@ class MatchChannelTest < ActionCable::Channel::TestCase
     assert_equal "input_ack", ack["type"]
     assert_equal true, ack["accepted"]
     assert_equal @participant.id, ack["participant"]
+    assert_equal @match.id, ack["match"]
+    assert_equal 1, ack["v"]
+    assert_equal "queued", ack["status"]
+    assert_equal 0, ack["tick"]
     assert_equal 1, @participant.reload.last_input_seq
   end
 

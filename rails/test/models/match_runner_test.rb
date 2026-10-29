@@ -20,6 +20,49 @@ class MatchRunnerTest < ActiveSupport::TestCase
     MatchRunner.reset!
   end
 
+  test "queued input is later marked applied or rejected at an authoritative tick" do
+    room = started_room
+    match = room.live_match
+    membership = room.host_membership
+    participant = match.match_participants.find_by!(room_membership_id: membership.id)
+    MatchRunner.tick_once(monotonic_ms: 0)
+    world = MatchRunner.supervisor.entries.fetch(match.id).world
+    snake = world.player(participant.id)
+    direction = %w[up down left right].map { |name| Simulation::Direction.parse(name) }
+                        .find { |candidate| !candidate.same_as?(snake.direction) && !candidate.reverse_of?(snake.direction) }
+    stream = MatchChannel.stream_for(match.id)
+
+    input = Simulation::Protocol::Input.new(match_id: match.id, direction: direction, tick: 0, seq: 1)
+    assert_equal :queued, match.accept_direction!(membership: membership, input: input)
+    before = ActionCable.server.pubsub.broadcasts(stream).length
+    assert MatchRunner.deliver_inputs(world, force: true)
+    applied = ActionCable.server.pubsub.broadcasts(stream).drop(before).map { |raw| JSON.parse(raw) }
+                              .find { |event| event["type"] == "input_applied" }
+    assert_equal({ "type" => "input_applied", "v" => 1, "match" => match.id,
+                   "participant" => participant.id, "seq" => 1, "status" => "applied", "tick" => 1 }, applied)
+
+    snapshot = Simulation::Protocol.encode(world)
+    player = snapshot.fetch("p").find { |entry| entry["i"] == participant.id }
+    assert_equal 0, snapshot["t"], "the state version remains the server simulation tick"
+    assert_equal 1, player["is"], "the snapshot carries the applied input sequence"
+    assert_equal 1, player["it"], "the snapshot names its movement tick"
+
+    duplicate = Simulation::Protocol::Input.new(match_id: match.id, direction: direction, tick: 0, seq: 2)
+    assert_equal :queued, match.accept_direction!(membership: membership, input: duplicate)
+    before = ActionCable.server.pubsub.broadcasts(stream).length
+    assert MatchRunner.deliver_inputs(world, monotonic_ms: 31, force: true)
+    rejected = ActionCable.server.pubsub.broadcasts(stream).drop(before).map { |raw| JSON.parse(raw) }
+                               .find { |event| event["type"] == "input_rejected" }
+    assert_equal "input_rejected", rejected["type"]
+    assert_equal "rejected", rejected["status"]
+    assert_equal match.id, rejected["match"]
+    assert_equal participant.id, rejected["participant"]
+    assert_equal 2, rejected["seq"]
+    assert_equal "duplicate_direction", rejected["reason"]
+    assert_equal 0, rejected["tick"]
+    assert_not MatchInput.exists?(match_participant_id: participant.id, input_seq: 2)
+  end
+
   test "claims a pending match, establishes the baseline, then advances on monotonic time" do
     match = started_room.live_match
 

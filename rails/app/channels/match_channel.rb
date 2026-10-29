@@ -115,8 +115,7 @@ class MatchChannel < ApplicationCable::Channel
     outcome = @match.accept_direction!(membership: membership, input: input)
     input_ack(input.seq, outcome == :queued, outcome)
   rescue Simulation::InvalidInput => error
-    transmit({ type: "input_ack", accepted: false, reason: error.reason.to_s,
-               message: error.message })
+    input_ack(nil, false, error.reason, message: error.message)
   rescue ActiveRecord::RecordNotUnique
     input_ack(input&.seq, false, :stale_sequence)
   rescue ActiveRecord::RecordNotFound
@@ -178,6 +177,7 @@ class MatchChannel < ApplicationCable::Channel
       "spectator_reason" => (@participant.nil? ? "late_join" : (@participant.spectator? ? "eliminated" : nil)),
       "you" => @participant&.id,
       "match_status" => @match.status,
+      "strategy" => @match.presentation_strategy,
       "grace_seconds" => Match.freeze_grace_seconds,
       "presence_timeout" => Match.presence_stale_seconds
     ).compact
@@ -198,8 +198,18 @@ class MatchChannel < ApplicationCable::Channel
     }.compact
   end
 
-  def input_ack(seq, accepted, reason)
-    transmit({ type: "input_ack", match: @match.id, participant: @participant&.id,
-               seq: seq, accepted: accepted, reason: reason.to_s })
+  def input_ack(seq, accepted, reason, message: nil)
+    payload = { type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+                match: @match.id, participant: @participant&.id, seq: seq,
+                accepted: accepted, status: accepted ? "queued" : "rejected",
+                reason: reason.to_s, tick: authoritative_tick }
+    payload[:message] = message if message
+    transmit(payload)
+  end
+
+  def authoritative_tick
+    frame = MatchRunner.live_snapshot_for(@match.id)
+    ticks = [@match.tick, @match.snapshot_tick, @match.live_snapshot&.dig("t"), frame&.dig("t")]
+    ticks.compact.select { |tick| tick.is_a?(Integer) }.max || 0
   end
 end

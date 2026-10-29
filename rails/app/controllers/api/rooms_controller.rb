@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board]
+    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board presentation_strategy]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -154,6 +154,21 @@ module Api
       render_error("invalid_board", e.message, :unprocessable_entity)
     rescue Room::InvalidTransition => e
       render_error("board_locked", e.message, :conflict)
+    end
+
+    # POST /api/rooms/:code/presentation_strategy — host-only choice for the
+    # next Brawl. The model rechecks the host and locks the setting under the
+    # same room row lock used by match start.
+    def presentation_strategy
+      member = require_host!
+      return unless member
+
+      @room.update_presentation_strategy!(member, strategy: params[:presentation_strategy])
+      render json: state_payload(@room.reload, member.reload)
+    rescue ArgumentError => e
+      render_error("invalid_presentation_strategy", e.message, :unprocessable_entity)
+    rescue Room::InvalidTransition => e
+      render_error("presentation_strategy_locked", e.message, :conflict)
     end
 
     # POST /api/rooms/:code/leave — give up the seat. The guest cookie is
@@ -398,6 +413,7 @@ module Api
         version: room.version,
         name: room.name,
         mode: room.mode,
+        presentation_strategy: room.presentation_strategy,
         state: room.state,
         max_members: room.max_members,
         settings: room.settings,
@@ -458,6 +474,7 @@ module Api
         code: room.invitation_code,
         name: room.name,
         mode: room.mode,
+        presentation_strategy: room.presentation_strategy,
         state: room.state,
         joinable: room.joinable? && !room.full?,
         full: room.full?,

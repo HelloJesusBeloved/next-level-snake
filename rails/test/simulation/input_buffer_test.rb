@@ -70,6 +70,28 @@ class InputBufferTest < Minitest::Test
     assert_equal [4, 6], restored_snake.head, "the second buffered turn still lands"
   end
 
+  def test_applied_input_sequence_and_tick_survive_snapshot_and_checkpoint
+    assert_equal :accepted, turn("down", 7)
+    assert_equal 7, @snake.last_applied_seq
+    assert_equal 1, @snake.last_applied_tick
+
+    frame = Simulation::Protocol.encode(@world)
+    player = frame.fetch("p").find { |entry| entry["i"] == @snake.id }
+    assert_equal @world.id, frame["m"]
+    assert_equal @world.tick, frame["t"]
+    assert_equal 7, player["is"]
+    assert_equal 1, player["it"]
+
+    restored = Simulation::World.restore(
+      id: @world.id, config: @world.config,
+      participants: @world.snakes.map { |snake|
+        { id: snake.id, name: snake.name, color_hex: snake.color_hex, color_slot: snake.color_slot }
+      }, state: @world.to_state
+    )
+    assert_equal 7, restored.player(@snake.id).last_applied_seq
+    assert_equal 1, restored.player(@snake.id).last_applied_tick
+  end
+
   def test_duel_keeps_the_tighter_single_player_buffer
     duel = build_world(mode: :duel)
     snake = place(duel, duel.snakes.first, body: [[5, 5], [4, 5], [3, 5]])

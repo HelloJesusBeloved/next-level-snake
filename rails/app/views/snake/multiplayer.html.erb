@@ -274,7 +274,22 @@
           <button id="mp-board-save" type="submit" class="btn btn--small" disabled>Save board</button>
         </form>
         <p class="mp-config-status" id="mp-board-status" role="status" aria-live="polite"></p>
-        <p class="mp-card__hint">Settings only: the Brawl simulation is not available yet.</p>
+        <p class="mp-card__hint">The server locks this board for each match. Board changes apply to the next Brawl.</p>
+      </section>
+      <section class="mp-card mp-presentation-card" aria-labelledby="mp-presentation-title">
+        <p class="mp-room__eyebrow" id="mp-presentation-host-label">Host controls · next Brawl</p>
+        <h3 class="mp-card__title" id="mp-presentation-title">Brawl presentation</h3>
+        <p class="mp-card__hint" id="mp-presentation-reason">Choose how this Brawl is presented. The server simulation and rules stay the same.</p>
+        <form id="mp-presentation-form" class="mp-board-form">
+          <label for="mp-presentation-choice">Presentation strategy</label>
+          <select id="mp-presentation-choice" disabled>
+            <option value="classic">Classic Brawl · fully server-synchronized</option>
+            <option value="responsive">Responsive Brawl · unavailable until Step 3</option>
+          </select>
+          <button id="mp-presentation-save" type="submit" class="btn btn--small" disabled>Save presentation</button>
+        </form>
+        <p class="mp-config-status" id="mp-presentation-status" role="status" aria-live="polite"></p>
+        <p class="mp-card__hint" id="mp-presentation-availability">Classic Brawl is available. Responsive Brawl is not implemented yet; selecting it will prevent this match from starting.</p>
       </section>
     </div>
 

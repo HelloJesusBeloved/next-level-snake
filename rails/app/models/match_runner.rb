@@ -299,13 +299,23 @@ class MatchRunner
       match = Match.find_by(id: world.id)
       return false unless match
 
-      rejected = match.apply_queued_inputs!(world: world, token: token, now: now)
+      applied = []
+      rejected = match.apply_queued_inputs!(world: world, token: token, now: now,
+                                             on_applied: ->(event) { applied << event })
       return false unless rejected
 
+      applied.each do |event|
+        MatchChannel.broadcast_event(world.id, {
+          type: "input_applied", v: Simulation::Protocol::SNAPSHOT_VERSION,
+          match: world.id, participant: event[:participant], seq: event[:seq],
+          status: "applied", tick: event[:tick]
+        })
+      end
       rejected.each do |failure|
         MatchChannel.broadcast_event(world.id, {
-          type: "input_rejected", participant: failure[:participant],
-          seq: failure[:seq], reason: failure[:reason].to_s, tick: world.tick
+          type: "input_rejected", v: Simulation::Protocol::SNAPSHOT_VERSION,
+          match: world.id, participant: failure[:participant], seq: failure[:seq],
+          status: "rejected", reason: failure[:reason].to_s, tick: failure[:tick]
         })
       end
       true

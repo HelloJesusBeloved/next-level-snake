@@ -102,9 +102,9 @@ class ProtocolTest < Minitest::Test
   def test_snapshot_never_contains_other_players_private_identity
     world = build_world(participants: 2)
     keys = world.snapshot["p"].flat_map(&:keys).uniq.sort
-    # Step 10 adds connection presentation fields (frozen/deadline/state) but
-    # still nothing identity-bearing beyond the match participant id.
-    assert_equal %w[a b c cy d el er fr fz gu i l lg n sc sv], keys
+    # Optional connection and input-acknowledgement fields remain limited to
+    # authoritative presentation state, not any other player's identity.
+    assert_equal %w[a b c cy d el er fr fz gu i is it l lg n sc sv], keys
     assert_includes keys, "fr"
     assert_includes keys, "gu"
     assert_includes keys, "cy"

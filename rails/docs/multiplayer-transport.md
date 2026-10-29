@@ -131,3 +131,34 @@ Browser-level proof (real WebSockets, needs a browser environment):
 `tests/browser/multiplayer.spec.mjs` — two separate browser contexts see each
 other's joins/ready votes live, and a second tab of the same player never
 appears as a third member.
+
+
+## Brawl presentation and input reconciliation (Step 1 foundation)
+
+A room stores `presentation_strategy` independently of its `mode` (`brawl` or
+`duel`). New rooms use `classic`; a host can choose the presentation for a
+future Brawl in the lobby (or results screen). The choice is copied into the
+frozen room match configuration and the immutable Match row. Classic remains
+the current server-synchronized renderer. Responsive is intentionally marked
+unavailable and cannot start until its later implementation step; it never
+falls back to Classic while claiming to be active. Both strategies use the
+same `Simulation::World` rules.
+
+The match wire protocol remains version 1. Its existing `m` (match identity),
+`t` (authoritative simulation tick) and `v` (wire-format version) are the
+state-version tuple; no second snapshot counter is needed. Clients can reject
+`m` mismatches, identify stale/out-of-order frames when `t` decreases,
+recognize duplicate same-tick state, and count missing ticks when `t` jumps.
+Connection/status changes may legitimately produce a different frame at the
+same tick. Snapshot player entries add optional `is` (last applied input seq)
+and `it` (movement tick that will consume it), while legacy fields and
+existing snapshot chunks are unchanged.
+
+Input sequence numbers are per participant and monotonically increasing. An
+`input_ack` keeps the legacy `accepted`/`reason` fields and adds `status`
+(`queued` or `rejected`), `match`, `v` and the current authoritative `tick`.
+A queued acknowledgement means only that the server durably received the
+intent. The simulation owner later emits `input_applied` with `seq` and `tick`
+or `input_rejected` with `seq`, `tick` and a reason. The same applied sequence
+and tick are present in subsequent authoritative snapshots so a future client
+can reconcile even if it missed the event.

@@ -31,6 +31,8 @@ class Match < ApplicationRecord
   has_many :match_presences, dependent: :delete_all, inverse_of: :match
 
   validates :mode, inclusion: { in: MODES }
+  validates :presentation_strategy, inclusion: { in: Room::PRESENTATION_STRATEGIES }
+  validate :presentation_strategy_is_immutable, if: :persisted?
   validates :status, inclusion: { in: STATUSES }
   validates :columns, numericality: { only_integer: true, in: Simulation::Config::MIN_COLUMNS..Simulation::Config::MAX_COLUMNS }
   validates :rows, numericality: { only_integer: true, in: Simulation::Config::MIN_ROWS..Simulation::Config::MAX_ROWS }
@@ -74,8 +76,12 @@ class Match < ApplicationRecord
     end
 
     transaction do
+      strategy = frozen["presentation_strategy"] || room.presentation_strategy || "classic"
+      if strategy == "responsive"
+        raise Room::InvalidTransition, "Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start."
+      end
       match = create!(
-        room: room, mode: room.mode, status: "pending",
+        room: room, mode: room.mode, presentation_strategy: strategy, status: "pending",
         columns: frozen["columns"], rows: frozen["rows"],
         tick_ms: tick_ms, speed_level: speed_level, growth: growth,
         seed: SecureRandom.random_number(2**63),
@@ -134,6 +140,12 @@ class Match < ApplicationRecord
     [(DEFAULT_DURATION_SECONDS * 1_000.0 / tick_ms).round, Simulation::Config::MIN_MAX_TICKS].max
   end
 
+  def presentation_strategy_is_immutable
+    return unless will_save_change_to_presentation_strategy?
+
+    errors.add(:presentation_strategy, "is locked for this match")
+  end
+
   def simulation_config
     Simulation::Config.new(
       columns: columns, rows: rows, speed_level: speed_level,
@@ -152,7 +164,7 @@ class Match < ApplicationRecord
   INPUT_FUTURE_WINDOW = MatchRunner::CHECKPOINT_EVERY_TICKS + Simulation::Config::MAX_CATCHUP_TICKS + 1
 
   def client_summary(participant_id: nil)
-    { id: id, mode: mode, status: status, tick: tick, tick_ms: tick_ms,
+    { id: id, mode: mode, presentation_strategy: presentation_strategy, status: status, tick: tick, tick_ms: tick_ms,
       columns: columns, rows: rows, protocol_version: Simulation::Protocol::SNAPSHOT_VERSION,
       participant_id: participant_id,
       # Step 10: the browser renders the countdown from server values only.
@@ -217,7 +229,7 @@ class Match < ApplicationRecord
   # (10-25 times per second per match). It now reads the ready rows with one
   # indexed query and returns immediately when nobody is steering; the fenced
   # liveness read happens only when there is real work to apply.
-  def apply_queued_inputs!(world:, token:, now: Time.current, limit: 128)
+  def apply_queued_inputs!(world:, token:, now: Time.current, limit: 128, on_applied: nil)
     entries = match_inputs.order(:id).limit(limit).to_a
     return [] if entries.empty?
     return nil unless owned_by?(token: token, now: now)
@@ -237,9 +249,15 @@ class Match < ApplicationRecord
         # ordering; a strict window here silently dropped valid steering.
         window: Simulation::World::QUEUED_INPUT_TICK_WINDOW
       )
-      next if %i[accepted duplicate_direction reversal queue_full].include?(outcome)
+      if outcome == :accepted
+        snake = world.player(entry.match_participant_id)
+        on_applied&.call({ participant: entry.match_participant_id, seq: entry.input_seq,
+                           tick: snake&.last_applied_tick || world.tick })
+        next
+      end
 
-      rejected << { participant: entry.match_participant_id, seq: entry.input_seq, reason: outcome }
+      rejected << { participant: entry.match_participant_id, seq: entry.input_seq,
+                    reason: outcome, tick: world.tick }
       match_inputs.where(id: entry.id).delete_all
     end
     rejected
@@ -281,9 +299,11 @@ class Match < ApplicationRecord
     config = simulation_config
     participants = simulation_participants
     if checkpoint.present? && Array(checkpoint["snakes"]).any?
-      Simulation::World.restore(id: id, config: config, participants: participants, state: checkpoint)
+      Simulation::World.restore(id: id, config: config, participants: participants, state: checkpoint,
+                                presentation_strategy: presentation_strategy)
     else
-      Simulation::World.new(id: id, config: config, participants: participants)
+      Simulation::World.new(id: id, config: config, participants: participants,
+                            presentation_strategy: presentation_strategy)
     end
   end
 

@@ -63,34 +63,52 @@ class RoomChannel < ApplicationCable::Channel
   # match's single leased simulator owner.
   def input(data)
     membership = current_membership(@room)
-    return transmit({ type: "input_ack", accepted: false, reason: "not_a_member" }) unless membership
+    return transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+                      accepted: false, status: "rejected", reason: "not_a_member" }) unless membership
 
     match = @room.live_match
-    return transmit({ type: "input_ack", accepted: false, reason: "no_live_match" }) unless match
+    return transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+                      accepted: false, status: "rejected", reason: "no_live_match" }) unless match
 
     input = Simulation::Protocol.parse_input(data.to_h.except("action", :action))
     unless input.match_id == match.id
-      return transmit({ type: "input_ack", match: match.id, seq: input.seq,
-                        accepted: false, reason: "wrong_match" })
+      return transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+                        match: match.id, participant: match.match_participants.find_by(room_membership_id: membership.id)&.id,
+                        seq: input.seq, accepted: false, status: "rejected", reason: "wrong_match",
+                        tick: authoritative_tick(match) })
     end
 
     outcome = match.accept_direction!(membership: membership, input: input)
     participant = match.match_participants.find_by(room_membership_id: membership.id)
-    transmit({ type: "input_ack", match: match.id, participant: participant&.id,
-               seq: input.seq, accepted: outcome == :queued, reason: outcome.to_s })
+    queued = outcome == :queued
+    transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+               match: match.id, participant: participant&.id, seq: input.seq,
+               accepted: queued, status: queued ? "queued" : "rejected",
+               reason: outcome.to_s, tick: authoritative_tick(match) })
   rescue Simulation::InvalidInput => error
-    transmit({ type: "input_ack", accepted: false, reason: error.reason.to_s,
-               message: error.message })
+    transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+               match: @room.live_match&.id, accepted: false, status: "rejected",
+               reason: error.reason.to_s, message: error.message })
   rescue ActiveRecord::RecordNotUnique
-    transmit({ type: "input_ack", accepted: false, reason: "stale_sequence" })
+    transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+               match: @room.live_match&.id, accepted: false, status: "rejected",
+               reason: "stale_sequence" })
   rescue ActiveRecord::RecordNotFound
-    transmit({ type: "input_ack", accepted: false, reason: "match_unavailable" })
+    transmit({ type: "input_ack", v: Simulation::Protocol::SNAPSHOT_VERSION,
+               match: @room.live_match&.id, accepted: false, status: "rejected",
+               reason: "match_unavailable" })
   end
 
   # The client's heartbeat: keeps presence (and therefore seat and crown
   # stability) alive while the socket is the primary transport. If the seat is
   # gone — kicked, expired, disbanded — the client is told to re-sync through
   # the HTTP API, which is authoritative.
+  def authoritative_tick(match)
+    frame = MatchRunner.live_snapshot_for(match.id)
+    ticks = [match.tick, match.snapshot_tick, match.live_snapshot&.dig("t"), frame&.dig("t")]
+    ticks.compact.select { |tick| tick.is_a?(Integer) }.max || 0
+  end
+
   def heartbeat
     membership = current_membership(@room)
     unless membership

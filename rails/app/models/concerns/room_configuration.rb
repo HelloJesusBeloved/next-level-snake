@@ -83,6 +83,32 @@ module RoomConfiguration
     end
   end
 
+  # Presentation is a Brawl renderer choice, separate from game mode. It is
+  # room-owned for the next match and can never alter a running match's frozen
+  # configuration. Responsive remains selectable so the unavailable state is
+  # explicit, but Room#start_match! refuses to start it until Step 3.
+  def update_presentation_strategy!(actor, strategy:)
+    selected = strategy.to_s
+    unless Room::PRESENTATION_STRATEGIES.include?(selected)
+      raise ArgumentError, "Choose Classic Brawl or Responsive Brawl."
+    end
+
+    with_lock do
+      member = configuration_member!(actor)
+      raise Room::InvalidTransition, "Only the host can change the Brawl presentation." unless host?(member)
+      raise Room::InvalidTransition, "Presentation strategy is available only for Brawls." unless mode == "brawl"
+      raise Room::InvalidTransition, "The current match is locked. Choose a strategy for the next Brawl." if in_match?
+      raise Room::InvalidTransition, "This room is closed." if closed?
+      raise Room::InvalidTransition, "Presentation strategy can only be changed for the next Brawl." unless lobby? || finished?
+
+      if presentation_strategy != selected
+        update!(presentation_strategy: selected)
+        configuration_changed!("presentation_strategy_changed", presentation_strategy: selected)
+      end
+    end
+    self
+  end
+
   def update_board!(actor, columns:, rows:, at: Time.current)
     dimensions = RoomBoard.dimensions!(columns, rows)
     with_lock do
@@ -143,6 +169,9 @@ module RoomConfiguration
   def validate_frozen_configuration
     if persisted? && state_in_database == "in_match" && will_save_change_to_match_configuration?
       errors.add(:match_configuration, "cannot change after the match starts")
+    end
+    if persisted? && state_in_database == "in_match" && will_save_change_to_presentation_strategy?
+      errors.add(:presentation_strategy, "cannot change after the match starts")
     end
   end
 end

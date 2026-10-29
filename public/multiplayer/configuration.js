@@ -21,6 +21,9 @@ export function mountConfiguration({ api, apply, getState }) {
   const presets = $('mp-board-preset');
   const saveBoard = $('mp-board-save');
   const boardMessage = $('mp-board-status');
+  const strategyChoice = $('mp-presentation-choice');
+  const saveStrategy = $('mp-presentation-save');
+  const strategyMessage = $('mp-presentation-status');
   const clientId = window.crypto?.randomUUID?.() || `tab_${Date.now()}_${Math.random().toString(36).slice(2)}`;
   let roomCode = null;
   let timer = null;
@@ -29,6 +32,7 @@ export function mountConfiguration({ api, apply, getState }) {
   let pending = false;
   let paletteKey = '';
   let boardKey = '';
+  let strategyKey = '';
 
   const message = (node, text, failed = false) => {
     if (!node) return;
@@ -149,15 +153,44 @@ export function mountConfiguration({ api, apply, getState }) {
     $('mp-board-host-label').textContent = member?.host ? 'Host controls · next Brawl' : 'Host-controlled · read only';
   }
 
+  function renderPresentationStrategy(room, member) {
+    if (!strategyChoice || !saveStrategy) return;
+    const selected = room.presentation_strategy === 'responsive' ? 'responsive' : 'classic';
+    const brawlRoom = room.mode === 'brawl';
+    const editable = !!member?.host && brawlRoom && ['lobby', 'finished'].includes(room.state);
+    const key = JSON.stringify([room.code, room.mode, selected, room.state, member?.host, pending]);
+    if (key !== strategyKey) {
+      strategyKey = key;
+      strategyChoice.value = selected;
+    }
+    strategyChoice.disabled = !editable || pending;
+    saveStrategy.disabled = !editable || pending;
+    saveStrategy.hidden = !member?.host;
+    $('mp-presentation-host-label').textContent = !brawlRoom
+      ? 'Brawl-only setting · read only'
+      : member?.host ? 'Host controls · next Brawl' : 'Host-controlled · read only';
+    $('mp-presentation-reason').textContent = !brawlRoom
+      ? 'This presentation choice applies only to Brawl; Duel remains a separate game mode.'
+      : room.state === 'in_match'
+        ? 'This match’s presentation is locked. Choose a strategy for the next Brawl after it ends.'
+        : 'Classic and Responsive are presentation strategies, independent of game rules.';
+    $('mp-presentation-availability').textContent = !brawlRoom
+      ? 'The Brawl presentation strategy does not change or configure Duel mode.'
+      : selected === 'responsive'
+        ? 'Responsive Brawl is unavailable in this step. The server will refuse to start while it is selected; choose Classic Brawl to play.'
+        : 'Classic Brawl is available and remains fully server-synchronized. Responsive Brawl is not implemented yet and cannot start a match.';
+  }
+
   function render(room, member) {
     if (!room) {
       roomCode = null;
       window.clearInterval(timer); timer = null;
-      paletteKey = ''; boardKey = '';
+      paletteKey = ''; boardKey = ''; strategyKey = '';
       return;
     }
     renderPalette(room, member);
     renderBoard(room, member);
+    renderPresentationStrategy(room, member);
     if (roomCode !== room.code) {
       roomCode = room.code;
       window.clearInterval(timer);
@@ -181,6 +214,13 @@ export function mountConfiguration({ api, apply, getState }) {
     if (saveBoard.disabled) return;
     post('board', { columns: Number(columns.value), rows: Number(rows.value) }, boardMessage, 'Board preference saved. The server checks devices again before each new Brawl.');
   });
+  $('mp-presentation-form')?.addEventListener('submit', (event) => {
+    event.preventDefault();
+    if (saveStrategy.disabled) return;
+    post('presentation_strategy', { presentation_strategy: strategyChoice.value }, strategyMessage,
+      'Presentation strategy saved for the next Brawl.');
+  });
+
   const resized = () => { window.clearTimeout(resizeTimer); resizeTimer = window.setTimeout(report, 300); };
   window.addEventListener('resize', resized);
   window.addEventListener('orientationchange', resized);

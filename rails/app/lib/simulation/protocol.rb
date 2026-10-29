@@ -19,6 +19,8 @@ module Simulation
       {
         "v" => SNAPSHOT_VERSION,
         "m" => world.id,
+        # Presentation metadata only; it never changes the authoritative rules.
+        "strategy" => world.presentation_strategy,
         "s" => world.status.to_s,
         "t" => world.tick,
         "r" => world.rules.mode.to_s,
@@ -42,6 +44,9 @@ module Simulation
         "sc" => snake.score, "l" => snake.length, "a" => snake.alive,
         "d" => snake.direction.name, "b" => snake.body.map { |x, y| y * columns + x },
         "sv" => snake.survived_ticks, "lg" => snake.longest_length,
+        # Applied input is separate from the socket's queued acknowledgement.
+        # `t` on the frame is the authoritative state version for this match.
+        "is" => snake.last_applied_seq, "it" => snake.last_applied_tick,
         "el" => snake.eliminated_at_tick, "er" => snake.elimination_reason&.to_s,
         # Step 10 connection state. "fr" drives the red loading ring on the
         # head; "gu" is the absolute server deadline (epoch ms); "cy" is the

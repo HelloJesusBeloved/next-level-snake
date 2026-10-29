@@ -278,6 +278,7 @@ export function mountLobby(root) {
     const d = gameRenderer.movementDiagnostics();
     const stat = (v) => `p50 ${v.p50} · p95 ${v.p95} · max ${v.max} ms`;
     text(el.movementMetrics, [
+      `Presentation strategy: ${state.match?.presentation_strategy || state.room?.presentation_strategy || 'classic'}`,
       `Client release: ${d.release}`,
       `Received tick ${d.receivedTick ?? '–'} · displayed ${d.displayedTick ?? '–'}`,
       `Last snapshot: ${d.lastSnapshotAgeMs ?? '–'} ms ago`,
@@ -287,7 +288,8 @@ export function mountLobby(root) {
       `Canvas draw cost: ${stat(d.drawCostMs)}`,
       `Receive → draw: ${stat(d.receiveToPaintMs)}`,
       `Adaptive hold: ${d.cadenceEnabled ? 'on' : 'off'} (limit ${d.maxHoldMs} ms + one display refresh)`,
-      `Queue ${d.queued}/3 · coalesced ${d.coalesced} · server tick gaps ${d.skippedServerTicks}`,
+      `Queue ${d.queued}/3 · coalesced ${d.coalesced} · buffered tick gaps ${d.skippedServerTicks}`,
+      `Authoritative snapshots: missing ${d.missingSnapshots} · duplicate ${d.duplicateSnapshots} · stale/out-of-order ${d.staleSnapshots}`,
       `Delayed display callbacks bypassed: ${d.displayWatchdog}`,
       'Browser timing only; physical scanout and true one-way network latency are not measurable here.',
     ].join('\n'));
@@ -333,9 +335,10 @@ export function mountLobby(root) {
       el.readyCount.textContent = `${counts.ready} ready`;
     }
     if (el.startState) {
-      el.startState.textContent = start.eligible
-        ? 'Enough players to start'
-        : `Needs ${start.minimum_players} connected players`;
+      el.startState.textContent = start.blockers?.includes('responsive_strategy_unavailable')
+        ? 'Responsive Brawl is unavailable in this step. Choose Classic Brawl to start.'
+        : start.eligible ? 'Enough players to start'
+          : `Needs ${start.minimum_players} connected players`;
     }
 
     if (el.roster) {
@@ -374,8 +377,19 @@ export function mountLobby(root) {
       el.readyToggle.textContent = me.spectator ? 'Spectating this match' : me.ready ? 'Not ready' : "I'm ready";
       el.readyToggle.disabled = !!me.spectator || room.state === 'in_match';
     }
-    if (el.start) el.start.hidden = !amHost || room.state !== 'lobby';
-    if (el.again) el.again.hidden = !amHost || room.state !== 'finished';
+    const responsiveUnavailable = room.presentation_strategy === 'responsive';
+    if (el.start) {
+      el.start.hidden = !amHost || room.state !== 'lobby';
+      el.start.disabled = responsiveUnavailable;
+      el.start.title = responsiveUnavailable
+        ? 'Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start.' : '';
+    }
+    if (el.again) {
+      el.again.hidden = !amHost || room.state !== 'finished';
+      el.again.disabled = responsiveUnavailable;
+      el.again.title = responsiveUnavailable
+        ? 'Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start.' : '';
+    }
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
@@ -1031,7 +1045,6 @@ export function mountLobby(root) {
     }
     if (message.type === 'snapshot') {
       const prior = state.gameSnapshot;
-      if (prior && Number(message.t) < Number(prior.t)) return; // stale frame after reconnect
       if (typeof message.spectator === 'boolean') {
         state.match = { ...(state.match || {}), spectator: message.spectator };
       }
@@ -1107,7 +1120,7 @@ export function mountLobby(root) {
       if (Number(message.participant) !== Number(state.member?.match_participant_id)) return;
       if (message.accepted) {
         if (el.gameInputStatus) {
-          text(el.gameInputStatus, '');
+          text(el.gameInputStatus, `Direction queued (sequence ${message.seq ?? '–'}).`);
           if (el.gameInputStatus.dataset.kind) el.gameInputStatus.removeAttribute('data-kind');
         }
       } else if (el.gameInputStatus) {
@@ -1118,6 +1131,15 @@ export function mountLobby(root) {
         if (message.reason === 'frozen' || message.reason === 'disconnected') {
           setBrawlConn('lost', 'Connection lost — input paused until the server sees you again.');
         }
+      }
+      return;
+    }
+    if (message.type === 'input_applied' &&
+        Number(message.participant) === Number(state.member?.match_participant_id)) {
+      if (Number.isInteger(message.seq)) state.inputSeq = Math.max(state.inputSeq, message.seq);
+      if (el.gameInputStatus) {
+        text(el.gameInputStatus, `Direction applied to the server queue for tick ${message.tick} (sequence ${message.seq}).`);
+        if (el.gameInputStatus.dataset.kind) el.gameInputStatus.removeAttribute('data-kind');
       }
       return;
     }

@@ -62,6 +62,21 @@ test('a TCP burst updates received controls instantly but submits one newest fra
   } finally { s.close(); }
 });
 
+test('authoritative tick tracking counts gaps, duplicates, stale and out-of-order frames', () => {
+  const s = setup();
+  try {
+    assert.equal(s.renderer.accept(frame(4)), true);
+    assert.equal(s.renderer.accept(frame(4)), false, 'same-tick identical state is a duplicate');
+    assert.equal(s.renderer.accept(frame(2)), false, 'older state is stale/out of order');
+    assert.equal(s.renderer.accept(frame(7)), true, 'a newer tick restores the authoritative stream');
+    const diagnostics = s.renderer.movementDiagnostics();
+    assert.equal(diagnostics.missingSnapshots, 2, 'ticks 5 and 6 were not received');
+    assert.equal(diagnostics.duplicateSnapshots, 1);
+    assert.equal(diagnostics.staleSnapshots, 1);
+    assert.equal(s.renderer.snapshot.t, 7);
+  } finally { s.close(); }
+});
+
 test('turn, freeze and death frames bypass all visual holds and remain server-owned', () => {
   const s = setup();
   try {

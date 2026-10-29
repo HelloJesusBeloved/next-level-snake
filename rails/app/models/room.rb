@@ -35,6 +35,7 @@
 class Room < ApplicationRecord
   include RoomConfiguration
   MODES = %w[brawl duel].freeze
+  PRESENTATION_STRATEGIES = %w[classic responsive].freeze
   STATES = %w[lobby in_match finished disbanded archived].freeze
   CLOSED_STATES = %w[disbanded archived].freeze
   # Why a closed room closed, so join attempts can explain themselves.
@@ -66,6 +67,7 @@ class Room < ApplicationRecord
             format: { with: /\A[A-Z0-9]+\z/, message: "is not a valid invitation code" }
   validates :name, length: { maximum: NAME_MAX_LENGTH }, allow_blank: true
   validates :mode, inclusion: { in: MODES }
+  validates :presentation_strategy, inclusion: { in: PRESENTATION_STRATEGIES }
   validates :state, inclusion: { in: STATES }
   validates :max_members, numericality: { only_integer: true, in: MAX_MEMBERS_RANGE }
   validates :closed_reason, inclusion: { in: CLOSED_REASONS }, allow_nil: true
@@ -302,6 +304,9 @@ class Room < ApplicationRecord
       raise InvalidTransition, "only Brawls are available in this step" unless mode == "brawl"
       host_id = room_memberships.active.where(role: "host").pick(:id)
       raise InvalidTransition, "Only the current host can start a Brawl." if actor && actor.id != host_id
+      if presentation_strategy == "responsive"
+        raise InvalidTransition, "Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start."
+      end
 
       eligibility = start_eligibility
       unless eligibility[:eligible]
@@ -315,6 +320,7 @@ class Room < ApplicationRecord
       now = Time.current
       frozen_config = {
         "columns" => board[:columns], "rows" => board[:rows],
+        "presentation_strategy" => presentation_strategy,
         "mobile_default" => board[:mobile_required], "locked_at" => now.iso8601(6),
         "participants" => players.map do |member|
           { "membership_id" => member.id, "color_slot" => member.color_slot,
@@ -548,6 +554,7 @@ class Room < ApplicationRecord
     blockers << "room_closed" if closed?
     blockers << "match_in_progress" if in_match?
     blockers << "room_not_in_lobby" unless lobby? || closed? || in_match?
+    blockers << "responsive_strategy_unavailable" if mode == "brawl" && presentation_strategy == "responsive"
     players = eligible_players(at: at)
     blockers << "needs_#{MIN_PLAYERS_TO_START}_players" if players.size < MIN_PLAYERS_TO_START
 
@@ -555,6 +562,8 @@ class Room < ApplicationRecord
       eligible: blockers.empty?,
       blockers: blockers,
       engine_ready: false,
+      presentation_strategy: presentation_strategy,
+      presentation_strategy_available: presentation_strategy == "classic",
       players: players.size,
       minimum_players: MIN_PLAYERS_TO_START
     }
