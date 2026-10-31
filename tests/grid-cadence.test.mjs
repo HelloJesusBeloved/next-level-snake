@@ -202,13 +202,21 @@ for (const hz of [30, 60, 120, 144]) {
 test('cacheable multiplayer entry points and modified dependency imports carry the new release', () => {
   const root = new URL('../', import.meta.url);
   const read = (path) => readFileSync(new URL(path, root), 'utf8');
-  const release = 'step10-mobile4';
+  // Modules edited for Responsive Brawl carry the current release; modules that
+  // have not changed since step 10 deliberately keep their old tag (their cached
+  // copies are still correct). tests/asset-cache-tags.test.mjs checks that every
+  // reference to one module agrees.
+  const release = 'step11-responsive-3';
+  const unchanged = 'step10-mobile4';
   const view = read('rails/app/views/snake/multiplayer.html.erb');
   assert.ok(view.includes(`/multiplayer/page.js?v=${release}`));
   assert.ok(view.includes(`/multiplayer/lobby.css?v=${release}`));
   assert.ok(read('public/multiplayer/page.js').includes(`./lobby.js?v=${release}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./game-renderer.js?v=${release}`));
-  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./grid-cadence.js?v=${release}`));
-  assert.ok(read('public/multiplayer/lobby.js').includes(`./snapshot-chunks.js?v=${release}`));
-  assert.ok(read('public/multiplayer/lobby.js').includes(`./swipe-steering.js?v=${release}`));
+  assert.ok(read('public/multiplayer/lobby.js').includes(`./configuration.js?v=${release}`));
+  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./prediction.js?v=${release}`));
+  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./playback.js?v=${release}`));
+  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./grid-cadence.js?v=${unchanged}`));
+  assert.ok(read('public/multiplayer/lobby.js').includes(`./snapshot-chunks.js?v=${unchanged}`));
+  assert.ok(read('public/multiplayer/lobby.js').includes(`./swipe-steering.js?v=${unchanged}`));
 });

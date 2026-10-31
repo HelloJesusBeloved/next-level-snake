@@ -153,6 +153,13 @@ export class RemotePlayback {
       this.requestResync('no confirmed body to rebuild from');
       return false;
     }
+    if (frame.t <= previous.tick) {
+      // A duplicate or late packet is not a gap. Ignore it without resetting a
+      // healthy buffer or repeatedly asking the server for another snapshot.
+      if (frame.t === previous.tick) this.stats.duplicates += 1;
+      else this.stats.outOfOrder += 1;
+      return false;
+    }
     if (frame.t !== previous.tick + 1) {
       // Movement frames only make sense as a contiguous chain. A jump means the
       // chain is broken, and rebuilding a body across it would be a guess.
@@ -173,10 +180,19 @@ export class RemotePlayback {
         this.requestResync(`impossible length ${length} after ${before.cells.length}`);
         return false;
       }
-      const cells = [entry.h, ...before.cells.slice(0, length - 1)];
+      const cells = this.reconstructConfirmedBody(entry, before);
+      if (!cells) {
+        this.stats.reconstructRejects += 1;
+        this.requestResync('invalid or missing confirmed movement');
+        return false;
+      }
       players.set(entry.i, {
         cells, dir: entry.d, len: length, alive: entry.a !== false,
-        frozen: !!entry.fr, score: entry.sc
+        frozen: !!entry.fr, score: entry.sc,
+        // The remaining wire scalars (applied input seq/tick, elimination,
+        // connection state, grace deadline) are kept so materialize() can hand
+        // the predictor and the HUD a complete frame for this tick.
+        raw: entry
       });
       this.stats.reconstructed += 1;
     }
@@ -256,6 +272,91 @@ export class RemotePlayback {
 
   newest() {
     return this.frames.length ? this.frames[this.frames.length - 1] : null;
+  }
+
+  reconstructConfirmedBody(entry, previous) {
+    const columns = this.columns, rows = this.rows;
+    const body = previous?.cells;
+    const head = entry?.h;
+    const length = Number.isInteger(entry?.l) ? entry.l : body?.length;
+    if (!Array.isArray(body) || !body.length || !Number.isSafeInteger(head) ||
+        !Number.isInteger(columns) || columns < 1 || !Number.isInteger(rows) || rows < 1 ||
+        head < 0 || head >= columns * rows || !Number.isInteger(length) ||
+        length < body.length || length > body.length + 1) return null;
+
+    const oldHead = body[0];
+    if (!Number.isSafeInteger(oldHead) || oldHead < 0 || oldHead >= columns * rows) return null;
+    if (entry.fr === true || entry.a === false) {
+      return head === oldHead && length === body.length ? body.slice() : null;
+    }
+
+    // A live, unfrozen snake moves exactly one orthogonal grid cell per tick,
+    // including across an edge. If that is not true, a compact tick is missing:
+    // fail closed and request a complete server snapshot rather than inventing a
+    // body or animating a jump across the board.
+    const dx = Math.abs((head % columns) - (oldHead % columns));
+    const dy = Math.abs(Math.floor(head / columns) - Math.floor(oldHead / columns));
+    const adjacent = (dy === 0 && (dx === 1 || dx === columns - 1)) ||
+                     (dx === 0 && (dy === 1 || dy === rows - 1));
+    if (!adjacent) return null;
+    return [head, ...body.slice(0, length - 1)];
+  }
+
+  // Turns the newest RECONSTRUCTED tick back into a complete, Protocol-v1
+  // shaped snapshot. The bodies are the ones pushMovement rebuilt (lossless, as
+  // the Rails movement_protocol_test proves), the per-player scalars are the
+  // movement frame's own, and the fields a compact frame does not carry (names,
+  // colours, standings, board, rules) are carried forward from `previous`, the
+  // last complete frame the renderer holds. Survival and frozen-tick counters
+  // advance by exactly the engine's rule for one tick (survivors +1, frozen +1),
+  // which is possible only because movement frames form a contiguous chain.
+  //
+  // This is what lets local prediction reconcile on EVERY tick in Responsive
+  // Brawl instead of only on the periodic complete snapshot: without it the own
+  // snake ran to its lead ceiling, stalled, and jumped at every full frame.
+  materialize(frame, previous) {
+    const stored = this.newest();
+    if (!stored || !frame || stored.tick !== frame.t || !previous || !Array.isArray(previous.p)) return null;
+    const byId = new Map(previous.p.map((player) => [player.i, player]));
+    const players = [];
+    for (const entry of frame.p || []) {
+      const rebuilt = stored.players.get(entry.i);
+      const meta = byId.get(entry.i);
+      if (!rebuilt || !meta) return null;
+      const alive = entry.a !== false;
+      const frozen = entry.fr === true;
+      players.push({
+        ...meta,
+        ...entry,
+        b: rebuilt.cells.slice(),
+        l: rebuilt.cells.length,
+        a: alive,
+        fr: frozen,
+        sv: (Number.isInteger(meta.sv) ? meta.sv : 0) + (alive && !frozen && meta.a !== false ? 1 : 0),
+        lg: Math.max(Number.isInteger(meta.lg) ? meta.lg : 0, rebuilt.cells.length),
+        fz: (Number.isInteger(meta.fz) ? meta.fz : 0) + (alive && frozen ? 1 : 0)
+      });
+      // A compact frame has no `h` in a snapshot; drop the movement-only key.
+      delete players[players.length - 1].h;
+    }
+    const scores = new Map(players.map((player) => [player.i, player.sc]));
+    return {
+      ...previous,
+      type: 'snapshot',
+      reconstructed: true,
+      m: frame.m ?? previous.m,
+      s: frame.s ?? previous.s,
+      t: frame.t,
+      ts: Number.isFinite(frame.ts) ? frame.ts : previous.ts,
+      b: { c: this.columns, r: this.rows },
+      f: Array.isArray(frame.f) ? frame.f : previous.f,
+      p: players,
+      // Placements change only with eliminations, which the server always sends
+      // as a complete frame; scores are authoritative in the movement frame.
+      q: Array.isArray(previous.q)
+        ? previous.q.map((entry) => (scores.has(entry.i) ? { ...entry, sc: scores.get(entry.i) } : entry))
+        : previous.q
+    };
   }
 
   oldest() {

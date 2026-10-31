@@ -106,11 +106,22 @@ end
 # that arrival tick, and `presses` records what the browser believed. This is the
 # whole reason prediction can diverge, and the only honest way to test it: the
 # fixture is the server's real answer to a late packet, not a guess at it.
-def latency_variant(base_turns, uplink_ticks, one_way_ms)
-  turns = base_turns.map { |t| t.merge(sent_at: t[:sent_at] + uplink_ticks) }
+# Timeline of one press, in the harness's clock (frame k is produced at k*TICK):
+#   frame C delivered           C*TICK + one_way
+#   player presses (mid-tick)   C*TICK + one_way + PRESS_PHASE*TICK
+#   input reaches the server    + one_way again (a full round trip after frame C)
+#   engine applies it at the loop index it is in on arrival, so the turn is
+#   effective on the step to that index + 1.
+# Earlier versions counted only the uplink and so let the engine turn a tick or
+# two before any real server could have seen the input at 200-300 ms.
+PRESS_PHASE = 0.5
+
+def latency_variant(base_turns, one_way_ms)
+  arrival_ticks = ((one_way_ms * 2 + PRESS_PHASE * TICK_MS) / TICK_MS).floor
+  turns = base_turns.map { |t| t.merge(sent_at: t[:sent_at] + arrival_ticks) }
   presses = turns.map do |t|
-    { seq: t[:seq], dir: t[:dir], client_tick: t[:sent_at] - uplink_ticks,
-      one_way_ms: one_way_ms, uplink_ticks: uplink_ticks }
+    { seq: t[:seq], dir: t[:dir], client_tick: t[:sent_at] - arrival_ticks,
+      one_way_ms: one_way_ms, uplink_ticks: arrival_ticks, press_phase: PRESS_PHASE }
   end
   [turns, presses]
 end
@@ -156,11 +167,12 @@ scenarios = [
 # uplink is expressed in whole logical ticks because that is what decides which
 # tick the server consumes an input on; the downlink is milliseconds because
 # that is what the client's clock sees.
-[[0, 0], [1, 100], [2, 200], [3, 300], [2, 260]].each_with_index do |(uplink, one_way), index|
-  turns, presses = latency_variant(BASE_TURNS, uplink, one_way)
+[0, 100, 200, 300, 260].each_with_index do |one_way, index|
+  turns, presses = latency_variant(BASE_TURNS, one_way)
+  uplink = presses.first[:uplink_ticks]
   jitter = one_way == 260 ? [0, 45, 130, 15, 80, 0, 150, 30] : []
   name = "latency_#{one_way}ms#{jitter.empty? ? '' : '_jitter'}"
-  entry = scenario(name: name, note: "same four turns, #{uplink} tick uplink, #{one_way} ms downlink",
+  entry = scenario(name: name, note: "same four turns, #{one_way} ms each way (#{uplink} ticks press-to-engine)",
                    ticks: 14 + uplink, seed: 200 + index, turns: turns)
   entry["presses"] = presses
   entry["one_way_ms"] = one_way

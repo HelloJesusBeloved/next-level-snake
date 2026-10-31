@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step10-mobile3';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step10-mobile4';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-3';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-3';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step2-prediction';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-3';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -161,6 +161,7 @@ export function mountLobby(root) {
     inputSentAt: new Map(),
     rttMs: null,
     rttSamples: [],
+    matchHeartbeatSentAt: null,
     buffered: [],
     cable: { status: 'idle', reason: null },
     // Step 10: presentation-only mirror of the server's connection state.
@@ -288,8 +289,8 @@ export function mountLobby(root) {
     }
     const pct = (pr.correctionRate * 100).toFixed(1);
     const lines = [
-      `Prediction: ${pr.mode} · painted ${pr.painted ? 'LOCAL' : 'server frame'} · armed by ${pr.mode === 'test override' ? 'TEST OVERRIDE (not a Responsive match)' : 'server strategy'}`,
-      `Confirmed tick ${pr.confirmedTick ?? '–'} → predicted ${pr.predictedTick ?? '–'} (lead ${pr.lead}/${pr.limits.maxLeadTicks}) · pending seq [${pr.pendingSeqs.join(', ') || '–'}]`,
+      `Prediction: ${pr.reason || 'on'} · painted ${pr.painted ? 'LOCAL' : 'server frame'} · armed by ${pr.mode?.testOnly ? 'TEST OVERRIDE (not a Responsive match)' : 'server strategy'}`,
+      `Confirmed tick ${pr.confirmedTick ?? '–'} → predicted ${pr.predictedTick ?? '–'} (lead ${pr.lead}, target ${pr.leadTarget ?? 0} from measured RTT, ceiling ${pr.limits.maxLeadTicks}) · pending seq [${pr.pendingSeqs.join(', ') || '–'}]`,
       `Inputs: submitted ${pr.submitted} · queued-ack ${pr.queuedAcks} · applied ${pr.appliedAcks} · rejected ${pr.rejectedAcks} · refused locally ${pr.refused}`,
       `Reconciliation: ${pr.reconciliations} frames · ${pr.corrections} corrections (${pct}% of frames) · largest ${pr.maxCorrectionCells} cells · stale/dup ignored ${pr.staleFrames}/${pr.duplicateFrames}`,
       `Boundaries: lead stalls ${pr.leadStalls} · horizon refusals ${pr.horizonRefusals} · pending overflow ${pr.droppedPending} · catch-up discarded ${pr.catchupDiscards} · other-tab sequences ${pr.foreignApplied}`
@@ -453,18 +454,26 @@ export function mountLobby(root) {
       el.readyToggle.textContent = me.spectator ? 'Spectating this match' : me.ready ? 'Not ready' : "I'm ready";
       el.readyToggle.disabled = !!me.spectator || room.state === 'in_match';
     }
-    const responsiveUnavailable = room.presentation_strategy === 'responsive';
+    // Both presentation strategies are playable since step 3, so the choice never
+    // disables Start or Play again. Availability is the SERVER's call
+    // (start.presentation_strategy_available, enforced again inside
+    // Room#start_match!); the page only mirrors it, so a strategy this build
+    // cannot present is still refused with the server's reason instead of a
+    // silently dead button — and a playable one is never blocked by stale copy.
+    const strategyBlocked = start.presentation_strategy_available === false;
+    const strategyLabel = room.presentation_strategy === 'responsive' ? 'Responsive Brawl' : 'Classic Brawl';
+    const startTitle = strategyBlocked
+      ? `${strategyLabel} is not available on this server. Choose another presentation to start.`
+      : `Starts a ${strategyLabel} match.`;
     if (el.start) {
       el.start.hidden = !amHost || room.state !== 'lobby';
-      el.start.disabled = responsiveUnavailable;
-      el.start.title = responsiveUnavailable
-        ? 'Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start.' : '';
+      el.start.disabled = strategyBlocked;
+      el.start.title = startTitle;
     }
     if (el.again) {
       el.again.hidden = !amHost || room.state !== 'finished';
-      el.again.disabled = responsiveUnavailable;
-      el.again.title = responsiveUnavailable
-        ? 'Responsive Brawl is unavailable until Step 3. Choose Classic Brawl to start.' : '';
+      el.again.disabled = strategyBlocked;
+      el.again.title = startTitle;
     }
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
@@ -1091,11 +1100,17 @@ export function mountLobby(root) {
   function startMatchHeartbeat() {
     state.liveHudBudget.start();
     stopMatchHeartbeat();
-    matchHeartbeatTimer = window.setInterval(() => {
+    const beat = () => {
       if (matchSubscription && consumer?.connection?.isOpen?.()) {
+        // Timed: the `presence` reply gives a round-trip sample before the
+        // player has pressed anything, so the first turn is already predicted
+        // on the right tick instead of one RTT early.
+        state.matchHeartbeatSentAt = performance.now();
         matchSubscription.perform('heartbeat');
       }
-    }, 10_000);
+    };
+    beat();
+    matchHeartbeatTimer = window.setInterval(beat, 10_000);
   }
 
   function stopMatchHeartbeat() {
@@ -1134,8 +1149,12 @@ export function mountLobby(root) {
       // Compact tick-ordered movement: heads, lengths and scalars only. The
       // renderer rebuilds each body from its own confirmed history, so a wrong
       // or missing link is refused there and recovered with a full snapshot
-      // rather than rendered.
-      gameRenderer?.acceptMovement(message);
+      // rather than rendered. A frame that WAS rebuilt is a complete confirmed
+      // state for its tick, and takes exactly the snapshot path below — the
+      // predictor, the own-state mirror the input path reads, the HUD tick and
+      // the scoreboard all advance every tick, as they do in Classic.
+      const rebuilt = gameRenderer?.acceptMovement(message);
+      if (rebuilt) onMatchMessage(rebuilt);
       return;
     }
     if (message.type === 'snapshot_chunk') {
@@ -1235,6 +1254,14 @@ export function mountLobby(root) {
       }
       return;
     }
+    if (message.type === 'presence') {
+      // Reply to this tab's timed match heartbeat (MatchChannel#heartbeat).
+      if (Number.isFinite(state.matchHeartbeatSentAt)) {
+        recordRoundTrip(performance.now() - state.matchHeartbeatSentAt);
+        state.matchHeartbeatSentAt = null;
+      }
+      return;
+    }
     if (message.type === 'waiting') {
       if (el.gameStatus) el.gameStatus.textContent = 'Starting the authoritative Brawl…';
       return;
@@ -1295,10 +1322,19 @@ export function mountLobby(root) {
     const sentAt = state.inputSentAt.get(Number(seq));
     if (sentAt === undefined) return;
     state.inputSentAt.delete(Number(seq));
-    const rtt = Math.max(0, performance.now() - sentAt);
+    recordRoundTrip(performance.now() - sentAt);
+  }
+
+  // One place for every measured round trip. The predictor's lead target follows
+  // it, so the own snake's predicted turns land on the tick the server will
+  // actually apply them — the difference between "instant" and "instant, then
+  // yanked back a cell on every corner".
+  function recordRoundTrip(sample) {
+    const rtt = Math.max(0, sample);
     state.rttMs = state.rttMs === null ? rtt : state.rttMs * 0.8 + rtt * 0.2;
     state.rttSamples.push(rtt);
     if (state.rttSamples.length > 12) state.rttSamples.shift();
+    gameRenderer?.setRoundTripMs(state.rttMs);
   }
 
   function rttJitter() {

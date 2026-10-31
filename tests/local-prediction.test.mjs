@@ -25,7 +25,7 @@ const scen = (name) => {
 
 // A deterministic client: a monotonic virtual clock, frames delivered with a
 // one-way delay, presses issued the instant the frame they were aimed at lands.
-function makeClient(scenario, { oneWayMs = 0, jitter = [], limits, enable = true, uplinkTicks = 0 } = {}) {
+function makeClient(scenario, { oneWayMs = 0, jitter = [], limits, enable = true, uplinkTicks = 0, leadTicks = null } = {}) {
   const client = {
     now: 0, frame: 0, delivered: 0, predictor: null, samples: [], presses: [], reconciled: [],
     headsByTick: new Map(), confirmations: []
@@ -37,6 +37,15 @@ function makeClient(scenario, { oneWayMs = 0, jitter = [], limits, enable = true
     mode: 'brawl', ownParticipantId: CFG.participant_id, clock, limits
   });
   if (enable) predictor.enable('responsive');
+  // A real client learns its round trip from the match heartbeat before the
+  // first press (lobby.js recordRoundTrip) and feeds it to the predictor, which
+  // then leads the confirmed tick by that many ticks so a predicted turn lands
+  // on the tick the server will apply it.
+  if (enable && Number.isFinite(oneWayMs)) predictor.setLeadTargetMs(2 * oneWayMs);
+  // Rule-parity scenarios run with an explicit lead so the local view really
+  // simulates ahead of the engine (a zero lead is pure lockstep and would have
+  // nothing to audit).
+  if (enable && Number.isInteger(leadTicks)) predictor.setLeadTargetMs(leadTicks * TICK_MS);
   client.predictor = predictor;
 
   const schedule = scenario.frames.map((frame, index) => ({
@@ -49,7 +58,11 @@ function makeClient(scenario, { oneWayMs = 0, jitter = [], limits, enable = true
     seq: entry.seq, dir: entry.dir, client_tick: entry.sent_at, uplink_ticks: 0
   }));
   const presses = source.map((press) => ({
-    ...press, at: press.client_tick * TICK_MS + oneWayMs, seq: press.seq, done: false
+    ...press, seq: press.seq, done: false,
+    // The player sees frame C one downlink after it was produced and presses a
+    // little later (mid-tick in the fixture); the fixture's engine applied the
+    // input a full round trip after frame C, which is what makes this fair.
+    at: press.client_tick * TICK_MS + oneWayMs + (press.press_phase || 0) * TICK_MS
   }));
 
   const lastAt = schedule.length ? Math.max(...schedule.map((entry) => entry.at)) : 0;
@@ -148,9 +161,9 @@ test('engine fixture really is Protocol v1 output and stays classic-compatible',
 
 test('zero-latency prediction reproduces the server tick for tick (rule parity)', () => {
   const scenario = scen('turns');
-  // Parity has to be exact here: same tick phase, same rules, so a divergence
-  // can only mean the client model drifted from the engine.
-  const client = makeClient(scenario, { oneWayMs: 0 });
+  // Parity has to be exact here: same rules, local view two ticks ahead of the
+  // engine, so a divergence can only mean the client model drifted from it.
+  const client = makeClient(scenario, { oneWayMs: 0, leadTicks: 2 });
   client.run();
   const stats = client.predictor.summary();
   assert.ok(stats.predictedTicks > 0);
@@ -223,11 +236,19 @@ test('latency produces bounded, self-limiting corrections — not constant rubbe
     const stats = client.predictor.summary();
     const turns = (scenario.applied || []).length;
     assert.ok(stats.reconciliations >= client.delivered - 1, 'frames are reconciled as they land');
-    // One correction per turn (plus the ±1 tick phase allowance), never a
-    // correction per frame: that difference is "rubber-banding" or not.
-    assert.ok(stats.corrections <= turns + 1,
+    // With the lead target set from the round trip, a predicted turn lands on
+    // the server's tick: no correction at all for most turns, and at most the
+    // unavoidable half-tick phase error on the rest. More than one correction
+    // per turn means the own snake is being yanked on every corner.
+    assert.ok(stats.corrections <= turns,
       `${name}: ${stats.corrections} corrections for ${turns} turns is rubber-banding`);
-    assert.ok(stats.maxCorrectionCells <= 3, `${name}: correction of ${stats.maxCorrectionCells} cells is too large`);
+    // Historical prediction error may exceed a cell on a high-latency link;
+    // this is not the visible step. prediction-stability.test.mjs separately
+    // checks every painted head moves at most one cell and converges.
+    assert.ok(stats.maxCorrectionCells <= stats.limits.maxLeadTicks * 2,
+      `${name}: unbounded correction of ${stats.maxCorrectionCells} cells`);
+    assert.ok(stats.lead <= Math.round(2 * oneWay / TICK_MS) + 1 || stats.pending === 0,
+      `${name}: lead ${stats.lead} runs away from its target`);
     // Never more than one correction per confirmed frame, i.e. no oscillation.
     assert.ok(stats.correctionRate <= 0.5, `${name}: correction rate ${stats.correctionRate}`);
     assert.equal(stats.rejectedFrames, 0, `${name}: valid frames must not be refused`);
@@ -238,7 +259,10 @@ test('latency produces bounded, self-limiting corrections — not constant rubbe
     // tick the server later confirms: that is "no drift", and it is checked per
     // tick rather than as an average.
     const lastTurn = Math.max(...(scenario.applied || []).map((entry) => entry.tick), 0);
-    assertSteadyStateAccuracy(client, scenario, lastTurn + 1, name);
+    // A zero lead target (RTT below half a tick) is pure lockstep: the own snake
+    // moves on confirmed frames and there are no local claims to audit.
+    if (client.predictor.leadTarget > 0) assertSteadyStateAccuracy(client, scenario, lastTurn + 1, name);
+    else assert.equal(stats.corrections, 0, `${name}: lockstep cannot be corrected`);
   }
 });
 
@@ -313,7 +337,7 @@ test('a turn buffer cannot grow without bound during a burst', () => {
 
 test('edge wrapping matches the engine exactly (modulo wrap on both axes)', () => {
   const scenario = scen('wrap');
-  const client = makeClient(scenario, { oneWayMs: 0 });
+  const client = makeClient(scenario, { oneWayMs: 0, leadTicks: 2 });
   client.run();
   const wrapClaims = client.predictor.summary().predictedHeads;
   for (const [tick, head] of client.headsByTick) {
@@ -328,7 +352,7 @@ test('edge wrapping matches the engine exactly (modulo wrap on both axes)', () =
 
 test('known food may be predicted; respawn and score may not', () => {
   const scenario = scen('food');
-  const client = makeClient(scenario, { oneWayMs: 0 });
+  const client = makeClient(scenario, { oneWayMs: 0, leadTicks: 2 });
   client.run();
   const stats = client.predictor.summary();
   assert.equal(stats.predictedFood, 1, 'the food ahead must be recognised locally');
@@ -348,7 +372,7 @@ const predictorScore = (client) => Number(client.predictor.state().score);
 
 test('authoritative freeze stops prediction; resume restarts it', () => {
   const scenario = scen('freeze');
-  const client = makeClient(scenario, { oneWayMs: 0 });
+  const client = makeClient(scenario, { oneWayMs: 0, leadTicks: 2 });
   client.run();
   const frozen = scenario.frames.filter((frame) => frame.p[0].fr);
   assert.ok(frozen.length >= 3, 'fixture must contain a real freeze window');
@@ -467,7 +491,7 @@ test('reconnection discards obsolete predictions and restarts from server state'
   assert.ok(predictor.summary().resetForReconnect >= 1);
 });
 
-test('a second tab steering the same identity wins, and the buffer yields', () => {
+test('a received sequence mirror cannot masquerade as an applied input', () => {
   const scenario = scen('turns');
   const predictor = new LocalPredictor({
     tickMs: TICK_MS, columns: CFG.columns, rows: CFG.rows, ownParticipantId: CFG.participant_id
@@ -477,8 +501,13 @@ test('a second tab steering the same identity wins, and the buffer yields', () =
   predictor.submit('down', 5);
   // The server mirror says the sequence is already at 9 (another tab pressed).
   assert.equal(predictor.noteSequenceMirror(9), true);
-  assert.equal(predictor.summary().pending, 0, 'a foreign sequence retires ours');
+  assert.equal(predictor.summary().pending, 1, 'receipt does not prove that the simulation applied our input');
   assert.equal(predictor.summary().foreignApplied, 1);
+  // Only a frame carrying an applied watermark may retire the prediction.
+  const confirmed = structuredClone(scenario.frames[1]);
+  confirmed.p[0].is = 9;
+  predictor.observe(confirmed, { applied: true });
+  assert.equal(predictor.summary().pending, 0);
   // And our next seq must not collide with the server-owned counter.
   assert.equal(predictor.recordSeq(6), false, 'reusing a burned sequence is refused');
   assert.equal(predictor.recordSeq(10), true);

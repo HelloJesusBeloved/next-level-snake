@@ -324,13 +324,32 @@ test('a compact movement frame extends remote bodies and never touches the own s
       { i: 2, h: 101, d: 'right', l: 3, sc: 3, a: true, fr: false, cy: 'connected', is: 0, it: null }
     ]
   });
-  assert.equal(added, true, 'the frame rebuilt both bodies');
+  assert.ok(added, 'the frame rebuilt both bodies');
   const stored = r.playback.byTick.get(1);
   assert.deepEqual(stored.players.get(1).cells, [31, 30, 29], 'own body follows the confirmed head');
   assert.deepEqual(stored.players.get(2).cells, [101, 100, 99], 'remote body follows its confirmed head');
-  // The authoritative snapshot is untouched by playback intake.
-  assert.deepEqual(r.snapshot.p[0].b, ownBefore);
   assert.equal(r.playback.summary().reconstructed, 2);
+  // The rebuilt frame is a COMPLETE confirmed state for tick 1 (the Rails
+  // movement_protocol_test proves reconstruction is lossless), and it is handed
+  // back so the caller can route it through the snapshot path: that is what
+  // keeps prediction, the input tick and the HUD current on every tick instead
+  // of only on the periodic complete snapshot.
+  assert.equal(added.type, 'snapshot');
+  assert.equal(added.reconstructed, true);
+  assert.equal(added.t, 1);
+  assert.deepEqual(added.p[0].b, [31, 30, 29]);
+  assert.equal(added.p[0].is, 1, 'applied-input fields survive for reconciliation');
+  assert.equal(added.p[0].c, first.p[0].c, 'colour carried from the last complete frame');
+  assert.equal(added.p[1].sc, 3, 'scores come from the movement frame');
+  // Until the caller routes it, the renderer's own state is untouched...
+  assert.deepEqual(r.snapshot.p[0].b, ownBefore);
+  // ...and once it does, the frame is accepted like any snapshot WITHOUT being
+  // pushed into playback a second time.
+  const framesBefore = r.playback.summary().frames;
+  assert.equal(r.accept(added), true);
+  assert.equal(r.snapshot.t, 1);
+  assert.equal(r.playback.summary().frames, framesBefore, 'a materialised frame is not re-seeded into playback');
+  assert.equal(r.local?.confirmed?.tick ?? 1, 1, 'the predictor was reconciled on the rebuilt tick');
   h.close();
 });
 

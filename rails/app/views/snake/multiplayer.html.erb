@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step10-mobile4">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-3">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -283,8 +283,11 @@
         <form id="mp-presentation-form" class="mp-board-form">
           <label for="mp-presentation-choice">Presentation strategy</label>
           <select id="mp-presentation-choice" disabled>
-            <option value="classic">Classic Brawl · fully server-synchronized</option>
-            <option value="responsive">Responsive Brawl · instant local movement + smooth remote playback</option>
+            <%# Short labels on purpose: a <select> is sized by its longest option
+                in several mobile engines, and a 60+ character option is wider
+                than a phone. The descriptions live in the hint paragraph below. %>
+            <option value="classic">Classic Brawl</option>
+            <option value="responsive">Responsive Brawl</option>
           </select>
           <button id="mp-presentation-save" type="submit" class="btn btn--small" disabled>Save presentation</button>
         </form>
@@ -360,5 +363,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step10-mobile4"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-3"></script>
 <% end %>

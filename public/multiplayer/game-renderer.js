@@ -12,8 +12,8 @@
 // refresh. This trade-off is observable and switchable in Movement diagnostics.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step2-prediction';
-import { RemotePlayback } from './playback.js?v=step3-playback';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-3';
+import { RemotePlayback } from './playback.js?v=step11-responsive-3';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -284,12 +284,22 @@ export class MultiplayerGameRenderer {
   // A compact tick-ordered movement frame: only heads, lengths and scalars. The
   // playback buffer rebuilds each body from its own confirmed history, and
   // refuses (asking for a snapshot) rather than guessing when it cannot.
+  //
+  // Returns the complete snapshot that frame amounts to (or false). The caller
+  // routes it through the SAME path as a server snapshot, so in Responsive Brawl
+  // every tick — not just the periodic complete frame — reconciles local
+  // prediction, refreshes the authoritative own-state mirror the input path reads
+  // (its `tick`, alive/frozen gating), the scoreboard and the HUD. A rebuilt body
+  // is byte-identical to the server's (rails/test/simulation/movement_protocol_test),
+  // so nothing here is a guess; a frame that cannot be rebuilt is refused and a
+  // snapshot is requested instead.
   acceptMovement(frame) {
     if (!this.playback?.enabled) return false;
     const added = this.playback.pushMovement(frame, this.clock());
     const resync = this.playback.takeResyncRequest();
     if (resync) this.requestResync(resync);
-    return added;
+    if (!added) return false;
+    return this.playback.materialize(frame, this.snapshot) || false;
   }
 
   requestResync(reason) {
@@ -302,6 +312,10 @@ export class MultiplayerGameRenderer {
     this.onResyncNeeded(reason);
     return true;
   }
+
+  // A measured round trip (input ack or match heartbeat) sets how far the local
+  // view should lead the confirmed tick. See LocalPredictor#setLeadTargetMs.
+  setRoundTripMs(rttMs) { return this.local?.setLeadTargetMs(rttMs) ?? null; }
 
   noteInputQueued(seq) { this.local?.noteQueued(seq); }
   noteInputApplied(seq, tick) { this.local?.noteApplied(seq, tick); }
@@ -546,7 +560,9 @@ export class MultiplayerGameRenderer {
     // Complete snapshots are the recovery channel for playback too: they carry
     // whole bodies, so they re-seed remote history and correct any drift that a
     // compact movement chain could have accumulated.
-    if (this.playback?.enabled) {
+    // A frame materialised FROM the playback buffer is already in it; only a
+    // frame the server sent whole may re-seed remote history.
+    if (this.playback?.enabled && !snapshot.reconstructed) {
       this.playback.configure({ columns: snapshot.b.c, rows: snapshot.b.r });
       this.playback.pushSnapshot(snapshot, this.clock());
       this.playback.takeResyncRequest();

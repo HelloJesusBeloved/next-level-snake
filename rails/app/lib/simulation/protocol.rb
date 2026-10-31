@@ -30,7 +30,18 @@ module Simulation
         "q" => world.standings.map { |entry| { "i" => entry.id, "p" => entry.placement,
                                                 "sc" => entry.score, "sv" => entry.survived_ticks,
                                                 "lg" => entry.longest_length } },
-        "p" => world.snakes.map { |snake| encode_player(snake, world.columns) },
+        "p" => world.snakes.map do |snake|
+          player = encode_player(snake, world.columns)
+          # A queued acknowledgement does not mean the corresponding movement
+          # has happened. Responsive clients need the still-queued turns and
+          # outstanding growth to replay this exact authoritative state. Classic
+          # snapshots are unchanged.
+          if world.presentation_strategy == "responsive"
+            player["dq"] = snake.queue.map(&:name)
+            player["gr"] = snake.grow
+          end
+          player
+        end,
         "f" => world.foods.map { |food| encode_food(food, world.columns) },
         # Server wall clock for the grace countdown. The browser may render a
         # countdown from this, but transitions remain server-owned.
@@ -91,7 +102,12 @@ module Simulation
         "t" => world.tick,
         "ts" => (world.server_time_ms || 0),
         "f" => world.foods.map { |food| encode_food(food, world.columns) },
-        "p" => world.snakes.map { |snake| encode_movement_player(snake, world.columns) }
+        # Compact frames need the same reconciliation metadata as full frames.
+        "p" => world.snakes.map do |snake|
+          encode_movement_player(snake, world.columns).merge(
+            "dq" => snake.queue.map(&:name), "gr" => snake.grow
+          )
+        end
       }
     end
 

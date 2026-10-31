@@ -169,7 +169,7 @@ class Match < ApplicationRecord
 
   def client_summary(participant_id: nil)
     { id: id, mode: mode, presentation_strategy: presentation_strategy, status: status, tick: tick, tick_ms: tick_ms,
-      columns: columns, rows: rows, protocol_version: Simulation::Protocol::SNAPSHOT_VERSION,
+      columns: columns, rows: rows, growth: growth, protocol_version: Simulation::Protocol::SNAPSHOT_VERSION,
       participant_id: participant_id,
       # Step 10: the browser renders the countdown from server values only.
       freeze_grace_seconds: self.class.freeze_grace_seconds,

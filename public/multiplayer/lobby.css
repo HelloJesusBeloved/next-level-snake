@@ -358,6 +358,9 @@
 .mp-board-form select, .mp-board-form input {
   width: 100%; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--panel); color: var(--text); font: inherit;
+  /* A <select> must never be allowed to size itself by its longest option: on a
+     phone that is wider than the screen and the whole page zooms out to fit. */
+  max-width: 100%; box-sizing: border-box; text-overflow: ellipsis;
 }
 .mp-board-form select:focus-visible, .mp-board-form input:focus-visible { outline: 2px solid var(--green); }
 .mp-board-form :disabled { opacity: 0.65; cursor: not-allowed; }

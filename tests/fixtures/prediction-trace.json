@@ -18,28 +18,28 @@
       },
       "latency_100ms": {
         "one_way_ms": 100,
-        "uplink_ticks": 1,
+        "uplink_ticks": 2,
         "jitter_ms": [
 
         ]
       },
       "latency_200ms": {
         "one_way_ms": 200,
-        "uplink_ticks": 2,
+        "uplink_ticks": 4,
         "jitter_ms": [
 
         ]
       },
       "latency_300ms": {
         "one_way_ms": 300,
-        "uplink_ticks": 3,
+        "uplink_ticks": 6,
         "jitter_ms": [
 
         ]
       },
       "latency_260ms_jitter": {
         "one_way_ms": 260,
-        "uplink_ticks": 2,
+        "uplink_ticks": 5,
         "jitter_ms": [
           0,
           45,
@@ -10522,7 +10522,7 @@
     },
     {
       "name": "latency_0ms",
-      "note": "same four turns, 0 tick uplink, 0 ms downlink",
+      "note": "same four turns, 0 ms each way (0 ticks press-to-engine)",
       "ticks": 14,
       "turns": [
         {
@@ -11952,28 +11952,32 @@
           "dir": "down",
           "client_tick": 1,
           "one_way_ms": 0,
-          "uplink_ticks": 0
+          "uplink_ticks": 0,
+          "press_phase": 0.5
         },
         {
           "seq": 2,
           "dir": "left",
           "client_tick": 3,
           "one_way_ms": 0,
-          "uplink_ticks": 0
+          "uplink_ticks": 0,
+          "press_phase": 0.5
         },
         {
           "seq": 3,
           "dir": "up",
           "client_tick": 5,
           "one_way_ms": 0,
-          "uplink_ticks": 0
+          "uplink_ticks": 0,
+          "press_phase": 0.5
         },
         {
           "seq": 4,
           "dir": "right",
           "client_tick": 7,
           "one_way_ms": 0,
-          "uplink_ticks": 0
+          "uplink_ticks": 0,
+          "press_phase": 0.5
         }
       ],
       "one_way_ms": 0,
@@ -11984,58 +11988,58 @@
     },
     {
       "name": "latency_100ms",
-      "note": "same four turns, 1 tick uplink, 100 ms downlink",
-      "ticks": 15,
+      "note": "same four turns, 100 ms each way (2 ticks press-to-engine)",
+      "ticks": 16,
       "turns": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 2
+          "sent_at": 3
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 4
+          "sent_at": 5
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 6
+          "sent_at": 7
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 8
+          "sent_at": 9
         }
       ],
       "applied": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 2,
+          "sent_at": 3,
           "outcome": "accepted",
-          "tick": 3
+          "tick": 4
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 4,
+          "sent_at": 5,
           "outcome": "accepted",
-          "tick": 5
+          "tick": 6
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 6,
+          "sent_at": 7,
           "outcome": "accepted",
-          "tick": 7
+          "tick": 8
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 8,
+          "sent_at": 9,
           "outcome": "accepted",
-          "tick": 9
+          "tick": 10
         }
       ],
       "rejected": [
@@ -12352,16 +12356,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                431,
+                384,
                 407,
                 406
               ],
               "sv": 3,
               "lg": 3,
-              "is": 1,
-              "it": 3,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -12423,9 +12427,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 4,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12440,19 +12444,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "down",
               "b": [
-                23,
-                431,
-                407
+                408,
+                384,
+                407,
+                406
               ],
               "sv": 4,
-              "lg": 3,
+              "lg": 4,
               "is": 1,
-              "it": 3,
+              "it": 4,
               "el": null,
               "er": null,
               "fr": false,
@@ -12487,7 +12492,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -12514,9 +12519,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 5,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12531,19 +12536,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
-              "d": "left",
+              "d": "down",
               "b": [
-                22,
-                23,
-                431
+                0,
+                408,
+                384,
+                407
               ],
               "sv": 5,
-              "lg": 3,
-              "is": 2,
-              "it": 5,
+              "lg": 4,
+              "is": 1,
+              "it": 4,
               "el": null,
               "er": null,
               "fr": false,
@@ -12578,7 +12584,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -12605,9 +12611,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 6,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12622,19 +12628,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "left",
               "b": [
-                21,
-                22,
-                23
+                23,
+                0,
+                408,
+                384
               ],
               "sv": 6,
-              "lg": 3,
+              "lg": 4,
               "is": 2,
-              "it": 5,
+              "it": 6,
               "el": null,
               "er": null,
               "fr": false,
@@ -12669,7 +12676,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -12696,9 +12703,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 7,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12713,19 +12720,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
-              "d": "up",
+              "d": "left",
               "b": [
-                429,
-                21,
-                22
+                22,
+                23,
+                0,
+                408
               ],
               "sv": 7,
-              "lg": 3,
-              "is": 3,
-              "it": 7,
+              "lg": 4,
+              "is": 2,
+              "it": 6,
               "el": null,
               "er": null,
               "fr": false,
@@ -12760,7 +12768,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -12787,9 +12795,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 8,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12804,19 +12812,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "up",
               "b": [
-                405,
-                429,
-                21
+                430,
+                22,
+                23,
+                0
               ],
               "sv": 8,
-              "lg": 3,
+              "lg": 4,
               "is": 3,
-              "it": 7,
+              "it": 8,
               "el": null,
               "er": null,
               "fr": false,
@@ -12851,7 +12860,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -12878,9 +12887,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 9,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12895,19 +12904,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
                 406,
-                405,
-                429
+                430,
+                22,
+                23
               ],
               "sv": 9,
-              "lg": 3,
-              "is": 4,
-              "it": 9,
+              "lg": 4,
+              "is": 3,
+              "it": 8,
               "el": null,
               "er": null,
               "fr": false,
@@ -12942,7 +12952,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -12969,9 +12979,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 10,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -12986,19 +12996,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "right",
               "b": [
                 407,
                 406,
-                405
+                430,
+                22
               ],
               "sv": 10,
-              "lg": 3,
+              "lg": 4,
               "is": 4,
-              "it": 9,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -13033,7 +13044,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -13060,9 +13071,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 11,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -13077,19 +13088,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "right",
               "b": [
                 384,
                 407,
-                406
+                406,
+                430
               ],
               "sv": 11,
-              "lg": 3,
+              "lg": 4,
               "is": 4,
-              "it": 9,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -13124,7 +13136,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -13151,9 +13163,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 12,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -13168,19 +13180,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "right",
               "b": [
                 385,
                 384,
-                407
+                407,
+                406
               ],
               "sv": 12,
-              "lg": 3,
+              "lg": 4,
               "is": 4,
-              "it": 9,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -13215,7 +13228,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -13242,9 +13255,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 13,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -13259,19 +13272,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "right",
               "b": [
                 386,
                 385,
-                384
+                384,
+                407
               ],
               "sv": 13,
-              "lg": 3,
+              "lg": 4,
               "is": 4,
-              "it": 9,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -13306,7 +13320,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -13333,9 +13347,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 14,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -13350,19 +13364,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "right",
               "b": [
                 387,
                 386,
-                385
+                385,
+                384
               ],
               "sv": 14,
-              "lg": 3,
+              "lg": 4,
               "is": 4,
-              "it": 9,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -13397,7 +13412,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -13424,9 +13439,9 @@
             {
               "i": 1,
               "p": 1,
-              "sc": 0,
+              "sc": 1,
               "sv": 15,
-              "lg": 3
+              "lg": 4
             },
             {
               "i": 2,
@@ -13441,19 +13456,20 @@
               "i": 1,
               "n": "Predicted",
               "c": "#FF3355",
-              "sc": 0,
-              "l": 3,
+              "sc": 1,
+              "l": 4,
               "a": true,
               "d": "right",
               "b": [
                 388,
                 387,
-                386
+                386,
+                385
               ],
               "sv": 15,
-              "lg": 3,
+              "lg": 4,
               "is": 4,
-              "it": 9,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -13488,7 +13504,7 @@
           ],
           "f": [
             {
-              "c": 408,
+              "c": 177,
               "o": 1
             },
             {
@@ -13497,6 +13513,98 @@
             }
           ],
           "ts": 1575
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 16,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 1,
+              "sv": 16,
+              "lg": 4
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 16,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 1,
+              "l": 4,
+              "a": true,
+              "d": "right",
+              "b": [
+                389,
+                388,
+                387,
+                386
+              ],
+              "sv": 16,
+              "lg": 4,
+              "is": 4,
+              "it": 10,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                311,
+                310,
+                309
+              ],
+              "sv": 16,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 177,
+              "o": 1
+            },
+            {
+              "c": 88,
+              "o": 2
+            }
+          ],
+          "ts": 1680
         }
       ],
       "presses": [
@@ -13505,90 +13613,94 @@
           "dir": "down",
           "client_tick": 1,
           "one_way_ms": 100,
-          "uplink_ticks": 1
+          "uplink_ticks": 2,
+          "press_phase": 0.5
         },
         {
           "seq": 2,
           "dir": "left",
           "client_tick": 3,
           "one_way_ms": 100,
-          "uplink_ticks": 1
+          "uplink_ticks": 2,
+          "press_phase": 0.5
         },
         {
           "seq": 3,
           "dir": "up",
           "client_tick": 5,
           "one_way_ms": 100,
-          "uplink_ticks": 1
+          "uplink_ticks": 2,
+          "press_phase": 0.5
         },
         {
           "seq": 4,
           "dir": "right",
           "client_tick": 7,
           "one_way_ms": 100,
-          "uplink_ticks": 1
+          "uplink_ticks": 2,
+          "press_phase": 0.5
         }
       ],
       "one_way_ms": 100,
-      "uplink_ticks": 1,
+      "uplink_ticks": 2,
       "jitter_ms": [
 
       ]
     },
     {
       "name": "latency_200ms",
-      "note": "same four turns, 2 tick uplink, 200 ms downlink",
-      "ticks": 16,
+      "note": "same four turns, 200 ms each way (4 ticks press-to-engine)",
+      "ticks": 18,
       "turns": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 3
+          "sent_at": 5
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 5
+          "sent_at": 7
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 7
+          "sent_at": 9
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 9
+          "sent_at": 11
         }
       ],
       "applied": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 3,
-          "outcome": "accepted",
-          "tick": 4
-        },
-        {
-          "seq": 2,
-          "dir": "left",
           "sent_at": 5,
           "outcome": "accepted",
           "tick": 6
         },
         {
-          "seq": 3,
-          "dir": "up",
+          "seq": 2,
+          "dir": "left",
           "sent_at": 7,
           "outcome": "accepted",
           "tick": 8
         },
         {
-          "seq": 4,
-          "dir": "right",
+          "seq": 3,
+          "dir": "up",
           "sent_at": 9,
           "outcome": "accepted",
           "tick": 10
+        },
+        {
+          "seq": 4,
+          "dir": "right",
+          "sent_at": 11,
+          "outcome": "accepted",
+          "tick": 12
         }
       ],
       "rejected": [
@@ -13996,16 +14108,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                227,
+                204,
                 203,
                 202
               ],
               "sv": 4,
               "lg": 3,
-              "is": 1,
-              "it": 4,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -14087,16 +14199,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                251,
-                227,
+                205,
+                204,
                 203
               ],
               "sv": 5,
               "lg": 3,
-              "is": 1,
-              "it": 4,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -14178,15 +14290,15 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "left",
+              "d": "down",
               "b": [
-                250,
-                251,
-                227
+                229,
+                205,
+                204
               ],
               "sv": 6,
               "lg": 3,
-              "is": 2,
+              "is": 1,
               "it": 6,
               "el": null,
               "er": null,
@@ -14269,15 +14381,15 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "left",
+              "d": "down",
               "b": [
-                249,
-                250,
-                251
+                253,
+                229,
+                205
               ],
               "sv": 7,
               "lg": 3,
-              "is": 2,
+              "is": 1,
               "it": 6,
               "el": null,
               "er": null,
@@ -14360,15 +14472,15 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "up",
+              "d": "left",
               "b": [
-                225,
-                249,
-                250
+                252,
+                253,
+                229
               ],
               "sv": 8,
               "lg": 3,
-              "is": 3,
+              "is": 2,
               "it": 8,
               "el": null,
               "er": null,
@@ -14451,15 +14563,15 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "up",
+              "d": "left",
               "b": [
-                201,
-                225,
-                249
+                251,
+                252,
+                253
               ],
               "sv": 9,
               "lg": 3,
-              "is": 3,
+              "is": 2,
               "it": 8,
               "el": null,
               "er": null,
@@ -14542,15 +14654,15 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
-                202,
-                201,
-                225
+                227,
+                251,
+                252
               ],
               "sv": 10,
               "lg": 3,
-              "is": 4,
+              "is": 3,
               "it": 10,
               "el": null,
               "er": null,
@@ -14633,15 +14745,15 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
                 203,
-                202,
-                201
+                227,
+                251
               ],
               "sv": 11,
               "lg": 3,
-              "is": 4,
+              "is": 3,
               "it": 10,
               "el": null,
               "er": null,
@@ -14728,12 +14840,12 @@
               "b": [
                 204,
                 203,
-                202
+                227
               ],
               "sv": 12,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -14824,7 +14936,7 @@
               "sv": 13,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -14915,7 +15027,7 @@
               "sv": 14,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -15006,7 +15118,7 @@
               "sv": 15,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -15097,7 +15209,7 @@
               "sv": 16,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -15141,6 +15253,188 @@
             }
           ],
           "ts": 1680
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 17,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 17,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 17,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                209,
+                208,
+                207
+              ],
+              "sv": 17,
+              "lg": 3,
+              "is": 4,
+              "it": 12,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                251,
+                250,
+                249
+              ],
+              "sv": 17,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 254,
+              "o": 1
+            },
+            {
+              "c": 390,
+              "o": 2
+            }
+          ],
+          "ts": 1785
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 18,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 18,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 18,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                210,
+                209,
+                208
+              ],
+              "sv": 18,
+              "lg": 3,
+              "is": 4,
+              "it": 12,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                252,
+                251,
+                250
+              ],
+              "sv": 18,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 254,
+              "o": 1
+            },
+            {
+              "c": 390,
+              "o": 2
+            }
+          ],
+          "ts": 1890
         }
       ],
       "presses": [
@@ -15149,90 +15443,94 @@
           "dir": "down",
           "client_tick": 1,
           "one_way_ms": 200,
-          "uplink_ticks": 2
+          "uplink_ticks": 4,
+          "press_phase": 0.5
         },
         {
           "seq": 2,
           "dir": "left",
           "client_tick": 3,
           "one_way_ms": 200,
-          "uplink_ticks": 2
+          "uplink_ticks": 4,
+          "press_phase": 0.5
         },
         {
           "seq": 3,
           "dir": "up",
           "client_tick": 5,
           "one_way_ms": 200,
-          "uplink_ticks": 2
+          "uplink_ticks": 4,
+          "press_phase": 0.5
         },
         {
           "seq": 4,
           "dir": "right",
           "client_tick": 7,
           "one_way_ms": 200,
-          "uplink_ticks": 2
+          "uplink_ticks": 4,
+          "press_phase": 0.5
         }
       ],
       "one_way_ms": 200,
-      "uplink_ticks": 2,
+      "uplink_ticks": 4,
       "jitter_ms": [
 
       ]
     },
     {
       "name": "latency_300ms",
-      "note": "same four turns, 3 tick uplink, 300 ms downlink",
-      "ticks": 17,
+      "note": "same four turns, 300 ms each way (6 ticks press-to-engine)",
+      "ticks": 20,
       "turns": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 4
+          "sent_at": 7
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 6
+          "sent_at": 9
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 8
+          "sent_at": 11
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 10
+          "sent_at": 13
         }
       ],
       "applied": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 4,
+          "sent_at": 7,
           "outcome": "accepted",
-          "tick": 5
+          "tick": 8
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 6,
+          "sent_at": 9,
           "outcome": "accepted",
-          "tick": 7
+          "tick": 10
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 8,
+          "sent_at": 11,
           "outcome": "accepted",
-          "tick": 9
+          "tick": 12
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 10,
+          "sent_at": 13,
           "outcome": "accepted",
-          "tick": 11
+          "tick": 14
         }
       ],
       "rejected": [
@@ -15731,16 +16029,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                182,
+                159,
                 158,
                 157
               ],
               "sv": 5,
               "lg": 3,
-              "is": 1,
-              "it": 5,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -15822,16 +16120,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                206,
-                182,
+                160,
+                159,
                 158
               ],
               "sv": 6,
               "lg": 3,
-              "is": 1,
-              "it": 5,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -15913,16 +16211,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "left",
+              "d": "right",
               "b": [
-                205,
-                206,
-                182
+                161,
+                160,
+                159
               ],
               "sv": 7,
               "lg": 3,
-              "is": 2,
-              "it": 7,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -16004,16 +16302,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "left",
+              "d": "down",
               "b": [
-                204,
-                205,
-                206
+                185,
+                161,
+                160
               ],
               "sv": 8,
               "lg": 3,
-              "is": 2,
-              "it": 7,
+              "is": 1,
+              "it": 8,
               "el": null,
               "er": null,
               "fr": false,
@@ -16095,16 +16393,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "up",
+              "d": "down",
               "b": [
-                180,
-                204,
-                205
+                209,
+                185,
+                161
               ],
               "sv": 9,
               "lg": 3,
-              "is": 3,
-              "it": 9,
+              "is": 1,
+              "it": 8,
               "el": null,
               "er": null,
               "fr": false,
@@ -16186,16 +16484,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "up",
+              "d": "left",
               "b": [
-                156,
-                180,
-                204
+                208,
+                209,
+                185
               ],
               "sv": 10,
               "lg": 3,
-              "is": 3,
-              "it": 9,
+              "is": 2,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -16277,16 +16575,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "left",
               "b": [
-                157,
-                156,
-                180
+                207,
+                208,
+                209
               ],
               "sv": 11,
               "lg": 3,
-              "is": 4,
-              "it": 11,
+              "is": 2,
+              "it": 10,
               "el": null,
               "er": null,
               "fr": false,
@@ -16368,16 +16666,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
-                158,
-                157,
-                156
+                183,
+                207,
+                208
               ],
               "sv": 12,
               "lg": 3,
-              "is": 4,
-              "it": 11,
+              "is": 3,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -16459,16 +16757,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
                 159,
-                158,
-                157
+                183,
+                207
               ],
               "sv": 13,
               "lg": 3,
-              "is": 4,
-              "it": 11,
+              "is": 3,
+              "it": 12,
               "el": null,
               "er": null,
               "fr": false,
@@ -16554,12 +16852,12 @@
               "b": [
                 160,
                 159,
-                158
+                183
               ],
               "sv": 14,
               "lg": 3,
               "is": 4,
-              "it": 11,
+              "it": 14,
               "el": null,
               "er": null,
               "fr": false,
@@ -16650,7 +16948,7 @@
               "sv": 15,
               "lg": 3,
               "is": 4,
-              "it": 11,
+              "it": 14,
               "el": null,
               "er": null,
               "fr": false,
@@ -16741,7 +17039,7 @@
               "sv": 16,
               "lg": 3,
               "is": 4,
-              "it": 11,
+              "it": 14,
               "el": null,
               "er": null,
               "fr": false,
@@ -16832,7 +17130,7 @@
               "sv": 17,
               "lg": 3,
               "is": 4,
-              "it": 11,
+              "it": 14,
               "el": null,
               "er": null,
               "fr": false,
@@ -16876,6 +17174,279 @@
             }
           ],
           "ts": 1785
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 18,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 18,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 18,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                164,
+                163,
+                162
+              ],
+              "sv": 18,
+              "lg": 3,
+              "is": 4,
+              "it": 14,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                203,
+                202,
+                201
+              ],
+              "sv": 18,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 67,
+              "o": 1
+            },
+            {
+              "c": 417,
+              "o": 2
+            }
+          ],
+          "ts": 1890
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 19,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 19,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 19,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                165,
+                164,
+                163
+              ],
+              "sv": 19,
+              "lg": 3,
+              "is": 4,
+              "it": 14,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                204,
+                203,
+                202
+              ],
+              "sv": 19,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 67,
+              "o": 1
+            },
+            {
+              "c": 417,
+              "o": 2
+            }
+          ],
+          "ts": 1995
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 20,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 20,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 20,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                166,
+                165,
+                164
+              ],
+              "sv": 20,
+              "lg": 3,
+              "is": 4,
+              "it": 14,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                205,
+                204,
+                203
+              ],
+              "sv": 20,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 67,
+              "o": 1
+            },
+            {
+              "c": 417,
+              "o": 2
+            }
+          ],
+          "ts": 2100
         }
       ],
       "presses": [
@@ -16884,90 +17455,94 @@
           "dir": "down",
           "client_tick": 1,
           "one_way_ms": 300,
-          "uplink_ticks": 3
+          "uplink_ticks": 6,
+          "press_phase": 0.5
         },
         {
           "seq": 2,
           "dir": "left",
           "client_tick": 3,
           "one_way_ms": 300,
-          "uplink_ticks": 3
+          "uplink_ticks": 6,
+          "press_phase": 0.5
         },
         {
           "seq": 3,
           "dir": "up",
           "client_tick": 5,
           "one_way_ms": 300,
-          "uplink_ticks": 3
+          "uplink_ticks": 6,
+          "press_phase": 0.5
         },
         {
           "seq": 4,
           "dir": "right",
           "client_tick": 7,
           "one_way_ms": 300,
-          "uplink_ticks": 3
+          "uplink_ticks": 6,
+          "press_phase": 0.5
         }
       ],
       "one_way_ms": 300,
-      "uplink_ticks": 3,
+      "uplink_ticks": 6,
       "jitter_ms": [
 
       ]
     },
     {
       "name": "latency_260ms_jitter",
-      "note": "same four turns, 2 tick uplink, 260 ms downlink",
-      "ticks": 16,
+      "note": "same four turns, 260 ms each way (5 ticks press-to-engine)",
+      "ticks": 19,
       "turns": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 3
+          "sent_at": 6
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 5
+          "sent_at": 8
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 7
+          "sent_at": 10
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 9
+          "sent_at": 12
         }
       ],
       "applied": [
         {
           "seq": 1,
           "dir": "down",
-          "sent_at": 3,
+          "sent_at": 6,
           "outcome": "accepted",
-          "tick": 4
+          "tick": 7
         },
         {
           "seq": 2,
           "dir": "left",
-          "sent_at": 5,
+          "sent_at": 8,
           "outcome": "accepted",
-          "tick": 6
+          "tick": 9
         },
         {
           "seq": 3,
           "dir": "up",
-          "sent_at": 7,
+          "sent_at": 10,
           "outcome": "accepted",
-          "tick": 8
+          "tick": 11
         },
         {
           "seq": 4,
           "dir": "right",
-          "sent_at": 9,
+          "sent_at": 12,
           "outcome": "accepted",
-          "tick": 10
+          "tick": 13
         }
       ],
       "rejected": [
@@ -17375,16 +17950,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                385,
+                362,
                 361,
                 360
               ],
               "sv": 4,
               "lg": 3,
-              "is": 1,
-              "it": 4,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -17466,16 +18041,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "down",
+              "d": "right",
               "b": [
-                409,
-                385,
+                363,
+                362,
                 361
               ],
               "sv": 5,
               "lg": 3,
-              "is": 1,
-              "it": 4,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -17557,16 +18132,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "left",
+              "d": "right",
               "b": [
-                408,
-                409,
-                385
+                364,
+                363,
+                362
               ],
               "sv": 6,
               "lg": 3,
-              "is": 2,
-              "it": 6,
+              "is": 0,
+              "it": null,
               "el": null,
               "er": null,
               "fr": false,
@@ -17648,16 +18223,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "left",
+              "d": "down",
               "b": [
-                431,
-                408,
-                409
+                388,
+                364,
+                363
               ],
               "sv": 7,
               "lg": 3,
-              "is": 2,
-              "it": 6,
+              "is": 1,
+              "it": 7,
               "el": null,
               "er": null,
               "fr": false,
@@ -17739,16 +18314,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "up",
+              "d": "down",
               "b": [
-                407,
-                431,
-                408
+                412,
+                388,
+                364
               ],
               "sv": 8,
               "lg": 3,
-              "is": 3,
-              "it": 8,
+              "is": 1,
+              "it": 7,
               "el": null,
               "er": null,
               "fr": false,
@@ -17830,16 +18405,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "up",
+              "d": "left",
               "b": [
-                383,
-                407,
-                431
+                411,
+                412,
+                388
               ],
               "sv": 9,
               "lg": 3,
-              "is": 3,
-              "it": 8,
+              "is": 2,
+              "it": 9,
               "el": null,
               "er": null,
               "fr": false,
@@ -17921,16 +18496,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "left",
               "b": [
-                360,
-                383,
-                407
+                410,
+                411,
+                412
               ],
               "sv": 10,
               "lg": 3,
-              "is": 4,
-              "it": 10,
+              "is": 2,
+              "it": 9,
               "el": null,
               "er": null,
               "fr": false,
@@ -18012,16 +18587,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
-                361,
-                360,
-                383
+                386,
+                410,
+                411
               ],
               "sv": 11,
               "lg": 3,
-              "is": 4,
-              "it": 10,
+              "is": 3,
+              "it": 11,
               "el": null,
               "er": null,
               "fr": false,
@@ -18103,16 +18678,16 @@
               "sc": 0,
               "l": 3,
               "a": true,
-              "d": "right",
+              "d": "up",
               "b": [
                 362,
-                361,
-                360
+                386,
+                410
               ],
               "sv": 12,
               "lg": 3,
-              "is": 4,
-              "it": 10,
+              "is": 3,
+              "it": 11,
               "el": null,
               "er": null,
               "fr": false,
@@ -18198,12 +18773,12 @@
               "b": [
                 363,
                 362,
-                361
+                386
               ],
               "sv": 13,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 13,
               "el": null,
               "er": null,
               "fr": false,
@@ -18294,7 +18869,7 @@
               "sv": 14,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 13,
               "el": null,
               "er": null,
               "fr": false,
@@ -18385,7 +18960,7 @@
               "sv": 15,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 13,
               "el": null,
               "er": null,
               "fr": false,
@@ -18476,7 +19051,7 @@
               "sv": 16,
               "lg": 3,
               "is": 4,
-              "it": 10,
+              "it": 13,
               "el": null,
               "er": null,
               "fr": false,
@@ -18520,6 +19095,279 @@
             }
           ],
           "ts": 1680
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 17,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 17,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 17,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                367,
+                366,
+                365
+              ],
+              "sv": 17,
+              "lg": 3,
+              "is": 4,
+              "it": 13,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                201,
+                200,
+                199
+              ],
+              "sv": 17,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 78,
+              "o": 1
+            },
+            {
+              "c": 286,
+              "o": 2
+            }
+          ],
+          "ts": 1785
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 18,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 18,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 18,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                368,
+                367,
+                366
+              ],
+              "sv": 18,
+              "lg": 3,
+              "is": 4,
+              "it": 13,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                202,
+                201,
+                200
+              ],
+              "sv": 18,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 78,
+              "o": 1
+            },
+            {
+              "c": 286,
+              "o": 2
+            }
+          ],
+          "ts": 1890
+        },
+        {
+          "v": 1,
+          "m": 4242,
+          "strategy": "responsive",
+          "s": "running",
+          "t": 19,
+          "r": "brawl",
+          "b": {
+            "c": 24,
+            "r": 18
+          },
+          "e": null,
+          "w": 1,
+          "q": [
+            {
+              "i": 1,
+              "p": 1,
+              "sc": 0,
+              "sv": 19,
+              "lg": 3
+            },
+            {
+              "i": 2,
+              "p": 2,
+              "sc": 0,
+              "sv": 19,
+              "lg": 3
+            }
+          ],
+          "p": [
+            {
+              "i": 1,
+              "n": "Predicted",
+              "c": "#FF3355",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                369,
+                368,
+                367
+              ],
+              "sv": 19,
+              "lg": 3,
+              "is": 4,
+              "it": 13,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            },
+            {
+              "i": 2,
+              "n": "Remote",
+              "c": "#33FF55",
+              "sc": 0,
+              "l": 3,
+              "a": true,
+              "d": "right",
+              "b": [
+                203,
+                202,
+                201
+              ],
+              "sv": 19,
+              "lg": 3,
+              "is": 0,
+              "it": null,
+              "el": null,
+              "er": null,
+              "fr": false,
+              "gu": null,
+              "cy": "connected",
+              "fz": 0
+            }
+          ],
+          "f": [
+            {
+              "c": 78,
+              "o": 1
+            },
+            {
+              "c": 286,
+              "o": 2
+            }
+          ],
+          "ts": 1995
         }
       ],
       "presses": [
@@ -18528,32 +19376,36 @@
           "dir": "down",
           "client_tick": 1,
           "one_way_ms": 260,
-          "uplink_ticks": 2
+          "uplink_ticks": 5,
+          "press_phase": 0.5
         },
         {
           "seq": 2,
           "dir": "left",
           "client_tick": 3,
           "one_way_ms": 260,
-          "uplink_ticks": 2
+          "uplink_ticks": 5,
+          "press_phase": 0.5
         },
         {
           "seq": 3,
           "dir": "up",
           "client_tick": 5,
           "one_way_ms": 260,
-          "uplink_ticks": 2
+          "uplink_ticks": 5,
+          "press_phase": 0.5
         },
         {
           "seq": 4,
           "dir": "right",
           "client_tick": 7,
           "one_way_ms": 260,
-          "uplink_ticks": 2
+          "uplink_ticks": 5,
+          "press_phase": 0.5
         }
       ],
       "one_way_ms": 260,
-      "uplink_ticks": 2,
+      "uplink_ticks": 5,
       "jitter_ms": [
         0,
         45,

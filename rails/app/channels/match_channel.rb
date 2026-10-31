@@ -118,7 +118,7 @@ class MatchChannel < ApplicationCable::Channel
   def heartbeat
     now = Time.current
     touch_presence!(now: now)
-    transmit({ type: "presence", at: now.iso8601(6), participant: @participant&.id,
+    transmit({ type: "presence", match: @match.id, at: now.iso8601(6), participant: @participant&.id,
                connection: @participant&.connection_state })
   end
 
