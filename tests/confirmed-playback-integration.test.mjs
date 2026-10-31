@@ -37,7 +37,7 @@ test('duplicates and late frames do not trigger a false gap; real gaps request r
   assert.equal(pb.pushMovement(compact(1, { h: 126, fr: false }), 105), true);
   assert.equal(pb.pushMovement(compact(1, { h: 126, fr: false }), 110), false);
   assert.equal(pb.pushMovement(compact(0, { h: 125, fr: false }), 111), false);
-  assert.equal(pb.takeResyncRequest(), null);
+  assert.ok(!pb.takeResyncRequest(), 'no resync is requested for a duplicate or late packet');
   assert.equal(pb.pushMovement(compact(4, { h: 129, fr: false }), 420), false);
   assert.ok(pb.takeResyncRequest(), 'a missing tick needs an authoritative snapshot');
   assert.ok(pb.pushSnapshot(snapshot(4, { b: [129, 128, 127] }), 420));

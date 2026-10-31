@@ -159,19 +159,23 @@ test('late authoritative corrections never make the rendered head skip cells', a
   }
 });
 
-test('a burst of confirmed updates is painted at a bounded grid cadence', () => {
+test('the painted snake moves only when the server confirms a step', () => {
   const { local, set } = make();
   const seed = frame(0);
   local.observe(seed);
   assert.equal(local.displayFrame(seed).p[0].b[0], 125);
-  set(16); local.runTick();
-  assert.equal(local.displayFrame(seed).p[0].b[0], 125, 'do not sprint on the first burst packet');
-  set(32); local.runTick();
-  assert.equal(local.displayFrame(seed).p[0].b[0], 125, 'do not paint two cells in one refresh');
-  set(70);
-  assert.equal(local.displayFrame(seed).p[0].b[0], 126);
-  set(140);
-  assert.equal(local.displayFrame(seed).p[0].b[0], 127);
+  // No new frame: no movement, however much time passes or how often the display
+  // refreshes. This is the guarantee that makes self-driven movement impossible.
+  for (const at of [16, 32, 70, 140, 1000, 5000]) {
+    set(at);
+    assert.equal(local.advance(at), 0);
+    assert.equal(local.displayFrame(seed).p[0].b[0], 125, `moved with no server frame at ${at}ms`);
+  }
+  // One confirmed frame: exactly one cell.
+  local.observe(frame(1, { b: [126, 125, 124] }));
+  assert.equal(local.displayFrame(frame(1)).p[0].b[0], 126);
+  local.observe(frame(2, { b: [127, 126, 125] }));
+  assert.equal(local.displayFrame(frame(2)).p[0].b[0], 127);
 });
 
 test('disabling and re-enabling never paints a prior match body', () => {
@@ -199,7 +203,7 @@ test('jitter, duplicates, dropped ticks and outages keep the displayed snake con
   }
   updates.push({ ...updates[4], at: updates[4].at + 10 }); // duplicate
   updates.sort((a, b) => a.at - b.at);
-  let next = 0, painted = null, priorHead = null;
+  let next = 0, painted = null, priorHead = null, priorTick = null;
   for (let at = 0; at <= 3_000; at += 5) {
     set(at);
     while (next < updates.length && updates[next].at <= at) {
@@ -210,11 +214,23 @@ test('jitter, duplicates, dropped ticks and outages keep the displayed snake con
     local.advance(at);
     if (!painted || !local.active) continue;
     const own = local.displayFrame(painted).p[0];
-    if (priorHead !== null) assert.ok(distance(priorHead, own.b[0]) <= 1);
-    for (let i = 1; i < own.b.length; i++) assert.ok(distance(own.b[i - 1], own.b[i]) <= 1);
+    // The painted body is always the newest CONFIRMED one, so it is connected and
+    // every cell was reported by the server. A dropped tick legitimately advances
+    // the snake more than one cell: painting a cell in between would invent
+    // movement the server never confirmed, which is exactly what Classic does not
+    // do either.
+    for (let i = 1; i < own.b.length; i++) assert.ok(distance(own.b[i - 1], own.b[i]) <= 1,
+      `body disconnected between segments ${i - 1} and ${i}`);
+    if (priorHead !== null && priorTick !== null) {
+      const steps = Math.max(1, painted.t - priorTick);
+      assert.ok(distance(priorHead, own.b[0]) <= steps,
+        `head moved ${distance(priorHead, own.b[0])} cells over ${steps} confirmed tick(s)`);
+    }
     priorHead = own.b[0];
+    priorTick = painted.t;
   }
-  assert.ok(local.summary().staleFrames > 0, 'late frames are ignored');
-  assert.ok(local.summary().lead <= local.summary().limits.maxLeadTicks, 'outage does not run away');
-  assert.equal(priorHead, local.state().body[0], 'the visual path settles');
+  assert.ok(local.summary().staleFrames + local.summary().duplicateFrames > 0,
+    'late and duplicate frames are ignored, not applied');
+  assert.equal(local.summary().lead, 0, 'no speculative lead exists to run away');
+  assert.equal(priorHead, local.state().body[0], 'the painted head is the confirmed head');
 });

@@ -77,7 +77,7 @@ export class RemotePlayback {
     return {
       frames: 0, movementFrames: 0, snapshotFrames: 0, dropped: 0, duplicates: 0, outOfOrder: 0,
       missingTicks: 0, gaps: 0, underruns: 0, resyncs: 0, staleDrops: 0,
-      delayRaised: 0, delayLowered: 0, adaptSteps: 0, samples: 0, interpolatedFrames: 0,
+      delayRaised: 0, delayLowered: 0, adaptSteps: 0, samples: 0, steppedFrames: 0,
       heldFrames: 0, wrapSegments: 0, reconstructed: 0, reconstructRejects: 0
     };
   }
@@ -161,9 +161,14 @@ export class RemotePlayback {
       return false;
     }
     if (frame.t !== previous.tick + 1) {
-      // Movement frames only make sense as a contiguous chain. A jump means the
-      // chain is broken, and rebuilding a body across it would be a guess.
+      // Movement frames only make sense as a contiguous chain: a body is rebuilt
+      // by shifting the previous one, so a jump means the chain is broken and
+      // rebuilding across it would be a guess. Ask for an authoritative snapshot
+      // IMMEDIATELY rather than waiting for a large gap. Without this every later
+      // compact frame is refused too, and the remote snakes appear frozen until
+      // the next periodic full snapshot happens to arrive.
       this.noteGap(previous.tick, frame.t);
+      this.requestResync(`broken movement chain at tick ${frame.t}`);
       return false;
     }
     const players = new Map();
@@ -467,79 +472,28 @@ export class RemotePlayback {
     };
     // Interpolation needs BOTH adjacent confirmed ticks. Without the next one the
     // display holds exactly where the server last confirmed it.
-    if (!older || !newer) {
-      sample.players = older ? older.players : null;
+    if (!older) {
+      sample.players = null;
+      sample.food = null;
       sample.interpolated = false;
-      if (older) this.stats.heldFrames += 1;
       return sample;
     }
-    sample.players = this.blend(older, newer, alpha);
-    sample.interpolated = true;
-    this.stats.interpolatedFrames += 1;
+    // Whole confirmed cells only, at the playhead's tick. A snake is a path of
+    // grid squares, so it is painted square by square on tick boundaries — the
+    // same stepping the local snake and Classic have always had. Blending
+    // fractional positions between two confirmed ticks made remote snakes look
+    // like they were gliding across the board instead of moving.
+    //
+    // Nothing else about the buffer changes: it still holds remote players a
+    // bounded distance behind the live edge, still adapts its delay to measured
+    // jitter, still refuses to fabricate movement past the newest confirmed
+    // tick. Only the pixels are discrete now.
+    sample.players = older.players;
+    sample.food = Array.isArray(older.food) ? older.food : null;
+    sample.interpolated = false;
+    if (!newer) this.stats.heldFrames += 1;
+    this.stats.steppedFrames += 1;
     return sample;
-  }
-
-  // Per segment: from where it is in the OLDER frame to where the SAME segment
-  // is in the newer frame, in continuous toroidal space. Length differences are
-  // handled by clamping to the older body (a growing tail stays put; a vacated
-  // tail is simply not drawn).
-  blend(older, newer, alpha) {
-    const out = new Map();
-    for (const [id, next] of newer.players) {
-      const before = older.players.get(id);
-      if (!before) { out.set(id, next); continue; }
-      const cells = [];
-      for (let index = 0; index < next.cells.length; index += 1) {
-        const to = next.cells[index];
-        const from = before.cells[Math.min(index, before.cells.length - 1)];
-        if (!Number.isInteger(to) || !Number.isInteger(from)) {
-          cells.push({ cell: to, x: to % this.columns, y: Math.floor(to / this.columns), smooth: false });
-          continue;
-        }
-        const delta = this.toroidalDelta(from, to);
-        const fx = from % this.columns; const fy = Math.floor(from / this.columns);
-        if (!delta) {
-          // Not a single-cell move: this segment is not animated at all. Its
-          // confirmed position is drawn, which is always a real server cell.
-          cells.push({ cell: to, x: to % this.columns, y: Math.floor(to / this.columns), smooth: false });
-          continue;
-        }
-        cells.push({
-          cell: to, from, wraps: delta.wraps, smooth: true,
-          // Continuous absolute coordinates, possibly outside [0, columns) /
-          // [0, rows) for exactly one tick while a snake straddles an edge.
-          x: fx + delta.dx * alpha,
-          y: fy + delta.dy * alpha
-        });
-        if (delta.wraps) this.stats.wrapSegments += 1;
-      }
-      out.set(id, { ...next, smooth: cells });
-    }
-    return out;
-  }
-
-  // Shortest step between two cells on a board whose edges are joined, in whole
-  // cells. Anything longer than a single cell is not a movement and is refused
-  // (that is what stops a cross-board interpolation).
-  toroidalDelta(from, to, columns = this.columns, rows = this.rows) {
-    if (!columns || !rows) return null;
-    const fx = from % columns; const fy = Math.floor(from / columns);
-    const tx = to % columns; const ty = Math.floor(to / columns);
-    let dx = tx - fx;
-    let dy = ty - fy;
-    let wraps = false;
-    if (Math.abs(dx) > 1) {
-      const wrapped = dx > 0 ? dx - columns : dx + columns;
-      if (Math.abs(wrapped) === 1) { dx = wrapped; wraps = true; }
-      else return null;
-    }
-    if (Math.abs(dy) > 1) {
-      const wrapped = dy > 0 ? dy - rows : dy + rows;
-      if (Math.abs(wrapped) === 1) { dy = wrapped; wraps = true; }
-      else return null;
-    }
-    if (Math.abs(dx) + Math.abs(dy) > 1) return null;
-    return { dx, dy, wraps };
   }
 
   summary() {

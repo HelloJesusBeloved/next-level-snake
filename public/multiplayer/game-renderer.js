@@ -12,8 +12,8 @@
 // refresh. This trade-off is observable and switchable in Movement diagnostics.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-3';
-import { RemotePlayback } from './playback.js?v=step11-responsive-3';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-5';
+import { RemotePlayback } from './playback.js?v=step11-responsive-5';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -343,11 +343,11 @@ export class MultiplayerGameRenderer {
   // rAF callback only decides WHEN to advance; elapsed time decides HOW MUCH.
   startPredictionLoop() {
     if (this.predictionLoop !== null || !this.local?.enabled) return false;
-    // One coordinated animation loop for both halves of Responsive Brawl. The
-    // predicted snake only changes on a logical tick; the remote board can move
-    // on every display frame because it is interpolating between confirmed
-    // ticks. Both are driven from the same monotonic reading so the two halves
-    // of the board can never disagree about "now".
+    // One coordinated animation loop for both halves of Responsive Brawl. Every
+    // snake on the board now changes only on a confirmed logical tick: the local
+    // one when the server confirms a step, the remote ones when the playback
+    // playhead crosses into a new confirmed tick. Both are driven from the same
+    // monotonic reading so the two halves can never disagree about "now".
     const step = () => {
       this.predictionLoop = null;
       if (!this.local?.enabled) return;
@@ -356,8 +356,10 @@ export class MultiplayerGameRenderer {
       const smooth = this.playback?.enabled ? this.playback.sample(at) : null;
       this.lastPlaybackSample = smooth;
       if (!this.hidden && !this.viewPaused && this.snapshot) {
-        const playbackMoved = !!smooth && smooth.interpolated &&
-          (smooth.tick !== this.lastPaintedPlaybackTick || smooth.alpha < 0.999999);
+        // Remote players step on whole cells, so the board only changes when the
+        // playhead crosses into a new confirmed tick — never on a sub-tick blend.
+        const playbackMoved = !!smooth && !!smooth.players &&
+          smooth.tick !== this.lastPaintedPlaybackTick;
         if (playbackMoved) this.lastPaintedPlaybackTick = smooth.tick;
         if (ticks > 0) this.present(this.snapshot, at);
         else if (playbackMoved) this.presentPlayback(at);
@@ -397,13 +399,13 @@ export class MultiplayerGameRenderer {
                                  mode: this.predictionMode } : null,
       playback: this.playback ? {
         ...this.playback.summary(),
-        painted: !!this.lastPlaybackSample?.interpolated,
+        painted: !!this.lastPlaybackSample?.players,
         playbackDraws: this.playbackDraws,
         playbackDrawCostMs: Math.round(this.playbackDrawCost * 100) / 100,
         lastSample: this.lastPlaybackSample ? {
-          tick: this.lastPlaybackSample.tick, alpha: Math.round(this.lastPlaybackSample.alpha * 100) / 100,
+          tick: this.lastPlaybackSample.tick,
           buffered: this.lastPlaybackSample.buffered, delayMs: this.lastPlaybackSample.delayMs,
-          atLiveEdge: this.lastPlaybackSample.atLiveEdge, interpolated: this.lastPlaybackSample.interpolated
+          atLiveEdge: this.lastPlaybackSample.atLiveEdge, interpolated: false
         } : null
       } : null,
       lastSnapshotAgeMs: this.timings.previous ? Math.round(this.clock() - this.timings.previous.at) : null,
@@ -799,17 +801,37 @@ export class MultiplayerGameRenderer {
     }
     ctx.stroke();
 
-    // Food (zero allocations in loop)
-    for (let f = 0; f < snapshot.f.length; f++) {
-      const food = snapshot.f[f];
-      const x = food.c % cols; const y = Math.floor(food.c / cols);
-      let color = this.theme.red;
-      for (let p = 0; p < snapshot.p.length; p++) {
-        if (snapshot.p[p].i === food.o) {
-          if (HEX.test(snapshot.p[p].c)) color = snapshot.p[p].c;
-          break;
-        }
+    // Step 3: remote players are drawn from confirmed history a bounded distance
+    // behind the newest frame. `smooth` is null for Classic, which keeps the
+    // integer-cell path below byte-for-byte the old code.
+    const smooth = this.smoothPlayers();
+    const ownId = this.ownParticipantId;
+
+    // Food (zero allocations in the hot loop).
+    //
+    // A remote snake is deliberately held behind the newest frame, so its pellet
+    // must be drawn where the snake you can SEE is — not where the newest frame
+    // says it already ate it. Otherwise the pellet vanishes into empty board
+    // several ticks before the visible bite. Brawl food is per player ("o" is the
+    // owner), which makes the split exact: each pellet follows its own snake's
+    // displayed tick, and the local player's pellet follows the newest frame
+    // because the local snake does.
+    const heldFood = smooth && Array.isArray(smooth.food) ? smooth.food : null;
+    const heldByOwner = heldFood ? new Map() : null;
+    if (heldByOwner) {
+      for (let i = 0; i < heldFood.length; i++) {
+        const pellet = heldFood[i];
+        if (pellet && Number.isInteger(pellet.o)) heldByOwner.set(pellet.o, pellet);
       }
+    }
+    const pelletColor = (owner) => {
+      for (let p = 0; p < snapshot.p.length; p++) {
+        if (snapshot.p[p].i === owner && HEX.test(snapshot.p[p].c)) return snapshot.p[p].c;
+      }
+      return this.theme.red;
+    };
+    const drawPellet = (index, color) => {
+      const x = index % cols; const y = Math.floor(index / cols);
       ctx.fillStyle = color;
       ctx.beginPath();
       ctx.arc(ox + (x + 0.5) * cell, oy + (y + 0.5) * cell, Math.max(2, cell * 0.31), 0, Math.PI * 2);
@@ -817,67 +839,60 @@ export class MultiplayerGameRenderer {
       ctx.strokeStyle = 'rgba(255,255,255,.9)';
       ctx.lineWidth = Math.max(1, cell * .06);
       ctx.stroke();
+    };
+    const newestOwners = new Set();
+    for (let f = 0; f < snapshot.f.length; f++) {
+      const food = snapshot.f[f];
+      if (Number.isInteger(food.o)) newestOwners.add(food.o);
+      const remote = heldByOwner && food.o !== ownId ? heldByOwner.get(food.o) : null;
+      drawPellet(remote && Number.isInteger(remote.c) ? remote.c : food.c, pelletColor(food.o));
+    }
+    // A pellet the newest frame no longer carries, but whose (delayed) snake has
+    // not reached it yet on the board we are drawing: keep showing it until the
+    // bite you can actually see happens.
+    if (heldByOwner) {
+      for (const [owner, pellet] of heldByOwner) {
+        if (owner === ownId || newestOwners.has(owner)) continue;
+        if (!Number.isInteger(pellet.c)) continue;
+        drawPellet(pellet.c, pelletColor(owner));
+      }
     }
 
     // Snakes
     const followAlive = this.followId != null &&
       snapshot.p.some((player) => player.i === this.followId && player.a);
     const pad = Math.max(1, cell * .09);
-    // Step 3: remote players are drawn from the interpolated confirmed history.
-    // `smooth` is null for Classic and whenever this player's own snake is the
-    // predicted one, so the integer-cell path below is exactly the old code.
-    const smooth = this.smoothPlayers();
     for (let p = 0; p < snapshot.p.length; p++) {
       const player = snapshot.p[p];
       const color = HEX.test(player.c) ? player.c : '#808080';
       ctx.globalAlpha = (player.a ? 1 : 0.3) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
       ctx.fillStyle = color;
       const body = player.b;
-      const remote = smooth?.players?.get(player.i);
-      const useSmooth = !!(remote?.smooth) && !(player.i === this.ownParticipantId && this.localDisplay);
+      const remote = smooth && smooth.players ? smooth.players.get(player.i) : null;
+      // Whole confirmed cells for a remote snake; the newest confirmed cells for
+      // this player. No fractional coordinates exist anywhere in this path, so a
+      // snake can only ever occupy real grid squares — the same stepping as
+      // Classic and as the local snake.
+      const held = !!(remote && Array.isArray(remote.cells) && remote.cells.length) &&
+        player.i !== ownId;
+      const drawn = held ? remote.cells : body;
       ctx.beginPath();
-      if (useSmooth) {
-        // Every confirmed movement is drawn: each segment travels only to the
-        // cell it occupies in the next confirmed tick, so a Right->Up->Left
-        // sequence is three turns and never a diagonal shortcut.
-        const segs = remote.smooth;
-        const sizeF = Math.max(1, cell - pad * 2);
-        for (let part = 0; part < segs.length; part++) {
-          const seg = segs[part];
-          if (!seg.smooth) {
-            const left = Math.round(ox + seg.x * cell + pad);
-            const top = Math.round(oy + seg.y * cell + pad);
-            ctx.rect(left, top, Math.max(1, Math.round(cell - pad * 2)), Math.max(1, Math.round(cell - pad * 2)));
-            continue;
-          }
-          // A segment straddling an edge is drawn on BOTH sides for one tick, so
-          // it slides off one edge and on to the other. It is never dragged
-          // across the board.
-          const xs = [seg.x];
-          const ys = [seg.y];
-          if (seg.x < 0) xs.push(seg.x + cols);
-          if (seg.x > cols - 1) xs.push(seg.x - cols);
-          if (seg.y < 0) ys.push(seg.y + rows);
-          if (seg.y > rows - 1) ys.push(seg.y - rows);
-          for (const gx of xs) {
-            for (const gy of ys) ctx.rect(ox + gx * cell + pad, oy + gy * cell + pad, sizeF, sizeF);
-          }
-        }
-      } else {
-        for (let part = 0; part < body.length; part += 1) {
-          const index = body[part];
-          const x = index % cols; const y = Math.floor(index / cols);
-          const left = Math.round(ox + x * cell + pad);
-          const top = Math.round(oy + y * cell + pad);
-          const size = Math.max(1, Math.round(cell - pad * 2));
-          ctx.rect(left, top, size, size);
-        }
+      for (let part = 0; part < drawn.length; part += 1) {
+        const index = drawn[part];
+        const x = index % cols; const y = Math.floor(index / cols);
+        const left = Math.round(ox + x * cell + pad);
+        const top = Math.round(oy + y * cell + pad);
+        const size = Math.max(1, Math.round(cell - pad * 2));
+        ctx.rect(left, top, size, size);
       }
       ctx.fill();
 
-      // Following/own head double ring
-      if (body.length && (player.i === this.ownParticipantId || player.i === this.followId)) {
-        const index = body[0];
+      // Following/own head double ring. It reads the SAME cells that were just
+      // drawn, so the marker can never sit on a different square from the head it
+      // belongs to (it used to read the newest snapshot while a delayed snake was
+      // painted from history, which is the "detached head pointer" report).
+      if (drawn.length && (player.i === this.ownParticipantId || player.i === this.followId)) {
+        const index = drawn[0];
         const x = index % cols; const y = Math.floor(index / cols);
         const left = Math.round(ox + x * cell + pad);
         const top = Math.round(oy + y * cell + pad);
@@ -897,7 +912,13 @@ export class MultiplayerGameRenderer {
     for (let p = 0; p < snapshot.p.length; p++) {
       const player = snapshot.p[p];
       if (!player.a || !player.fr || !Array.isArray(player.b) || player.b.length === 0) continue;
-      const index = player.b[0];
+      // The ring goes on the head that was actually drawn, not on the newest
+      // frame's head, so it can never float off the snake.
+      const frozenRemote = smooth && smooth.players && player.i !== ownId
+        ? smooth.players.get(player.i) : null;
+      const frozenCells = frozenRemote && Array.isArray(frozenRemote.cells) && frozenRemote.cells.length
+        ? frozenRemote.cells : player.b;
+      const index = frozenCells[0];
       const x = index % cols; const y = Math.floor(index / cols);
       const cx = ox + (x + 0.5) * cell;
       const cy = oy + (y + 0.5) * cell;

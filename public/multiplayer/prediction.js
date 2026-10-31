@@ -147,9 +147,6 @@ export class LocalPredictor {
     // the tick the server just confirmed?" — instead of comparing a position
     // three ticks ahead against a position now.
     this.predictedHeads = new Map();
-    this.visualBody = null;
-    this.visualDirection = null;
-    this.visualAt = null;
   }
 
   // ---- configuration ------------------------------------------------------
@@ -204,7 +201,6 @@ export class LocalPredictor {
     this.reason = reason;
     if (was) {
       this.confirmed = null; this.predicted = null; this.pending = []; this.food = null;
-      this.visualBody = null; this.visualDirection = null; this.visualAt = null;
       this.lastRunAt = null; this.arrivalAt = null;
     }
     return was;
@@ -224,10 +220,7 @@ export class LocalPredictor {
     this.pending = [];
     this.highestSeq = 0;
     this.predictedHeads = new Map();
-    this.visualBody = null;
-    this.visualDirection = null;
-    this.visualAt = null;
-    this.food = null;
+                this.food = null;
     this.lastRunAt = null;
     this.arrivalAt = null;
     if (reconnect) this.stats.resetForReconnect += 1;
@@ -289,9 +282,6 @@ export class LocalPredictor {
     // incoming tick as the baseline the lead settles at the real delivery delay
     // (0–1 ticks on a LAN, ~3 at 300 ms) and shrinks again by itself after a
     // stall, because the server's catch-up frames overtake the stalled view.
-    const fresh = !this.predicted || !this.confirmed;
-    const ahead = fresh ? 0 :
-      Math.max(0, Math.min(this.limits.maxLeadTicks, this.predicted.tick - tick));
 
     this.stats.reconciliations += 1;
     this.arrivalAt = this.clock();
@@ -349,7 +339,6 @@ export class LocalPredictor {
     this.reschedulePending();
     // Never jump forward to an RTT-derived target on the first frame. On later
     // frames rebuild only as far as the player was already displayed.
-    this.replayAhead(fresh ? 0 : ahead);
     this.emit({ type: 'reconciled', tick, correction, pending: this.pending.length });
     return this.active;
   }
@@ -502,72 +491,33 @@ export class LocalPredictor {
   // this from a timer or from the draw callback and the result is identical,
   // because tick boundaries come from elapsed time, never from frame count.
   //
-  // The local tick is PHASE-LOCKED to the authoritative stream rather than
-  // free-running: while frames arrive on time the local view sits exactly
-  // `leadTarget` ticks past the newest confirmed tick (so a press lands on the
-  // tick the server will apply it), and it free-runs at the server's period only
-  // to cover frames that are late, missing or lost — up to the lead ceiling, where
-  // it waits instead of inventing a path. A free-running clock in phase with the
-  // arrivals was systematically a tick early or late depending on sub-millisecond
-  // ordering, which is one needless correction per corner.
+  // The own snake NEVER moves by itself. Positional prediction — a speculative
+  // lead, one-step-early turns, replayed reconciliation and the cell-by-cell
+  // "visual bridge" that walked a correction back — all painted cells the server
+  // had not confirmed, and each of those had to be dragged back afterwards. That
+  // is exactly what players saw as the snake moving erratically when nobody
+  // touched a key.
+  //
+  // So the local snake is painted from confirmed server cells only, exactly like
+  // Classic: this method executes no movement at all, which makes a self-driven
+  // cell unrepresentable rather than merely unlikely. Steering is still sent the
+  // instant a key or swipe lands and is applied by the server on the next tick.
   advance(now = this.clock()) {
-    if (!this.active) {
-      // Frozen, eliminated, pending, paused or finished: the server owns that
-      // state and the local view simply stops. No predicted tick is ever run
-      // through an authoritative freeze, and no death is ever painted early.
-      if (this.enabled && this.confirmed && (this.confirmed.frozen || this.confirmed.alive === false)) {
-        this.stats.frozenPauses += 1;
-      }
-      this.lastRunAt = now;
-      return 0;
+    if (this.enabled && this.confirmed &&
+        (this.confirmed.frozen || this.confirmed.alive === false)) {
+      this.stats.frozenPauses += 1;
     }
-    if (this.arrivalAt === null) this.arrivalAt = now;
-    const overdue = Math.max(0, now - this.arrivalAt);
-    // Ticks the server is late by, from the client's own monotonic clock.
-    const late = Math.floor(overdue / this.tickMs);
-    const ceiling = this.confirmed.tick + this.limits.maxLeadTicks;
-    const wanted = this.confirmed.tick + this.leadTarget + late;
-    const desired = Math.min(ceiling, wanted);
-    if (wanted > ceiling && this.predicted.tick >= ceiling) {
-      // Outage ceiling: counted, never hidden, and nothing moves until a frame.
-      this.stats.leadStalls += 1;
-    }
-    // An RTT update, late packet or resumed tab may move `desired` several
-    // ticks at once. Never run several movements in a single painted frame.
-    // Require a full logical tick since the last speculative move and let the
-    // lead converge gradually; confirmed snapshots can still correct state.
-    let ticks = 0;
-    if (this.lastRunAt === null) this.lastRunAt = now;
-    const deficit = desired - this.predicted.tick;
-    // Gently acquire a new lead after an RTT estimate or a stall. At most one
-    // cell per paint; a slightly shorter tick is preferable to a multi-cell jump.
-    const period = deficit > 1 ? this.tickMs * 0.65 : this.tickMs;
-    if (deficit > 0 && now - this.lastRunAt >= period) {
-      if (this.runTick()) {
-        ticks = 1;
-        this.lastRunAt = now;
-      }
-    }
-    return ticks;
+    this.lastRunAt = now;
+    return 0;
   }
 
   // Re-simulates the local view back out to where it was, from confirmed state.
   // Bounded by the same ceiling as normal play, so a long outage cannot make the
   // replay expensive.
-  replayAhead(ticks) {
-    if (!this.predicted || !ticks) return 0;
-    this.replaying = true;
-    let run = 0;
-    try {
-      while (run < ticks && run < this.limits.maxLeadTicks && this.predicted.tick <
-             this.confirmed.tick + this.limits.maxLeadTicks) {
-        if (!this.runTick()) break;
-        run += 1;
-      }
-    } finally {
-      this.replaying = false;
-    }
-    return run;
+  // No speculative lead is ever reconstructed: that replayed several cells in a
+  // single frame and was the other half of the "it moved by itself" report.
+  replayAhead() {
+    return 0;
   }
 
   runTick() {
@@ -748,71 +698,12 @@ export class LocalPredictor {
   // remote snakes, food, scoreboard, freeze rings, dust and results are read
   // from the authoritative frame exactly as before, so Classic and every other
   // theme/caching path is byte-for-byte the old renderer.
-  // Reconciliation can move the predicted head several cells at once when a
-  // late turn was accepted on a different server tick. Keep presentation
-  // separate from authority: walk the painted body toward the latest predicted
-  // body one legal grid cell at a time. A normal consecutive predicted step is
-  // adopted unchanged; only a discontinuous correction needs a bridge. The
-  // head ring reads the very same cells as the body. No score, collision or
-  // server state is inferred from this visual path.
-  visualCells() {
-    const target = this.predicted.body;
-    const now = this.clock();
-    if (!this.visualBody || !this.visualBody.length) {
-      this.visualBody = target.slice();
-      this.visualDirection = this.predicted.direction;
-      this.visualAt = now;
-      return this.visualBody;
-    }
-    const head = this.visualBody[0];
-    const targetHead = target[0];
-    if (head === targetHead) {
-      this.visualBody = target.slice();
-      this.visualDirection = this.predicted.direction;
-      return this.visualBody;
-    }
-    const distance = this.correctionDistance([head], targetHead);
-    // A genuine next snake step has the old head as the next body's neck.
-    if (distance === 1 && target[1] === head &&
-        (this.visualAt === null || now - this.visualAt >= this.tickMs * 0.65)) {
-      this.visualBody = target.slice();
-      this.visualDirection = this.predicted.direction;
-      this.visualAt = now;
-      return this.visualBody;
-    }
-    // Do not traverse more than one cell in a render, or run faster merely
-    // because requestAnimationFrame happens to fire more often on this phone.
-    if (this.visualAt !== null && now - this.visualAt < this.tickMs * 0.65) return this.visualBody;
-    let choice = null;
-    for (const [dir, [dx, dy]] of Object.entries(DIRECTIONS)) {
-      if (reverseOf(dir, this.visualDirection)) continue;
-      const x = wrap((head % this.columns) + dx, this.columns);
-      const y = wrap(Math.floor(head / this.columns) + dy, this.rows);
-      const next = cellIndex(x, y, this.columns);
-      if (this.visualBody.slice(0, -1).includes(next)) continue;
-      const remaining = this.correctionDistance([next], targetHead);
-      // Prefer a cell on the new body and the current predicted direction when
-      // routes are equally short. All choices remain one orthogonal grid step.
-      const score = remaining * 4 + (target.includes(next) ? 0 : 1) + (dir === this.predicted.direction ? 0 : 1);
-      if (!choice || score < choice.score) choice = { dir, next, score };
-    }
-    if (!choice) return this.visualBody; // hold rather than draw through itself
-    const nextBody = [choice.next, ...this.visualBody];
-    if (nextBody.length > target.length) nextBody.pop();
-    this.visualBody = nextBody;
-    this.visualDirection = choice.dir;
-    this.visualAt = now;
-    return this.visualBody;
-  }
-
   displayFrame(frame) {
-    if (!this.active || !frame || !Array.isArray(frame.p)) {
-      this.visualBody = null;
-      this.visualDirection = null;
-      this.visualAt = null;
-      return frame;
-    }
-    const cells = this.visualCells();
+    if (!this.active || !frame || !Array.isArray(frame.p)) return frame;
+    // rebuild() copies the confirmed body verbatim, so these ARE the server's
+    // cells: the head ring, the body and the freeze marker all read one array
+    // and can never disagree about where the head is.
+    const cells = this.predicted.body;
     const players = frame.p.map((player) => {
       if (Number(player.i) !== Number(this.ownParticipantId)) return player;
       // Playback may attach fractional remote coordinates to a frame. They
@@ -838,7 +729,7 @@ export class LocalPredictor {
       tick: this.predicted.tick, confirmedTick: this.confirmed?.tick ?? null,
       body: this.predicted.body.slice(), direction: this.predicted.direction,
       queue: this.predicted.queue.slice(), length: this.predicted.body.length,
-      blocked: this.predicted.blocked, lead: this.predicted.tick - (this.confirmed?.tick ?? 0),
+      blocked: this.predicted.blocked, lead: 0,
       score: this.confirmed?.score ?? null, alive: this.confirmed?.alive ?? false,
       frozen: this.confirmed?.frozen ?? false, official: true
     };
@@ -850,7 +741,8 @@ export class LocalPredictor {
       ...stats,
       enabled: this.enabled, active: this.active, reason: this.reason,
       mode: this.mode, tickMs: this.tickMs, growth: this.growth,
-      lead: predicted && confirmed ? predicted.tick - confirmed.tick : 0,
+      // Always zero: the own snake is server-stepped, so there is no local lead.
+      lead: 0,
       leadTarget: this.leadTarget,
       confirmedTick: confirmed?.tick ?? null, predictedTick: predicted?.tick ?? null,
       pending: pending.length,

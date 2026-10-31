@@ -205,7 +205,7 @@ test('classic Brawl paints the authoritative frame object and never a predicted 
   h.close();
 });
 
-test('responsive paints predicted cells for the own snake and authoritative cells for everyone else', () => {
+test('responsive paints confirmed cells for the own snake and leaves everyone else untouched', () => {
   const h = setup({ enabled: false });
   const remote = { i: 2, n: 'P2', c: '#0000FF', b: [100, 99, 98], l: 3, a: true, d: 'left', sc: 4,
                    sv: 0, lg: 3, fr: false, cy: 'connected' };
@@ -215,20 +215,18 @@ test('responsive paints predicted cells for the own snake and authoritative cell
     { columns: 24, rows: 18, mode: 'brawl', presentation_strategy: 'responsive' });
   assert.equal(h.renderer.local.enabled, true);
   settle(h, first);
-  assert.equal(h.renderer.local.active, true, 'a running, alive, unfrozen snake may be predicted');
-  // The player presses: locally immediate, still unconfirmed.
+  assert.equal(h.renderer.local.active, true, 'a running, alive, unfrozen snake is tracked');
+  // The player presses: the intent is accepted for sending immediately...
   assert.equal(h.renderer.predict('down', 1).rejectedReason, null);
-  // Two refreshes: the first establishes the predictor's monotonic phase, the
-  // second crosses one logical tick. That is the fixed-step contract — a tick
-  // boundary is defined by elapsed time, not by how many frames were drawn.
-  h.at(105); h.refresh(105);
-  h.at(210); h.refresh(210);
-  assert.ok(h.renderer.local.summary().predictedTicks >= 1, 'the local view ran a tick');
+  // ...but the own snake is NEVER painted ahead of the server. Speculative cells
+  // were what made it move erratically when nobody touched a key, so this is the
+  // behaviour the whole fix rests on.
+  for (const at of [105, 210, 420]) { h.at(at); h.refresh(at); }
+  assert.equal(h.renderer.local.summary().predictedTicks, 0, 'the client must not step the snake itself');
   const painted = h.renderer.paintOverride;
-  assert.ok(painted, 'a predicted display frame is in use');
-  assert.notEqual(painted.p[0].b[0], h.renderer.paintSnapshot.p[0].b[0],
-    'the own snake moved locally before the server agreed');
-  assert.equal(painted.p[0].pr, 1, 'the substituted cells are marked as predicted');
+  assert.ok(painted, 'a display frame is in use');
+  assert.deepEqual(painted.p[0].b, h.renderer.paintSnapshot.p[0].b,
+    'the own snake is painted from confirmed cells only');
   assert.equal(painted.p[1].b[0], 100, 'remote snakes are painted from the authoritative frame only');
   assert.deepEqual(painted.p[1], remote, 'remote player is the identical object, untouched');
   assert.equal(h.renderer.paintSnapshot.p[0].b[0], 3,
@@ -375,36 +373,33 @@ test('resync requests are throttled so a bad link cannot become a request storm'
   h.close();
 });
 
-test('remote playback is drawn only for remote players, with continuous coordinates', () => {
+test('remote playback is drawn only for remote players, on whole confirmed cells', () => {
   const h = setup({ enabled: false });
   const r = responsiveRenderer(h);
-  // Three adjacent confirmed ticks: interpolation needs a NEXT tick that exists.
+  // Three adjacent confirmed ticks of real server movement.
+  const confirmed = [[100, 99, 98], [101, 100, 99], [102, 101, 100]];
   r.accept(boardFrame(0));
-  r.accept(boardFrame(1, { own: [31, 30, 29], remote: [101, 100, 99] }));
-  r.accept(boardFrame(2, { own: [32, 31, 30], remote: [102, 101, 100] }));
-  // Drive the shared animation loop and record every sample. The FINAL sample is
-  // legitimately a hold once the fixture's last frame has been reached, so the
-  // interpolation assertion is made over the samples that had history ahead of
-  // them — which is the case the feature exists for.
+  r.accept(boardFrame(1, { own: [31, 30, 29], remote: confirmed[1] }));
+  r.accept(boardFrame(2, { own: [32, 31, 30], remote: confirmed[2] }));
   const samples = [];
-  for (let at = 0; at <= 240; at += 20) {
+  for (let at = 0; at <= 420; at += 20) {
     h.at(at);
     h.refresh(at);
     if (r.lastPlaybackSample) samples.push(r.lastPlaybackSample);
   }
   assert.ok(samples.length > 0, 'the loop produced playback samples');
-  const interpolated = samples.filter((sample) => sample.interpolated && sample.players?.get(2)?.smooth);
-  assert.ok(interpolated.length > 0, 'the remote snake must be interpolated between confirmed ticks');
-  const remote = interpolated[0].players.get(2);
-  for (const segment of remote.smooth) {
-    if (!segment.smooth) continue;
-    assert.ok(Number.isFinite(segment.x) && Number.isFinite(segment.y));
-    // Never more than the single cell the confirmed tick actually moved.
-    assert.ok(Math.abs(segment.x - (segment.from % 24)) <= 1);
-    assert.ok(Math.abs(segment.y - Math.floor(segment.from / 24)) <= 1);
+  for (const sample of samples) {
+    if (!sample.players) continue;
+    // No interpolation anywhere: the gliding came from fractional coordinates,
+    // so their absence is the actual regression guard.
+    assert.equal(sample.interpolated, false, 'remote snakes must not be interpolated');
+    const remote = sample.players.get(2);
+    assert.equal(remote.smooth, undefined, 'no fractional segment output');
+    // Every painted body is one of the confirmed bodies, cell for cell.
+    assert.ok(confirmed.some((body) => body.every((cell, i) => remote.cells[i] === cell)),
+      `remote body ${remote.cells} is not a confirmed body`);
   }
-  // And once history runs out the board holds a confirmed state rather than
-  // continuing to move on its own.
+  // Once history runs out the board holds a confirmed state rather than moving on.
   const last = samples.at(-1);
   assert.equal(last.interpolated, false);
   assert.ok(last.players?.get(2), 'a real confirmed body is still displayed');
@@ -487,4 +482,90 @@ test('diagnostics differ by strategy in the way the brief asks for', () => {
   assert.equal(classic.playback, null);
   assert.ok(responsive.playback.playbackDraws >= 0);
   assert.ok(responsive.playback.playbackDrawCostMs >= 0);
+});
+
+// ---- the three reported Responsive Brawl bugs ------------------------------
+
+test('a remote pellet is drawn until the snake you can see eats it', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  const pellet = { c: 101, o: 2 };
+  // The remote snake reaches its pellet at tick 2, so the newest frame no longer
+  // carries it — but the displayed remote snake is deliberately held behind and
+  // has not got there yet on screen.
+  r.accept(boardFrame(0, { remote: [99, 98, 97], extra: { f: [pellet] } }));
+  r.accept(boardFrame(1, { remote: [100, 99, 98], extra: { f: [pellet] } }));
+  r.accept(boardFrame(2, { remote: [101, 100, 99], extra: { f: [] } }));
+  h.at(60); h.refresh(60);
+  const sample = r.lastPlaybackSample;
+  assert.ok(sample && sample.players, 'playback produced a sample');
+  assert.ok(sample.tick < 2, `remote display must be held behind the newest tick, got ${sample.tick}`);
+  // The held frame is the one that still has the pellet.
+  assert.deepEqual(sample.food, [pellet], 'the sample carries the held frame food');
+  // And the canvas draws it, even though the newest authoritative frame dropped it.
+  const cols = 24, rows = 18;
+  const cell = Math.min(316 / cols, 237 / rows);
+  const wantX = (101 % cols + 0.5) * cell;
+  const wantY = (Math.floor(101 / cols) + 0.5) * cell;
+  const arcs = h.calls.filter((call) => call.name === 'arc');
+  assert.ok(arcs.length > 0, 'a pellet was drawn');
+  assert.ok(arcs.some((call) => Math.abs(call.args[0] - wantX) < 0.01 &&
+    Math.abs(call.args[1] - wantY) < 0.01),
+    `the pellet the visible snake has not reached yet must still be on the board: ${JSON.stringify(arcs.map((c) => c.args.slice(0, 2)))}`);
+  h.close();
+});
+
+test('remote snakes are drawn on whole confirmed cells, never between them', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  r.accept(boardFrame(0));
+  r.accept(boardFrame(1, { own: [31, 30, 29], remote: [101, 100, 99] }));
+  r.accept(boardFrame(2, { own: [32, 31, 30], remote: [102, 101, 100] }));
+  const cols = 24;
+  const cell = Math.min(316 / cols, 237 / 18);
+  const pad = Math.max(1, cell * 0.09);
+  const seen = [];
+  const validLefts = new Set();
+  const validTops = new Set();
+  for (let axis = 0; axis < 24; axis += 1) validLefts.add(Math.round(axis * cell + pad));
+  for (let axis = 0; axis < 18; axis += 1) validTops.add(Math.round(axis * cell + pad));
+  for (let at = 0; at <= 400; at += 20) {
+    h.at(at); h.refresh(at);
+    const sample = r.lastPlaybackSample;
+    if (!sample?.players) continue;
+    const remote = sample.players.get(2);
+    assert.equal(remote.smooth, undefined, 'no fractional segments may be produced');
+    // Every rect drawn for a body must land exactly on a grid square (allowing
+    // only the renderer's own integer-pixel rounding, which keeps edges crisp).
+    // A gliding snake shows up as a rect at a fractional cell position.
+    for (const rect of h.calls) if (rect.name === 'rect') seen.push(rect.args);
+    h.calls.length = 0;
+  }
+  assert.ok(seen.length > 0, 'snake segments were drawn');
+  for (const [left, top] of seen) {
+    assert.ok(validLefts.has(left) && validTops.has(top),
+      `a snake segment was drawn off-grid at ${left},${top}`);
+  }
+  h.close();
+});
+
+test('the own snake never paints a cell the server has not confirmed', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  r.accept(boardFrame(0));
+  assert.equal(r.predict('down', 1).rejectedReason, null, 'the press is still sent at once');
+  for (let at = 0; at <= 1000; at += 16) { h.at(at); h.refresh(at); }
+  const own = (r.paintOverride || r.paintSnapshot).p.find((player) => player.i === 1);
+  assert.deepEqual(own.b, [30, 29, 28], 'the own snake stayed on its confirmed cells');
+  assert.equal(r.local.summary().predictedTicks, 0, 'no speculative tick was executed');
+  // The head marker reads the same array that was drawn, so it cannot detach.
+  const cols = 24;
+  const cell = Math.min(316 / cols, 237 / 18);
+  const pad = Math.max(1, cell * 0.09);
+  const headLeft = Math.round((30 % cols) * cell + pad);
+  const rings = h.calls.filter((call) => call.name === 'strokeRect');
+  assert.ok(rings.length > 0, 'the head ring is drawn');
+  assert.ok(rings.some((call) => call.args[0] === headLeft),
+    'the head ring sits on the head that was drawn');
+  h.close();
 });

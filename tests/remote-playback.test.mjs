@@ -97,86 +97,98 @@ test('the playhead runs behind the live edge by the buffer delay, never ahead of
     'settled playback must lag the newest confirmed tick');
 });
 
-test('remote interpolation walks the confirmed path: every segment moves at most one cell', () => {
-  const s = scenario('turns');
-  const pb = playbackFor(s);
-  s.frames.forEach((frame, index) => pb.pushSnapshot(frame, index * TICK));
-  for (let index = 0; index < pb.frames.length - 1; index += 1) {
-    const older = pb.frames[index];
-    const newer = pb.frames[index + 1];
-    const blended = pb.blend(older, newer, 0.5);
-    for (const [id, player] of blended) {
-      for (const segment of player.smooth) {
-        if (!segment.smooth) continue;
-        const dx = Math.abs(segment.x - (segment.from % pb.columns));
-        const dy = Math.abs(segment.y - Math.floor(segment.from / pb.columns));
-        // Half a tick of movement: exactly 0.5 cells on one axis. Never a
-        // diagonal shortcut and never a jump across the board.
-        assert.ok(dx + dy <= 0.5001 + 1e-9, `segment of player ${id} moved ${dx + dy} cells in half a tick`);
-        assert.ok(dx <= 0.5 + 1e-9 && dy <= 0.5 + 1e-9, 'no diagonal interpolation');
+test('remote snakes step on whole confirmed cells, never between them', () => {
+  const s2 = scenario('turns');
+  const pb = playbackFor(s2);
+  s2.frames.forEach((frame, index) => pb.pushSnapshot(frame, index * TICK));
+  let seen = 0;
+  for (let time = 0; time <= s2.frames.at(-1).t * TICK; time += 4) {
+    const sample = pb.sample(time);
+    if (!sample || !sample.players) continue;
+    for (const [, player] of sample.players) {
+      // No fractional coordinates may exist at all: a snake is a path of grid
+      // squares, so gliding between two of them is the bug, not a feature.
+      assert.equal(player.smooth, undefined, 'fractional segment output must be gone');
+      assert.ok(Array.isArray(player.cells) && player.cells.length > 0);
+      for (const cell of player.cells) {
+        assert.ok(Number.isInteger(cell), `non-integer cell ${cell}`);
+        assert.ok(cell >= 0 && cell < pb.columns * pb.rows, `cell ${cell} off the board`);
       }
+      // Every cell is one the server confirmed at some tick of this match.
+      const confirmed = s2.frames.flatMap((frame) => frame.p.flatMap((entry) => entry.b));
+      for (const cell of player.cells) assert.ok(confirmed.includes(cell), `invented cell ${cell}`);
+      seen += 1;
     }
   }
+  assert.ok(seen > 20, `only sampled ${seen} player frames`);
+  assert.equal(pb.summary().steppedFrames > 0, true);
+  assert.equal(pb.summary().interpolatedFrames, undefined, 'no interpolation counter remains');
 });
 
-test('a turn is played as the turn it was, not as a diagonal cut', () => {
-  const s = scenario('turns');
-  // Tick 2 is the first tick where the head has turned down (engine-generated).
-  const pb = playbackFor(s);
-  s.frames.forEach((frame, index) => pb.pushSnapshot(frame, index * TICK));
-  const index = pb.frames.findIndex((frame) => frame.tick === 2);
-  assert.ok(index > 0, 'the fixture must contain the turning tick');
-  const older = pb.frames[index - 1];
-  const newer = pb.frames[index];
-  const before = older.players.get(1).cells[0];
-  const after = newer.players.get(1).cells[0];
-  assert.notEqual(before, after, 'the head really did move');
-  const blended = pb.blend(older, newer, 1);
-  const head = blended.get(1).smooth[0];
-  // At alpha 1 the interpolated head is EXACTLY the confirmed cell: playback
-  // never overshoots a confirmed position to "smooth out" a corner.
-  assert.equal(Math.round(head.x) + Math.round(head.y) * pb.columns, after);
-  assert.equal(head.wraps, false);
+test('a turn is played as the turn it was, on the tick the server confirmed it', () => {
+  const s2 = scenario('turns');
+  // Frames are delivered over time, so the playhead walks the whole match the
+  // way a live client's does.
+  const { samples } = runPlayback(s2);
+  // The invariant that replaces interpolation: whatever tick a sample reports,
+  // its cells are EXACTLY that tick's confirmed cells. So a corner is painted as
+  // the corner the server made, on the tick the server made it — never as a
+  // diagonal cut and never as a slide through it.
+  let turns = 0;
+  let previous = null;
+  for (const sample of samples) {
+    if (!sample.players) continue;
+    assert.deepEqual(sample.players.get(1).cells, confirmedBody(s2, sample.tick, 1),
+      `painted cells do not match confirmed tick ${sample.tick}`);
+    const head = sample.players.get(1).cells[0];
+    if (previous !== null && head !== previous) turns += 1;
+    previous = head;
+  }
+  assert.ok(turns >= 4, `the fixture's four turns must be visible, saw ${turns} head changes`);
 });
 
-test('a wrapped move is animated around the edge, never across the board', () => {
-  const s = scenario('wrap');
-  const columns = s.frames[0].b.c;
-  const pb = playbackFor(s);
-  s.frames.forEach((frame, index) => pb.pushSnapshot(frame, index * TICK));
+test('a wrapped move lands on the far edge cell, never mid-board', () => {
+  const s2 = scenario('wrap');
+  const columns = s2.frames[0].b.c;
+  const { samples } = runPlayback(s2);
   let wrapped = 0;
-  for (let index = 0; index < pb.frames.length - 1; index += 1) {
-    const older = pb.frames[index];
-    const newer = pb.frames[index + 1];
-    for (const [id, player] of pb.blend(older, newer, 0.5)) {
-      for (const segment of player.smooth) {
-        if (!segment.smooth) continue;
-        const fromX = segment.from % columns;
-        const toX = segment.cell % columns;
-        if (Math.abs(toX - fromX) <= 1) continue;
-        // This segment wrapped. Its continuous x must be within one cell of the
-        // edge it left, not halfway across the board.
-        wrapped += 1;
-        assert.ok(segment.wraps, 'a wrapped step must be flagged');
-        assert.ok(segment.x <= -0.49 || segment.x >= columns - 0.51,
-          `wrapped segment rendered at x=${segment.x}, which is a cross-board flight`);
-      }
+  let previous = null;
+  for (const sample of samples) {
+    if (!sample.players) continue;
+    const head = sample.players.get(1).cells[0];
+    // Every painted head is a confirmed cell of the tick being shown, so a wrap
+    // can only ever land on the far-edge cell the server reported.
+    assert.equal(head, confirmedBody(s2, sample.tick, 1)[0]);
+    if (previous !== null && head !== previous &&
+        Math.abs((head % columns) - (previous % columns)) > 1) {
+      wrapped += 1;
+      assert.ok(head % columns === 0 || head % columns === columns - 1 ||
+        previous % columns === 0 || previous % columns === columns - 1,
+        `wrapped head painted at column ${head % columns}, which is mid-board`);
     }
+    previous = head;
   }
-  assert.ok(wrapped > 0, 'fixture must actually wrap a snake');
+  assert.ok(wrapped > 0, 'the fixture must actually wrap a snake');
 });
 
-test('wrapping vertically is handled the same way', () => {
+test('wrapping vertically lands on the far row', () => {
   const pb = new RemotePlayback({ tickMs: 100, columns: 10, rows: 6, clock: () => 0 });
   pb.enable('responsive');
-  const body = (head) => ({ v: 1, type: 'snapshot', m: 1, s: 'running', t: 0, b: { c: 10, r: 6 },
+  const body = (head, t) => ({ v: 1, type: 'snapshot', m: 1, s: 'running', t, b: { c: 10, r: 6 },
     f: [], p: [{ i: 1, n: 'A', c: '#00FF00', b: [head, head - 10, head - 20], l: 3, a: true, d: 'down', sc: 0 }] });
-  pb.pushSnapshot(body(55), 0); // bottom row, row 5
-  pb.pushSnapshot({ ...body(5), t: 1 }, 100); // wrapped to row 0, same column
-  const blended = pb.blend(pb.frames[0], pb.frames[1], 0.5);
-  const head = blended.get(1).smooth[0];
-  assert.ok(head.wraps, 'vertical wrap flagged');
-  assert.ok(head.y <= -0.49 || head.y >= 5.49, `wrapped vertically to y=${head.y}`);
+  pb.pushSnapshot(body(55, 0), 0);   // bottom row, row 5
+  pb.pushSnapshot(body(5, 1), 100);  // wrapped to row 0, same column
+  const heads = new Set();
+  for (let time = 0; time <= 400; time += 5) {
+    const sample = pb.sample(time);
+    if (sample?.players) heads.add(sample.players.get(1).cells[0]);
+  }
+  assert.deepEqual([...heads].sort((a, b) => a - b), [5, 55],
+    `only the two confirmed cells may ever be painted, saw ${[...heads]}`);
+  for (const head of heads) {
+    const row = Math.floor(head / 10);
+    assert.ok(row === 0 || row === 5, `painted row ${row} is mid-board`);
+  }
 });
 
 test('playback never fabricates movement when confirmed history runs out', () => {
@@ -318,16 +330,14 @@ test('freeze, elimination and match end are respected without ever animating thr
   freeze.frames.forEach((frame, index) => pb.pushSnapshot(frame, index * TICK));
   const frozenTicks = freeze.frames.filter((frame) => frame.p[0].fr).map((frame) => frame.t);
   assert.ok(frozenTicks.length >= 2);
-  // A frozen snake's confirmed cells do not change, so interpolation is a hold.
-  for (const tick of frozenTicks.slice(1)) {
-    const newer = pb.byTick.get(tick);
-    const older = pb.byTick.get(tick - 1);
-    if (!newer || !older) continue;
-    const head = pb.blend(older, newer, 0.5).get(1).smooth[0];
-    const fromX = head.from % pb.columns;
-    const fromY = Math.floor(head.from / pb.columns);
-    assert.ok(Math.abs(head.x - fromX) <= 0.51 && Math.abs(head.y - fromY) <= 0.51,
-      'a frozen snake does not drift');
+  // A frozen snake's confirmed cells do not change, so painting whole cells is a
+  // natural hold: it cannot drift, and it cannot animate "through" the freeze.
+  const frozenBody = freeze.frames.find((entry) => entry.t === frozenTicks[0]).p[0].b;
+  for (const tick of frozenTicks) {
+    const stored = pb.byTick.get(tick);
+    if (!stored) continue;
+    assert.deepEqual(stored.players.get(1).cells, frozenBody,
+      `a frozen snake moved at tick ${tick}`);
   }
 
   const dead = scenario('eliminated');

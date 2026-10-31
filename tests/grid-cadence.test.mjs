@@ -206,7 +206,7 @@ test('cacheable multiplayer entry points and modified dependency imports carry t
   // have not changed since step 10 deliberately keep their old tag (their cached
   // copies are still correct). tests/asset-cache-tags.test.mjs checks that every
   // reference to one module agrees.
-  const release = 'step11-responsive-3';
+  const release = 'step11-responsive-5';
   const unchanged = 'step10-mobile4';
   const view = read('rails/app/views/snake/multiplayer.html.erb');
   assert.ok(view.includes(`/multiplayer/page.js?v=${release}`));

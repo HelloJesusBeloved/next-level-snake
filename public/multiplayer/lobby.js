@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-3';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-3';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-5';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-5';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-3';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-5';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -324,7 +324,7 @@ export function mountLobby(root) {
       `Remote intake: ${pb.snapshotFrames} full / ${pb.movementFrames} compact frames` +
         ` · bodies rebuilt ${pb.reconstructed} · refused ${pb.reconstructRejects}` +
         ` · duplicates ${pb.duplicates} · out-of-order ${pb.outOfOrder}`,
-      `Remote wrap frames ${pb.wrapSegments} · interpolated ${pb.interpolatedFrames}` +
+      `Remote wrap frames ${pb.wrapSegments} · whole-cell steps ${pb.steppedFrames}` +
         ` · held ${pb.heldFrames} · canvas ${pb.playbackDrawCostMs}ms over ${pb.playbackDraws} playback draws`,
     ];
   }
