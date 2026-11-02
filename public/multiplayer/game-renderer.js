@@ -1,12 +1,13 @@
 // Canvas-only multiplayer renderer. It never decides a collision, score or
 // winner. Classic Brawl draws versioned server snapshots exactly as they
 // arrive. Responsive Brawl keeps that authority and changes only the pixels:
-// this player's snake is stepped locally (prediction.js) and everyone else is
-// interpolated from confirmed history (playback.js).
+// this player's snake steps on a local clock (prediction.js), and everyone
+// else steps on a buffered clock of confirmed cells (playback.js). Both tick
+// one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-6';
-import { RemotePlayback } from './playback.js?v=step11-responsive-6';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-7';
+import { RemotePlayback } from './playback.js?v=step11-responsive-7';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -336,11 +337,9 @@ export class MultiplayerGameRenderer {
   // rAF callback only decides WHEN to advance; elapsed time decides HOW MUCH.
   startPredictionLoop() {
     if (this.predictionLoop !== null || !this.local?.enabled) return false;
-    // One coordinated animation loop for both halves of Responsive Brawl, driven
-    // from the same monotonic reading so they can never disagree about "now".
-    // The local snake steps on its own tick. Remote snakes are redrawn whenever
-    // the playhead moves between two confirmed cells, which is every frame
-    // while a segment is interpolating — that is the smoothness. Neither half
+    // One coordinated animation loop. The local snake steps on its clock.
+    // Remote snakes step when the playback playhead crosses into the next
+    // confirmed tick. Both are whole cells. Neither glides, and neither
     // invents a remote turn or skips a confirmed one.
     const step = () => {
       this.predictionLoop = null;
@@ -350,9 +349,9 @@ export class MultiplayerGameRenderer {
       const smooth = this.playback?.enabled ? this.playback.sample(at) : null;
       this.lastPlaybackSample = smooth;
       if (!this.hidden && !this.viewPaused && this.snapshot) {
-        const playbackMoved = !!smooth && !!smooth.players && (
-          smooth.interpolated || smooth.tick !== this.lastPaintedPlaybackTick);
-        if (smooth && smooth.players) this.lastPaintedPlaybackTick = smooth.tick;
+        const playbackMoved = !!smooth && !!smooth.players &&
+          smooth.tick !== this.lastPaintedPlaybackTick;
+        if (playbackMoved) this.lastPaintedPlaybackTick = smooth.tick;
         if (ticks > 0) this.present(this.snapshot, at);
         else if (playbackMoved) this.presentPlayback(at);
       }
@@ -456,9 +455,9 @@ export class MultiplayerGameRenderer {
     });
   }
 
-  // A display frame produced purely by remote interpolation. It is NOT a server
-  // arrival, so it must not enter the receive->paint timing series; only the
-  // canvas cost is measured, separately.
+  // A display frame produced when a remote snake steps to its next confirmed
+  // cell. It is NOT a server arrival, so it must not enter the receive->paint
+  // timing series; only the canvas cost is measured, separately.
   presentPlayback(at) {
     const start = this.clock();
     this.draw();
@@ -559,8 +558,18 @@ export class MultiplayerGameRenderer {
     // frame the server sent whole may re-seed remote history.
     if (this.playback?.enabled && !snapshot.reconstructed) {
       this.playback.configure({ columns: snapshot.b.c, rows: snapshot.b.r });
-      this.playback.pushSnapshot(snapshot, this.clock());
+      this.playback.pushSnapshot(snapshot, at);
       this.playback.takeResyncRequest();
+    }
+    // Sample before the paint so the first frame of a remote snake is already
+    // the buffered cell. Painting the live edge and then stepping back to the
+    // buffer is a visible pop, and painting between those cells is a glide.
+    if (this.playback?.enabled) {
+      const smooth = this.playback.sample(at);
+      if (smooth?.players) {
+        this.lastPlaybackSample = smooth;
+        this.lastPaintedPlaybackTick = smooth.tick;
+      }
     }
     if (this.local?.enabled && !this.local.active) this.stopPredictionLoop();
     this.hudBudget.add('scores', () => this.drawScoreboard());
@@ -752,9 +761,10 @@ export class MultiplayerGameRenderer {
     }
   }
 
-  // Classic draws whole confirmed cells. Responsive draws the predicted own
-  // snake on those cells and interpolates every other snake between the two
-  // confirmed ticks playback is currently between.
+  // Classic and Responsive both draw whole cells. Responsive remote snakes
+  // use the confirmed cells of the playback tick; the local snake uses the
+  // cells prediction already wrote onto the frame. Nothing is drawn between
+  // squares.
   draw() {
     const snapshot = this.paintOverride || this.paintSnapshot;
     const canvas = this.canvas;
@@ -854,18 +864,11 @@ export class MultiplayerGameRenderer {
     }
 
     // Snakes. The local player's cells are whatever present() put on the frame
-    // (predicted, in Responsive). Every other Responsive snake is drawn from
-    // the playback sample: fractional coordinates between two confirmed cells,
-    // or the confirmed cell itself when the buffer is holding.
+    // (predicted, in Responsive). Every other Responsive snake is the whole
+    // confirmed cells of the playback tick, one square at a time.
     const followAlive = this.followId != null &&
       snapshot.p.some((player) => player.i === this.followId && player.a);
     const pad = Math.max(1, cell * .09);
-    const onBoard = (x, y) => {
-      let gx = x; let gy = y;
-      if (gx < 0) gx += cols; else if (gx >= cols) gx -= cols;
-      if (gy < 0) gy += rows; else if (gy >= rows) gy -= rows;
-      return [gx, gy];
-    };
     for (let p = 0; p < snapshot.p.length; p++) {
       const player = snapshot.p[p];
       const color = HEX.test(player.c) ? player.c : '#808080';
@@ -873,65 +876,26 @@ export class MultiplayerGameRenderer {
       ctx.fillStyle = color;
       const body = player.b;
       const remote = smooth && smooth.players ? smooth.players.get(player.i) : null;
-      const useSmooth = !!(remote && remote.smooth) && player.i !== ownId;
+      const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && player.i !== ownId)
+        ? remote.cells : body;
       ctx.beginPath();
-      if (useSmooth) {
-        const segs = remote.smooth;
-        const sizeF = Math.max(1, cell - pad * 2);
-        for (let part = 0; part < segs.length; part++) {
-          const seg = segs[part];
-          if (!seg.smooth) {
-            const left = Math.round(ox + seg.x * cell + pad);
-            const top = Math.round(oy + seg.y * cell + pad);
-            ctx.rect(left, top, Math.max(1, Math.round(cell - pad * 2)), Math.max(1, Math.round(cell - pad * 2)));
-            continue;
-          }
-          // A segment straddling an edge is drawn on BOTH sides for that tick,
-          // so it slides off one edge and onto the other. It is never dragged
-          // across the board.
-          const xs = [seg.x];
-          const ys = [seg.y];
-          if (seg.x < 0) xs.push(seg.x + cols);
-          if (seg.x > cols - 1) xs.push(seg.x - cols);
-          if (seg.y < 0) ys.push(seg.y + rows);
-          if (seg.y > rows - 1) ys.push(seg.y - rows);
-          for (const gx of xs) {
-            for (const gy of ys) ctx.rect(ox + gx * cell + pad, oy + gy * cell + pad, sizeF, sizeF);
-          }
-        }
-      } else {
-        const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && player.i !== ownId)
-          ? remote.cells : body;
-        for (let part = 0; part < drawn.length; part += 1) {
-          const index = drawn[part];
-          const x = index % cols; const y = Math.floor(index / cols);
-          const left = Math.round(ox + x * cell + pad);
-          const top = Math.round(oy + y * cell + pad);
-          const size = Math.max(1, Math.round(cell - pad * 2));
-          ctx.rect(left, top, size, size);
-        }
+      for (let part = 0; part < drawn.length; part += 1) {
+        const index = drawn[part];
+        const x = index % cols; const y = Math.floor(index / cols);
+        const left = Math.round(ox + x * cell + pad);
+        const top = Math.round(oy + y * cell + pad);
+        const size = Math.max(1, Math.round(cell - pad * 2));
+        ctx.rect(left, top, size, size);
       }
       ctx.fill();
 
-      // Head ring reads the same coordinates that were just drawn.
-      if ((player.i === this.ownParticipantId || player.i === this.followId) &&
-          ((useSmooth && remote.smooth.length) || body.length || (remote && remote.cells && remote.cells.length))) {
-        let left; let top; let size;
-        if (useSmooth && remote.smooth[0]) {
-          const [hx, hy] = onBoard(remote.smooth[0].x, remote.smooth[0].y);
-          left = ox + hx * cell + pad;
-          top = oy + hy * cell + pad;
-          size = Math.max(1, cell - pad * 2);
-        } else {
-          const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && player.i !== ownId)
-            ? remote.cells : body;
-          if (!drawn.length) continue;
-          const index = drawn[0];
-          const x = index % cols; const y = Math.floor(index / cols);
-          left = Math.round(ox + x * cell + pad);
-          top = Math.round(oy + y * cell + pad);
-          size = Math.max(1, Math.round(cell - pad * 2));
-        }
+      // Head ring reads the same cells that were just drawn.
+      if (drawn.length && (player.i === this.ownParticipantId || player.i === this.followId)) {
+        const index = drawn[0];
+        const x = index % cols; const y = Math.floor(index / cols);
+        const left = Math.round(ox + x * cell + pad);
+        const top = Math.round(oy + y * cell + pad);
+        const size = Math.max(1, Math.round(cell - pad * 2));
         ctx.strokeStyle = '#fff';
         ctx.lineWidth = Math.max(2, cell * .1);
         ctx.strokeRect(left, top, size, size);
@@ -951,22 +915,12 @@ export class MultiplayerGameRenderer {
       // frame's head, so it can never float off the snake.
       const frozenRemote = smooth && smooth.players && player.i !== ownId
         ? smooth.players.get(player.i) : null;
-      let cx; let cy;
-      if (frozenRemote && frozenRemote.smooth && frozenRemote.smooth[0]) {
-        const seg = frozenRemote.smooth[0];
-        let hx = seg.x; let hy = seg.y;
-        if (hx < 0) hx += cols; else if (hx >= cols) hx -= cols;
-        if (hy < 0) hy += rows; else if (hy >= rows) hy -= rows;
-        cx = ox + (hx + 0.5) * cell;
-        cy = oy + (hy + 0.5) * cell;
-      } else {
-        const frozenCells = frozenRemote && Array.isArray(frozenRemote.cells) && frozenRemote.cells.length
-          ? frozenRemote.cells : player.b;
-        const index = frozenCells[0];
-        const x = index % cols; const y = Math.floor(index / cols);
-        cx = ox + (x + 0.5) * cell;
-        cy = oy + (y + 0.5) * cell;
-      }
+      const frozenCells = frozenRemote && Array.isArray(frozenRemote.cells) && frozenRemote.cells.length
+        ? frozenRemote.cells : player.b;
+      const index = frozenCells[0];
+      const x = index % cols; const y = Math.floor(index / cols);
+      const cx = ox + (x + 0.5) * cell;
+      const cy = oy + (y + 0.5) * cell;
       const radius = Math.max(3.5, cell * 0.34);
       const phase = this.reducedMotion ? 0 : (performance.now() / 700) % 1;
       ctx.save();

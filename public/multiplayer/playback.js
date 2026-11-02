@@ -3,23 +3,14 @@
  *
  * The server stays the only source of movement. This module does not simulate,
  * predict or extrapolate anything: it stores server-confirmed frames in tick
- * order and plays them back a short, intentional distance behind the live edge,
- * so ordinary network jitter is absorbed instead of being rendered as stutter.
+ * order and plays them back a short, intentional distance behind the live edge.
  *
- * WHY IT CANNOT CUT CORNERS
- * Every rendered body is built from two ADJACENT confirmed frames and each body
- * segment interpolates only to where that same segment is in the next frame.
- * Segment i of tick T+1 is the cell segment i-1 vacated at tick T, so a
- * Right -> Up -> Left sequence is played as exactly those three turns. Nothing
- * is ever interpolated across a multi-tick gap: if the adjacent frame is missing
- * the playhead holds at the last confirmed tick and reports the gap.
- *
- * Wrapping is handled in toroidal space (the shortest step between two cells on
- * a board whose edges join), so a snake crossing an edge slides off one side and
- * on to the other. It can never be drawn flying across the board.
- *
- * The local player is NOT handled here. Prediction (step 2) owns that snake and
- * is deliberately independent of this buffer.
+ * Remote snakes tick the same way the local snake ticks. The playhead advances
+ * on the monotonic clock, one server tick per tickMs, and each sample is the
+ * whole confirmed cells of that tick. Nothing is drawn between squares. A late
+ * packet is absorbed by the buffer instead of stuttering the snake or sliding
+ * it. A missing tick holds the last real body. Turns are never skipped and
+ * movement is never invented to catch up.
  */
 
 // Tuning targets from the step-3 brief. They are targets, not guarantees: the
@@ -440,14 +431,11 @@ export class RemotePlayback {
     const liveTarget = newest.tick - this.delayTicks;
     if (liveTarget - this.playhead > this.limits.maxLagTicks) {
       // Far behind the buffer target: the history we hold is stale, so drop it
-      // rather than replaying seconds of old board.
+      // rather than replaying seconds of old board. This is the only jump, and
+      // it is a recovery from a stall, not how ordinary jitter is hidden.
       this.stats.staleDrops += 1;
       this.playhead = liveTarget;
       this.trim();
-    } else if (liveTarget - this.playhead > 2) {
-      // Mildly behind: converge by playing a little faster (bounded at ~1.6x for
-      // that instant only) instead of jumping the remote snakes forward.
-      this.playhead += Math.min(liveTarget - this.playhead, dt / this.tickMs * 0.6);
     }
 
     const oldest = this.oldest();
@@ -480,21 +468,13 @@ export class RemotePlayback {
       return sample;
     }
     sample.food = Array.isArray(older.food) ? older.food : null;
-    if (!newer || alpha === 0) {
-      // Exactly on a confirmed tick, or waiting for the next one: whole cells.
-      sample.players = older.players;
-      sample.interpolated = false;
-      if (!newer) this.stats.heldFrames += 1;
-      this.stats.steppedFrames += 1;
-      return sample;
-    }
-    // Between two adjacent confirmed ticks, each segment slides only as far
-    // as that same segment actually moved — one cell, in order, including a
-    // wrap. A missing tick is not bridged. This is what keeps remote snakes
-    // smooth when packets arrive unevenly, without teleporting them.
-    sample.players = this.blend(older, newer, alpha);
-    sample.interpolated = true;
-    this.stats.interpolatedFrames += 1;
+    // Whole confirmed cells of this tick. Remote snakes step square to square
+    // on the playhead, the same way the local snake steps on its clock. They
+    // are not slid between cells, and a gap is not bridged.
+    sample.players = older.players;
+    sample.interpolated = false;
+    if (!newer) this.stats.heldFrames += 1;
+    this.stats.steppedFrames += 1;
     return sample;
   }
 

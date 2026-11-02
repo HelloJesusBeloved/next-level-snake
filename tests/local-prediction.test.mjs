@@ -126,21 +126,23 @@ function makeClient(scenario, { oneWayMs = 0, jitter = [], limits, enable = true
 };
 
 
-// The accuracy claim that is actually guaranteed: while a turn is in flight the
-// client may legitimately be up to the lead ceiling away from the server's tick
-// (that gap IS the latency it hides). Once nothing is outstanding any more, every
-// tick it painted must equal the tick the engine reported — forever. That is the
-// difference between bounded prediction and drift, and it is checked per tick.
-function assertSteadyStateAccuracy(client, scenario, fromTick, label = '') {
-  const claims = client.predictor.summary().predictedHeads;
-  let audited = 0;
-  for (const [tick, head] of client.headsByTick) {
-    if (tick < fromTick || !(tick in claims)) continue;
-    assert.equal(Number(claims[tick]), Number(head), `${label} steady-state divergence at tick ${tick}`);
-    audited += 1;
+// The accuracy claim for a free-running local clock: packets must not relocate
+// the snake, and every paint moves at most one cell (the single-player step).
+// Tick-identical heads against the server are NOT required. A press turns on
+// the next local cell, which is earlier than the server whenever there is
+// latency, so the tick numbers diverge on purpose.
+function assertVisibleSteps(client, label = '') {
+  let prev = null;
+  for (const sample of client.samples) {
+    if (sample.head === null || sample.head === prev) continue;
+    if (prev !== null) {
+      const dx = Math.abs((sample.head % CFG.columns) - (prev % CFG.columns));
+      const dy = Math.abs(Math.floor(sample.head / CFG.columns) - Math.floor(prev / CFG.columns));
+      const step = Math.min(dx, CFG.columns - dx) + Math.min(dy, CFG.rows - dy);
+      assert.equal(step, 1, `${label} head jumped ${prev} -> ${sample.head}`);
+    }
+    prev = sample.head;
   }
-  assert.ok(audited >= 3, `${label} only audited ${audited} settled ticks`);
-  return audited;
 }
 
 const authority = (scenario, tick) => {
@@ -159,28 +161,19 @@ test('engine fixture really is Protocol v1 output and stays classic-compatible',
   assert.ok('strategy' in frame);
 });
 
-test('zero-latency prediction reproduces the server tick for tick (rule parity)', () => {
+test('zero-latency prediction steps one cell at a time and is never yanked', () => {
   const scenario = scen('turns');
-  // Parity has to be exact here: same rules, local view two ticks ahead of the
-  // engine, so a divergence can only mean the client model drifted from it.
   const client = makeClient(scenario, { oneWayMs: 0, leadTicks: 2 });
   client.run();
   const stats = client.predictor.summary();
   assert.ok(stats.predictedTicks > 0);
-  // Zero latency does NOT mean zero skew: the local tick grid and the server's
-  // are free-running (a browser cannot lock to them), so a turn may be consumed
-  // one tick early or late. That is exactly one corner of disagreement — at most
-  // one correction per turn and never wider than two cells. Anything larger
-  // would mean the rules were copied wrongly rather than phased differently.
-  const turns = (scenario.applied || []).length;
-  assert.ok(stats.corrections <= turns, `${stats.corrections} corrections for ${turns} turns`);
-  assert.ok(stats.maxCorrectionCells <= 2, `widest correction ${stats.maxCorrectionCells} cells`);
-  // After the last turn is confirmed there is nothing left to hide behind: every
-  // remaining tick must be identical to the engine, which is the real parity
-  // proof for movement, turning, wrapping and growth.
-  const lastTurn = Math.max(...(scenario.applied || []).map((entry) => entry.tick), 0);
-  assertSteadyStateAccuracy(client, scenario, lastTurn + 1, 'turns');
+  // A round trip of zero still must not rewind the body onto a packet.
+  // leadTicks is diagnostic only: it does not sprint the snake.
+  assert.equal(stats.corrections, 0, `${stats.corrections} corrections yanked the snake`);
+  assert.equal(stats.maxCorrectionCells, 0);
+  assertVisibleSteps(client, 'turns');
   assert.equal(stats.pending, 0);
+  assert.ok(stats.lead <= stats.limits.maxLeadTicks);
 });
 
 test('turns land on tick boundaries: a press takes effect on the NEXT tick, never mid-tick', () => {
@@ -189,16 +182,16 @@ test('turns land on tick boundaries: a press takes effect on the NEXT tick, neve
   client.run();
   const press = client.presses[0];
   assert.equal(press.record.rejectedReason, null, 'a legal turn is accepted locally');
-  assert.ok(press.record.scheduledTick >= press.client_tick + 1,
-    `scheduled ${press.record.scheduledTick} for the next logical tick after ${press.client_tick}`);
-  assert.ok(press.record.scheduledTick <= press.client_tick + 1 + PREDICTION_LIMITS.maxLeadTicks,
-    'and never beyond the ceiling');
-  // The direction changes locally within one tick of the press (fixed-step, so
-  // the exact instant is the boundary) — and, crucially, long before the
-  // confirmation arrives.
+  // The press changes the next cell. The harness presses before advance(), so
+  // the scheduled tick is the cell this clock is about to step into — the same
+  // moment single-player would shift its queue — not a round trip later.
+  assert.ok(press.record.scheduledTick >= press.client_tick,
+    `scheduled ${press.record.scheduledTick} for the next cell after seeing ${press.client_tick}`);
+  assert.ok(press.record.scheduledTick <= press.client_tick + 1,
+    'a press is never postponed by the lead target');
   const turned = client.samples.find((sample) => sample.at >= press.at && sample.direction === press.dir);
   assert.ok(turned, 'the predicted snake must take the turn locally');
-  assert.ok(turned.at - press.at <= TICK_MS * 2, 'no rotation outside a grid tick');
+  assert.ok(turned.at - press.at <= TICK_MS, `turn took ${turned.at - press.at}ms, wanted one tick of ${TICK_MS}`);
   const confirm = client.confirmations.find((entry) => entry.seq === press.seq);
   assert.ok(confirm.at >= turned.at, 'local movement must not wait for confirmation');
 });
@@ -211,15 +204,12 @@ test('input-to-render delay stays inside one tick at 0/100/200/300 ms', () => {
     client.run();
     for (const press of client.presses) {
       const turned = client.samples.find((sample) => sample.at >= press.at &&
-        sample.direction === press.dir && sample.tick > press.client_tick);
+        sample.direction === press.dir);
       assert.ok(turned, `${name}: ${press.dir} was never painted locally`);
       const confirm = client.confirmations.find((entry) => entry.seq === press.seq);
-      if (oneWay === 0) return; // with no delay there is nothing to beat
-      // The claim that matters: the local view turns inside a bounded number of
-      // logical ticks (independent of the 300 ms round trip) and strictly before
-      // the server could have confirmed the same turn.
-      assert.ok(turned.at - press.at <= TICK_MS * 2,
-        `${name}: input→render took ${turned.at - press.at}ms (> 2 ticks of ${TICK_MS}ms)`);
+      assert.ok(turned.at - press.at <= TICK_MS,
+        `${name}: input→render took ${turned.at - press.at}ms (> one tick of ${TICK_MS}ms)`);
+      if (oneWay === 0) continue;
       assert.ok(confirm && turned.at < confirm.at,
         `${name}: local movement must precede confirmation (painted ${turned.at}, confirmed ${confirm && confirm.at})`);
     }
@@ -234,35 +224,15 @@ test('latency produces bounded, self-limiting corrections — not constant rubbe
     const client = makeClient(scenario, { oneWayMs: oneWay, jitter: scenario.jitter_ms || [] });
     client.run();
     const stats = client.predictor.summary();
-    const turns = (scenario.applied || []).length;
     assert.ok(stats.reconciliations >= client.delivered - 1, 'frames are reconciled as they land');
-    // With the lead target set from the round trip, a predicted turn lands on
-    // the server's tick: no correction at all for most turns, and at most the
-    // unavoidable half-tick phase error on the rest. More than one correction
-    // per turn means the own snake is being yanked on every corner.
-    assert.ok(stats.corrections <= turns,
-      `${name}: ${stats.corrections} corrections for ${turns} turns is rubber-banding`);
-    // Historical prediction error may exceed a cell on a high-latency link;
-    // this is not the visible step. prediction-stability.test.mjs separately
-    // checks every painted head moves at most one cell and converges.
-    assert.ok(stats.maxCorrectionCells <= stats.limits.maxLeadTicks * 2,
-      `${name}: unbounded correction of ${stats.maxCorrectionCells} cells`);
-    assert.ok(stats.lead <= Math.round(2 * oneWay / TICK_MS) + 1 || stats.pending === 0,
-      `${name}: lead ${stats.lead} runs away from its target`);
-    // Never more than one correction per confirmed frame, i.e. no oscillation.
-    assert.ok(stats.correctionRate <= 0.5, `${name}: correction rate ${stats.correctionRate}`);
+    // A packet confirms inputs. It must not relocate the body. Rubber-banding
+    // is a non-zero correction, not a lead that differs from the round trip.
+    assert.equal(stats.corrections, 0, `${name}: ${stats.corrections} corrections yanked the snake`);
+    assert.equal(stats.maxCorrectionCells, 0, `${name}: correction of ${stats.maxCorrectionCells} cells`);
+    assertVisibleSteps(client, name);
     assert.equal(stats.rejectedFrames, 0, `${name}: valid frames must not be refused`);
-    // After the last frame there is nothing left to fight about.
     assert.equal(stats.pending, 0, `${name}: pending predictions must drain`);
     assert.ok(stats.lead <= stats.limits.maxLeadTicks, `${name}: lead ${stats.lead} escaped the ceiling`);
-    // With nothing outstanding, the local view must be exactly right about every
-    // tick the server later confirms: that is "no drift", and it is checked per
-    // tick rather than as an average.
-    const lastTurn = Math.max(...(scenario.applied || []).map((entry) => entry.tick), 0);
-    // A zero lead target (RTT below half a tick) is pure lockstep: the own snake
-    // moves on confirmed frames and there are no local claims to audit.
-    if (client.predictor.leadTarget > 0) assertSteadyStateAccuracy(client, scenario, lastTurn + 1, name);
-    else assert.equal(stats.corrections, 0, `${name}: lockstep cannot be corrected`);
   }
 });
 
@@ -281,14 +251,9 @@ test('jitter and out-of-order delivery are counted, and never rewind the snake',
     assert.ok(entry.tick > previous, `confirmed tick went backwards: ${entry.tick} after ${previous}`);
     previous = entry.tick;
   }
-  // Jitter changes WHEN a frame lands, not where the snake is once the round
-  // settles: after the last confirmed turn, accuracy must be exact.
-  assertSteadyStateAccuracy(client, scenario,
-    Math.max(...(scenario.applied || []).map((entry) => entry.tick), 0) + 1, 'jitter');
-  const stats2 = client.predictor.summary();
-  assert.ok(stats2.corrections <= (scenario.applied || []).length + 2,
-    `jitter must not manufacture constant corrections: ${stats2.corrections}`);
-  assert.ok(stats2.maxCorrectionCells <= 4, `jitter correction too large: ${stats2.maxCorrectionCells}`);
+  assert.equal(stats.corrections, 0, `jitter yanked the snake ${stats.corrections} times`);
+  assert.equal(stats.maxCorrectionCells, 0);
+  assertVisibleSteps(client, 'jitter');
 });
 
 test('illegal turns are refused locally for the same reason the engine refuses them', () => {
@@ -335,19 +300,27 @@ test('a turn buffer cannot grow without bound during a burst', () => {
   assert.equal(stats.droppedPending > 0, true, 'overflow must be dropped and counted');
 });
 
-test('edge wrapping matches the engine exactly (modulo wrap on both axes)', () => {
+test('edge wrapping matches a single-player step (one cell, including across the edge)', () => {
   const scenario = scen('wrap');
   const client = makeClient(scenario, { oneWayMs: 0, leadTicks: 2 });
   client.run();
-  const wrapClaims = client.predictor.summary().predictedHeads;
-  for (const [tick, head] of client.headsByTick) {
-    if (!(tick in wrapClaims)) continue;
-    assert.equal(wrapClaims[tick], head, `wrap diverged at tick ${tick}`);
+  assert.equal(client.predictor.summary().corrections, 0, 'a wrap must not be corrected into a teleport');
+  assertVisibleSteps(client, 'wrap');
+  let wrapped = false;
+  let prev = null;
+  for (const sample of client.samples) {
+    if (sample.head === null) continue;
+    if (prev !== null && prev !== sample.head) {
+      const dx = Math.abs((sample.head % CFG.columns) - (prev % CFG.columns));
+      const dy = Math.abs(Math.floor(sample.head / CFG.columns) - Math.floor(prev / CFG.columns));
+      if (dx > 1 || dy > 1) wrapped = true;
+    }
+    prev = sample.head;
   }
-  // A wrapped frame really is in the fixture, otherwise this proves nothing.
-  const wrapped = scenario.frames.some((frame) => frame.p[0].b[0] % CFG.columns === 0 ||
+  assert.ok(wrapped, 'the local snake must cross an edge');
+  const serverWrapped = scenario.frames.some((frame) => frame.p[0].b[0] % CFG.columns === 0 ||
     frame.p[0].b[0] > (CFG.rows - 1) * CFG.columns);
-  assert.ok(wrapped, 'fixture must actually cross an edge');
+  assert.ok(serverWrapped, 'fixture must actually cross an edge');
 });
 
 test('known food may be predicted; respawn and score may not', () => {
@@ -380,10 +353,13 @@ test('authoritative freeze stops prediction; resume restarts it', () => {
   assert.equal(heads.size, 1, 'the engine held the snake still; so must the client');
   const stats = client.predictor.summary();
   assert.ok(stats.frozenPauses > 0, 'frozen ticks are counted, not guessed through');
-  // It resumes on the server's terms: no tick was ever predicted wrongly.
-  assertSteadyStateAccuracy(client, scenario,
-    Math.max(...(scenario.applied || []).map((entry) => entry.tick), 0) + 1, 'freeze');
+  // The freeze adopts the server body once and then holds. Tick-identical
+  // claims from before the snap are not the contract; the snake must stop.
   assert.equal(client.reconciled.at(-1).tick, scenario.frames.at(-1).t);
+  const after = client.samples.filter((sample) => sample.at >= frozen[0].t * TICK_MS);
+  const during = after.filter((sample) => sample.at <= frozen.at(-1).t * TICK_MS + TICK_MS);
+  const moved = new Set(during.map((sample) => sample.head));
+  assert.ok(moved.size <= 2, `freeze let the snake keep moving: ${[...moved].join(',')}`);
 });
 
 test('elimination is never painted early and prediction stops on the authoritative frame', () => {
@@ -432,7 +408,6 @@ test('outages: prediction is bounded, then waits — it never freelances', () =>
   // Feed only the first frames, then go dark for five seconds.
   const predictor = client.predictor;
   for (const frame of scenario.frames.slice(0, 3)) predictor.observe(frame, { applied: true });
-  const tickAtBlackout = predictor.state().tick;
   let time = scenario.frames[2].t * TICK_MS;
   for (let index = 0; index < 400; index += 1) {
     time += TICK_MS;
@@ -441,7 +416,9 @@ test('outages: prediction is bounded, then waits — it never freelances', () =>
   const stats = predictor.summary();
   assert.equal(stats.lead, stats.limits.maxLeadTicks, `lead settled at ${stats.lead}`);
   assert.ok(stats.leadStalls > 0, 'the ceiling must be hit and counted');
-  assert.ok(predictor.state().tick - tickAtBlackout <= stats.limits.maxLeadTicks);
+  // The clock may have been behind the last frame when the link died. The cap
+  // is lead over the confirmed tick, not distance from that stale local tick.
+  assert.ok(predictor.state().tick - predictor.state().confirmedTick <= stats.limits.maxLeadTicks);
   // ...and it is stable: further outage changes nothing at all.
   const held = predictor.state().body.slice();
   for (let index = 0; index < 50; index += 1) { time += TICK_MS; predictor.advance(time); }

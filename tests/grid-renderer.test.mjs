@@ -375,39 +375,44 @@ test('resync requests are throttled so a bad link cannot become a request storm'
   h.close();
 });
 
-test('remote playback is drawn only for remote players, with continuous coordinates', () => {
+test('remote playback steps whole cells and never glides between them', () => {
   const h = setup({ enabled: false });
   const r = responsiveRenderer(h);
-  // Three adjacent confirmed ticks: interpolation needs a NEXT tick that exists.
   r.accept(boardFrame(0));
   r.accept(boardFrame(1, { own: [31, 30, 29], remote: [101, 100, 99] }));
   r.accept(boardFrame(2, { own: [32, 31, 30], remote: [102, 101, 100] }));
-  // Drive the shared animation loop and record every sample. The FINAL sample is
-  // legitimately a hold once the fixture's last frame has been reached, so the
-  // interpolation assertion is made over the samples that had history ahead of
-  // them — which is the case the feature exists for.
   const samples = [];
-  for (let at = 0; at <= 240; at += 20) {
+  for (let at = 0; at <= 400; at += 20) {
     h.at(at);
     h.refresh(at);
     if (r.lastPlaybackSample) samples.push(r.lastPlaybackSample);
   }
   assert.ok(samples.length > 0, 'the loop produced playback samples');
-  const interpolated = samples.filter((sample) => sample.interpolated && sample.players?.get(2)?.smooth);
-  assert.ok(interpolated.length > 0, 'the remote snake must be interpolated between confirmed ticks');
-  const remote = interpolated[0].players.get(2);
-  for (const segment of remote.smooth) {
-    if (!segment.smooth) continue;
-    assert.ok(Number.isFinite(segment.x) && Number.isFinite(segment.y));
-    // Never more than the single cell the confirmed tick actually moved.
-    assert.ok(Math.abs(segment.x - (segment.from % 24)) <= 1);
-    assert.ok(Math.abs(segment.y - Math.floor(segment.from / 24)) <= 1);
+  assert.ok(samples.every((sample) => sample.interpolated === false), 'remote snakes must not glide');
+  const heads = [];
+  for (const sample of samples) {
+    const remote = sample.players?.get(2);
+    assert.ok(remote && Array.isArray(remote.cells), 'a real confirmed body is displayed');
+    assert.equal(remote.smooth, undefined, 'no fractional coordinates on a remote snake');
+    for (const cell of remote.cells) assert.equal(typeof cell, 'number');
+    heads.push(remote.cells[0]);
   }
-  // And once history runs out the board holds a confirmed state rather than
-  // continuing to move on its own.
-  const last = samples.at(-1);
-  assert.equal(last.interpolated, false);
-  assert.ok(last.players?.get(2), 'a real confirmed body is still displayed');
+  let changes = 0;
+  let held = 0;
+  for (let index = 1; index < heads.length; index += 1) {
+    if (heads[index] === heads[index - 1]) held += 1;
+    else {
+      changes += 1;
+      const dx = Math.abs((heads[index] % 24) - (heads[index - 1] % 24));
+      const dy = Math.abs(Math.floor(heads[index] / 24) - Math.floor(heads[index - 1] / 24));
+      assert.equal(Math.min(dx, 24 - dx) + Math.min(dy, 18 - dy), 1, 'a remote step is one whole cell');
+    }
+  }
+  assert.ok(held > 0, 'a remote snake holds its cell between ticks');
+  assert.ok(changes > 0, 'a remote snake does tick forward');
+  const rects = h.calls.filter((call) => call.name === 'rect');
+  assert.ok(rects.length >= 3);
+  for (const call of rects) assert.ok(call.args.every(Number.isInteger), 'canvas rects stay on whole cells');
   h.close();
 });
 

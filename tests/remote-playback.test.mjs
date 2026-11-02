@@ -97,6 +97,39 @@ test('the playhead runs behind the live edge by the buffer delay, never ahead of
     'settled playback must lag the newest confirmed tick');
 });
 
+test('sample() steps whole confirmed cells and never glides between them', () => {
+  const s = scenario('turns');
+  const { samples } = runPlayback(s, { oneWayMs: 40, sampleEveryMs: 8 });
+  assert.ok(samples.length > 10);
+  const playerId = s.frames[0].p[0].i;
+  let changes = 0;
+  let held = 0;
+  let previous = null;
+  for (const sample of samples) {
+    assert.equal(sample.interpolated, false, 'playback must not report an in-between frame');
+    const player = sample.players?.get(playerId);
+    if (!player) continue;
+    assert.equal(player.smooth, undefined);
+    for (const cell of player.cells) assert.equal(typeof cell, 'number');
+    const head = player.cells[0];
+    if (previous === null || previous.head !== head) {
+      if (previous) {
+        changes += 1;
+        const columns = s.frames[0].b.c;
+        const rows = s.frames[0].b.r;
+        const dx = Math.abs((head % columns) - (previous.head % columns));
+        const dy = Math.abs(Math.floor(head / columns) - Math.floor(previous.head / columns));
+        assert.equal(Math.min(dx, columns - dx) + Math.min(dy, rows - dy), 1,
+          `remote head glided or jumped ${previous.head} -> ${head}`);
+        assert.ok(sample.at - previous.at >= TICK - 16, 'remote ticks must not run faster than the server');
+      }
+      previous = { head, at: sample.at };
+    } else held += 1;
+  }
+  assert.ok(held > changes, 'a remote cell is held across frames, not redrawn between squares');
+  assert.ok(changes > 0, 'the remote snake still ticks forward');
+});
+
 test('remote interpolation walks the confirmed path: every segment moves at most one cell', () => {
   const s = scenario('turns');
   const pb = playbackFor(s);

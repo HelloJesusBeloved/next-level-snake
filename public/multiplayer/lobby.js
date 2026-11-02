@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-6';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-6';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-7';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-7';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-6';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-7';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -314,7 +314,7 @@ export function mountLobby(root) {
       return ['Remote playback: off (Classic Brawl paints each confirmed frame as it arrives)'];
     }
     return [
-      `Remote playback: ${pb.reason} · ${pb.painted ? 'interpolating' : 'holding at confirmed tick'}` +
+      `Remote playback: ${pb.reason} · ${pb.painted ? 'ticking confirmed cells' : 'holding at confirmed tick'}` +
         ` · delay ${pb.delayMs}ms measured (target ${pb.targetDelayMs}ms estimated)`,
       `Remote buffer: ${pb.buffered}/${pb.maxBufferTicks} confirmed ticks` +
         ` (${pb.oldestTick ?? '–'}–${pb.newestTick ?? '–'}) · playhead ${pb.playheadTick ?? '–'}` +
@@ -324,9 +324,8 @@ export function mountLobby(root) {
       `Remote intake: ${pb.snapshotFrames} full / ${pb.movementFrames} compact frames` +
         ` · bodies rebuilt ${pb.reconstructed} · refused ${pb.reconstructRejects}` +
         ` · duplicates ${pb.duplicates} · out-of-order ${pb.outOfOrder}`,
-      `Remote wrap frames ${pb.wrapSegments} · interpolated ${pb.interpolatedFrames ?? 0}` +
-        ` · whole-cell steps ${pb.steppedFrames}` +
-        ` · held ${pb.heldFrames} · canvas ${pb.playbackDrawCostMs}ms over ${pb.playbackDraws} playback draws`,
+      `Remote whole-cell steps ${pb.steppedFrames} · held ${pb.heldFrames}` +
+        ` · canvas ${pb.playbackDrawCostMs}ms over ${pb.playbackDraws} playback draws`,
     ];
   }
 
@@ -1326,10 +1325,9 @@ export function mountLobby(root) {
     recordRoundTrip(performance.now() - sentAt);
   }
 
-  // One place for every measured round trip. The predictor's lead target follows
-  // it, so the own snake's predicted turns land on the tick the server will
-  // actually apply them — the difference between "instant" and "instant, then
-  // yanked back a cell on every corner".
+  // One place for every measured round trip. Diagnostics only: the own snake
+  // steps on tickMs regardless of this number. Using it to speed the clock up
+  // or to postpone a corner is what made movement jerk.
   function recordRoundTrip(sample) {
     const rtt = Math.max(0, sample);
     state.rttMs = state.rttMs === null ? rtt : state.rttMs * 0.8 + rtt * 0.2;

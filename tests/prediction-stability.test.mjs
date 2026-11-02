@@ -38,15 +38,20 @@ test('applied event does not discard a turn before a confirming frame', () => {
   assert.equal(local.pending.length, 0, 'frame with applied sequence retires the input');
 });
 
-test('two accepted turns in one server tick preserve the remaining server queue', () => {
+test('two accepted turns in one server tick preserve the remaining local queue', () => {
   const { local } = make();
   local.observe(frame(0));
   local.submit('down', 1);
   local.submit('left', 2);
   local.noteApplied(1, 1);
   local.noteApplied(2, 1); // server accepted both into its queue, not both moved
+  assert.equal(local.runTick(), true);
+  assert.equal(local.state().direction, 'down');
+  assert.deepEqual(local.state().body, [149, 125, 124], 'the first turn is the next cell');
+  const head = local.state().body.slice();
   local.observe(frame(1, { b: [149, 125, 124], d: 'down', is: 2, it: 1, dq: ['left'] }));
-  assert.equal(local.pending.length, 0);
+  assert.equal(local.pending.length, 0, 'the frame retires both accepted inputs');
+  assert.deepEqual(local.state().body, head, 'the confirming frame must not relocate the head');
   assert.equal(local.runTick(), true);
   assert.equal(local.state().direction, 'left');
   assert.deepEqual(local.state().body, [148, 149, 125], 'the second turn must not disappear');
