@@ -159,23 +159,52 @@ test('late authoritative corrections never make the rendered head skip cells', a
   }
 });
 
-test('the painted snake moves only when the server confirms a step', () => {
+test('a burst of confirmed updates is painted one cell at a time', () => {
+  // Painting never moves the snake. advance() moves at most one cell, and only
+  // once a full tick has elapsed — a burst of paints cannot sprint the head.
   const { local, set } = make();
   const seed = frame(0);
   local.observe(seed);
   assert.equal(local.displayFrame(seed).p[0].b[0], 125);
-  // No new frame: no movement, however much time passes or how often the display
-  // refreshes. This is the guarantee that makes self-driven movement impossible.
-  for (const at of [16, 32, 70, 140, 1000, 5000]) {
-    set(at);
-    assert.equal(local.advance(at), 0);
-    assert.equal(local.displayFrame(seed).p[0].b[0], 125, `moved with no server frame at ${at}ms`);
+  set(16);
+  assert.equal(local.advance(16), 0);
+  assert.equal(local.displayFrame(seed).p[0].b[0], 125, 'a partial tick does not move');
+  assert.equal(local.displayFrame(seed).p[0].b[0], 125, 'painting does not step the snake');
+  set(TICK);
+  assert.equal(local.advance(TICK), 1);
+  assert.equal(local.displayFrame(seed).p[0].b[0], 126);
+  assert.equal(local.advance(TICK), 0, 'the same instant cannot take a second cell');
+  set(TICK * 2);
+  assert.equal(local.advance(TICK * 2), 1);
+  assert.equal(local.displayFrame(seed).p[0].b[0], 127);
+});
+
+test('an idle snake is not rewound by a server frame it already predicted', () => {
+  const { local, set } = make();
+  local.setLeadTargetMs(200);
+  local.observe(frame(0));
+  let head = local.state().body[0];
+  let previousTick = local.state().tick;
+  for (let tick = 1; tick <= 10; tick += 1) {
+    set(tick * TICK);
+    assert.ok(local.advance(tick * TICK) <= 1, 'one paint, one cell');
+    const next = local.state().body[0];
+    assert.ok(distance(head, next) <= 1, `idle step jumped ${head} -> ${next}`);
+    assert.ok(local.state().tick >= previousTick, 'the local clock never runs backwards on its own');
+    head = next;
+    previousTick = local.state().tick;
+    if (tick >= 2) {
+      const confirmed = tick - 2;
+      const before = local.state().body.slice();
+      const beforeTick = local.state().tick;
+      local.observe(frame(confirmed, {
+        b: [125 + confirmed, 124 + confirmed, 123 + confirmed]
+      }));
+      assert.ok(local.state().tick >= beforeTick, 'a matching frame must not rewind the clock');
+      assert.ok(distance(before[0], local.state().body[0]) <= 1, 'a matching frame must not yank the head');
+      assert.ok(local.summary().corrections === 0, 'a correct idle path is not a correction');
+    }
   }
-  // One confirmed frame: exactly one cell.
-  local.observe(frame(1, { b: [126, 125, 124] }));
-  assert.equal(local.displayFrame(frame(1)).p[0].b[0], 126);
-  local.observe(frame(2, { b: [127, 126, 125] }));
-  assert.equal(local.displayFrame(frame(2)).p[0].b[0], 127);
 });
 
 test('disabling and re-enabling never paints a prior match body', () => {
@@ -203,7 +232,7 @@ test('jitter, duplicates, dropped ticks and outages keep the displayed snake con
   }
   updates.push({ ...updates[4], at: updates[4].at + 10 }); // duplicate
   updates.sort((a, b) => a.at - b.at);
-  let next = 0, painted = null, priorHead = null, priorTick = null;
+  let next = 0, painted = null, priorHead = null;
   for (let at = 0; at <= 3_000; at += 5) {
     set(at);
     while (next < updates.length && updates[next].at <= at) {
@@ -214,23 +243,11 @@ test('jitter, duplicates, dropped ticks and outages keep the displayed snake con
     local.advance(at);
     if (!painted || !local.active) continue;
     const own = local.displayFrame(painted).p[0];
-    // The painted body is always the newest CONFIRMED one, so it is connected and
-    // every cell was reported by the server. A dropped tick legitimately advances
-    // the snake more than one cell: painting a cell in between would invent
-    // movement the server never confirmed, which is exactly what Classic does not
-    // do either.
-    for (let i = 1; i < own.b.length; i++) assert.ok(distance(own.b[i - 1], own.b[i]) <= 1,
-      `body disconnected between segments ${i - 1} and ${i}`);
-    if (priorHead !== null && priorTick !== null) {
-      const steps = Math.max(1, painted.t - priorTick);
-      assert.ok(distance(priorHead, own.b[0]) <= steps,
-        `head moved ${distance(priorHead, own.b[0])} cells over ${steps} confirmed tick(s)`);
-    }
+    if (priorHead !== null) assert.ok(distance(priorHead, own.b[0]) <= 1);
+    for (let i = 1; i < own.b.length; i++) assert.ok(distance(own.b[i - 1], own.b[i]) <= 1);
     priorHead = own.b[0];
-    priorTick = painted.t;
   }
-  assert.ok(local.summary().staleFrames + local.summary().duplicateFrames > 0,
-    'late and duplicate frames are ignored, not applied');
-  assert.equal(local.summary().lead, 0, 'no speculative lead exists to run away');
-  assert.equal(priorHead, local.state().body[0], 'the painted head is the confirmed head');
+  assert.ok(local.summary().staleFrames > 0, 'late frames are ignored');
+  assert.ok(local.summary().lead <= local.summary().limits.maxLeadTicks, 'outage does not run away');
+  assert.equal(priorHead, local.state().body[0], 'the visual path settles');
 });

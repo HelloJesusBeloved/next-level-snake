@@ -129,24 +129,34 @@ export class LocalPredictor {
     this.predicted = null;
     this.pending = [];
     this.highestSeq = 0;
-    // How many ticks the local view SHOULD lead the newest confirmed tick by.
-    // An input pressed at local tick P is applied by the server at the step after
-    // it arrives, i.e. about one round trip of ticks after the confirmed frame it
-    // was aimed at. Leading by that amount puts the predicted turn on the same
-    // tick the server will choose; leading by less turns the snake early and the
-    // server corrects it on every corner. Set from the measured RTT (lobby.js).
-    this.leadTarget = 0;
+    // How many ticks the local view should sit ahead of the newest confirmed
+    // tick. A press reaches the server about one round trip later and is
+    // applied on the following step (World#apply_input sets last_applied_tick
+    // to tick + 1). Leading by that many ticks puts the visible turn on the
+    // same logical step the server will choose. The lead is a CEILING the
+    // clock catches up to once — it is never a reason to rewind a correct
+    // body back onto the latest packet and sprint forward again. That rewind
+    // is what made an idle snake lurch when nobody had pressed a key.
+    // One tick until a measured round trip says otherwise, so the first second
+    // of a match still moves on the local clock instead of waiting for a
+    // heartbeat. A LAN measurement of ~0 replaces this with 0; a tunnel
+    // replaces it with the real apply delay.
+    this.leadTarget = 1;
     this.lastRunAt = null;
+    this.accumulator = 0;
     this.arrivalAt = null;
-    this.arrivalAt = null;
+    this.holdStepAt = null;
     this.replaying = false;
     this.food = null;
+    this.ateAt = null;
+    this.eatenCell = null;
     this.diagnostic = null;
     // What the local view asserted about each tick, kept so reconciliation can
     // answer the only question that matters — "was the prediction right about
     // the tick the server just confirmed?" — instead of comparing a position
     // three ticks ahead against a position now.
     this.predictedHeads = new Map();
+    this.predictedLengths = new Map();
   }
 
   // ---- configuration ------------------------------------------------------
@@ -176,9 +186,12 @@ export class LocalPredictor {
     return changed;
   }
 
-  // Lead target from a MEASURED round trip (input ack or match heartbeat), in
-  // ticks, bounded by the lead ceiling. Fractions round to the nearest tick: a
-  // half-tick error is the unavoidable phase between two free-running clocks.
+  // Lead target from a MEASURED round trip, in ticks. The server applies a
+  // turn on the step after the packet arrives, which is about one full round
+  // trip after the press — not half. Fractions round to the nearest tick.
+  // This number only decides how far the local clock is allowed to sit ahead
+  // of the latest confirmed tick, and which future tick a press is scheduled
+  // on. It must never rewind a body that already matched the server.
   setLeadTargetMs(rttMs) {
     if (!Number.isFinite(rttMs) || rttMs < 0) return this.leadTarget;
     const ticks = Math.round(rttMs / this.tickMs);
@@ -201,7 +214,8 @@ export class LocalPredictor {
     this.reason = reason;
     if (was) {
       this.confirmed = null; this.predicted = null; this.pending = []; this.food = null;
-      this.lastRunAt = null; this.arrivalAt = null;
+      this.ateAt = null; this.eatenCell = null;
+      this.lastRunAt = null; this.arrivalAt = null; this.accumulator = 0;
     }
     return was;
   }
@@ -220,9 +234,13 @@ export class LocalPredictor {
     this.pending = [];
     this.highestSeq = 0;
     this.predictedHeads = new Map();
-                this.food = null;
+    this.predictedLengths = new Map();
+    this.food = null;
+    this.ateAt = null;
+    this.eatenCell = null;
     this.lastRunAt = null;
     this.arrivalAt = null;
+    this.accumulator = 0;
     if (reconnect) this.stats.resetForReconnect += 1;
     else this.stats.resetForState += 1;
     this.emit({ type: 'reset', reason });
@@ -266,81 +284,118 @@ export class LocalPredictor {
     if (!body) { this.reset('unreadable body'); return false; }
     const tick = Number.isInteger(snapshot.t) ? snapshot.t : this.confirmed?.tick ?? 0;
     const appliedSeq = Number.isInteger(player.is) ? player.is : 0;
-    // How far ahead of the OLD confirmed version the local view had run. It is
-    // kept, not discarded: reconciliation re-anchors the state at the confirmed
-    // tick and then replays exactly that distance forward. Snapping the local
-    // clock back to the server's would add one full delivery delay of latency to
-    // every single frame — the opposite of why this module exists — and it would
-    // make a turn feel slower the further out the player already was.
-    //
-    // Measured against the INCOMING tick, not the previously confirmed one. The
-    // lead worth keeping is "how far past the frame that just arrived had the
-    // local view already run" — i.e. the latency being hidden. Measuring it
-    // against the older frame added that frame's own age on every reconcile, so
-    // the lead ratcheted up by a tick per frame until it hit the ceiling, and a
-    // LAN game ended up permanently six ticks ahead of the server. With the
-    // incoming tick as the baseline the lead settles at the real delivery delay
-    // (0–1 ticks on a LAN, ~3 at 300 ms) and shrinks again by itself after a
-    // stall, because the server's catch-up frames overtake the stalled view.
+    const bodyLength = Number.isInteger(player.l) ? player.l : body.length;
+    const authorityHead = body.length ? cellIndex(body[0][0], body[0][1], columns) : null;
+    const claim = this.predictedHeads.get(tick);
+    const claimLen = this.predictedLengths.get(tick);
+    const correction = claim === undefined || authorityHead === null ? 0 :
+      this.correctionDistance([claim], authorityHead);
+    const lengthMismatch = claimLen !== undefined && claimLen !== bodyLength;
+    const mismatched = correction > 0 || lengthMismatch;
+    // A turn we already showed, on a tick this frame has not reached, is not a
+    // disagreement. The packet is still in flight. Undoing the corner here and
+    // redoing it when the server catches up is the rubber-band players feel.
+    const aheadTurn = this.pending.some((entry) => entry.seq > appliedSeq && entry.consumed &&
+      (entry.appliedLocallyAt ?? Infinity) > tick);
 
     this.stats.reconciliations += 1;
     this.arrivalAt = this.clock();
     const oldPredicted = this.predicted;
-    const priorConfirmed = this.confirmed;
-    // A frame from before a local turn reached the server is not a rejection.
-    // Keep the already-painted path while that intent is genuinely in flight;
-    // otherwise every packet first undoes the turn and the next one reapplies
-    // it. Freeze, death, a food/score change, or the frame acknowledging the
-    // intent still re-anchor immediately to the authoritative state.
-    const awaitingTurn = this.pending.some((entry) => entry.seq > appliedSeq && entry.consumed);
-    const defer = !!(oldPredicted && priorConfirmed && awaitingTurn &&
-      oldPredicted.tick >= tick && snapshot.s === 'running' && player.a !== false && !player.fr &&
-      player.sc === priorConfirmed.score && tick - priorConfirmed.tick <= 1);
-    // 1. Retire everything the simulation has already consumed or refused. This
-    //    is the only place a pending prediction may be discarded as "applied".
+    const priorTick = oldPredicted ? oldPredicted.tick : tick;
     this.trim(appliedSeq);
-    // 2. Adopt the confirmed state verbatim.
     this.confirmed = {
       tick, body, direction: player.d,
       // dq is the server's still-queued directions, not input acknowledgments.
       // Old servers without the additive field remain compatible.
       queue: Array.isArray(player.dq) ? player.dq.filter((dir) => DIRECTIONS[dir]).slice(0, this.maxQueuedDirections) : [],
       alive: player.a !== false, frozen: !!player.fr, status: snapshot.s, score: player.sc,
-      length: Number.isInteger(player.l) ? player.l : body.length, appliedSeq,
+      length: bodyLength, appliedSeq,
       appliedTick: Number.isInteger(player.it) ? player.it : null,
       growthRemaining: Number.isInteger(player.gr) ? player.gr : null
     };
-    // 3. Correct the local view, then rebuild it from the confirmed state. A
-    //    correction is a fact, not something to animate away.
-    // A correction is a disagreement about a tick the server has ALREADY
-    // confirmed. Measured against the confirmed head at that exact tick, not
-    // against wherever the local view happens to be, so a healthy lead is never
-    // miscounted as rubber-banding (and a real one can never be hidden by it).
-    const wasPredicted = this.predictedHeads.get(tick);
-    const authorityHead = body.length ? cellIndex(body[0][0], body[0][1], columns) : null;
-    const correction = wasPredicted === undefined || authorityHead === null ? 0 :
-      this.correctionDistance([wasPredicted], authorityHead);
-    if (correction > 0 && !defer) {
-      this.stats.corrections += 1;
-      this.stats.maxCorrectionCells = Math.max(this.stats.maxCorrectionCells, correction);
+    const serverFood = this.foodFor(player, snapshot);
+
+    if (!oldPredicted) {
+      this.food = serverFood;
+      this.ateAt = null;
+      this.eatenCell = null;
+      this.rebuild();
+      this.reschedulePending();
+      this.lastRunAt = this.clock();
+      this.accumulator = 0;
+      this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
+      return this.active;
     }
-    if (correction > this.limits.maxLeadTicks && !defer) this.stats.snapped += 1;
-    if (defer) {
-      // Do not rewind the already-visible body on every older frame. It remains
-      // bounded by maxLeadTicks and is reconciled when the server covers the
-      // input or says it was rejected.
-      this.predicted = oldPredicted;
+
+    // Right about this tick: keep the body we are already showing, including
+    // any lead. Rebuilding here would snap the snake back to the packet and
+    // the clock would have to sprint forward again — the idle lurch.
+    if (claim !== undefined && !mismatched) {
+      this.adoptFood(serverFood, tick);
+      this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
+      return this.active;
+    }
+
+    if (claim === undefined && oldPredicted.tick >= tick) {
+      this.adoptFood(serverFood, tick);
+      this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
+      return this.active;
+    }
+
+    if (mismatched && aheadTurn && snapshot.s === 'running' && player.a !== false && !player.fr) {
       this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length, deferred: true });
       return this.active;
     }
-    // Replay against THIS frame's known food, not a food from a previous tick.
-    this.food = this.foodFor(player, snapshot);
+
+    if (claim === undefined && oldPredicted.tick < tick) {
+      const jump = authorityHead === null ? 0 : this.correctionDistance(oldPredicted.body, authorityHead);
+      if (jump > 1) this.stats.snapped += 1;
+      this.food = serverFood;
+      this.ateAt = null;
+      this.eatenCell = null;
+      this.rebuild();
+      this.reschedulePending();
+      // The frame itself was this timestamp's step. The next local step waits
+      // a full tick, so one paint cannot hop the snap and then another cell.
+      this.consumeStep(this.clock());
+      this.emit({ type: 'reconciled', tick, correction: jump, pending: this.pending.length });
+      return this.active;
+    }
+
+    // Real miss. Rewind to the confirmed tick and replay only the lead we
+    // already had, so a wrong corner is corrected without a multi-cell hop
+    // and without inventing a path back to it.
+    this.stats.corrections += 1;
+    this.stats.maxCorrectionCells = Math.max(this.stats.maxCorrectionCells, Math.max(correction, lengthMismatch ? 1 : 0));
+    if (correction > this.limits.maxLeadTicks) this.stats.snapped += 1;
+    const ahead = Math.max(0, priorTick - tick);
+    this.food = serverFood;
+    this.ateAt = null;
+    this.eatenCell = null;
     this.rebuild();
     this.reschedulePending();
-    // Never jump forward to an RTT-derived target on the first frame. On later
-    // frames rebuild only as far as the player was already displayed.
+    this.replayAhead(ahead);
+    this.consumeStep(this.clock());
     this.emit({ type: 'reconciled', tick, correction, pending: this.pending.length });
     return this.active;
+  }
+
+  // Frames from before a predicted bite still carry that pellet. Putting it
+  // back would grow the snake a second time.
+  adoptFood(serverFood, tick) {
+    if (this.ateAt !== null && tick <= this.ateAt) return;
+    this.food = serverFood;
+    this.ateAt = null;
+    this.eatenCell = null;
+  }
+
+  // A server frame (or a correction) just presented this instant's movement.
+  // Reset the local clock so the next cell waits out a real tick instead of
+  // stacking on top of the one we just showed.
+  consumeStep(now) {
+    this.holdStepAt = now;
+    this.lastRunAt = now;
+    this.accumulator = 0;
   }
 
   // The only food the predictor knows is the food the server already published
@@ -438,11 +493,15 @@ export class LocalPredictor {
     }
 
     const confirmedTick = this.confirmed.tick;
-    // Turns are consumed one per tick in order, so a second press in the same
-    // tick is owed the tick after the first.
+    // The press is visible on the next cell once the local clock has caught
+    // its lead — that is the single-player rule. Until the clock is that far
+    // ahead, the turn is owed on the tick the server will actually apply it
+    // (confirmed + lead + 1), not on a tick the packet cannot have reached.
+    // Applying it a step early is what made every corner correct itself.
     const lastScheduled = this.pending.reduce((max, entry) =>
       Math.max(max, entry.consumed ? -1 : (entry.scheduledTick ?? -1)), -1);
-    const intended = Math.max(this.predicted.tick, confirmedTick, lastScheduled) + 1;
+    const base = Math.max(this.predicted.tick, confirmedTick + this.leadTarget, lastScheduled);
+    const intended = base + 1;
     if (intended > confirmedTick + this.limits.maxHorizonTicks) {
       // Explicit bounded scheduling policy: an input whose intended tick can no
       // longer be reached honestly is refused locally instead of being pasted
@@ -491,33 +550,91 @@ export class LocalPredictor {
   // this from a timer or from the draw callback and the result is identical,
   // because tick boundaries come from elapsed time, never from frame count.
   //
-  // The own snake NEVER moves by itself. Positional prediction — a speculative
-  // lead, one-step-early turns, replayed reconciliation and the cell-by-cell
-  // "visual bridge" that walked a correction back — all painted cells the server
-  // had not confirmed, and each of those had to be dragged back afterwards. That
-  // is exactly what players saw as the snake moving erratically when nobody
-  // touched a key.
+  // The own snake moves the way single-player Snake moves: one cell per
+  // tickMs, in the current direction, whether or not a key was pressed. A
+  // key only changes the direction of the NEXT cell. What this must never do
+  // is invent extra cells to "hide" a round trip and then drag them back
+  // when the packet arrives — that rewind, not the ordinary forward step, is
+  // the movement players described as the snake driving itself.
   //
-  // So the local snake is painted from confirmed server cells only, exactly like
-  // Classic: this method executes no movement at all, which makes a self-driven
-  // cell unrepresentable rather than merely unlikely. Steering is still sent the
-  // instant a key or swipe lands and is applied by the server on the next tick.
+  // While frames are arriving, the view may sit up to `leadTarget` ticks ahead
+  // of the newest confirmed tick (the measured round trip). That is what makes
+  // a press land on the cell the server will actually apply, instead of a cell
+  // the next packet immediately undoes. It does not run past that target on a
+  // healthy link. If frames stop, it keeps going — still one cell per tick, in
+  // the true direction — up to the hard lead ceiling, then waits. It never
+  // sprints back and forth over cells the server already confirmed.
+  //
+  // At most one cell leaves this call, so one paint cannot teleport.
   advance(now = this.clock()) {
-    if (this.enabled && this.confirmed &&
-        (this.confirmed.frozen || this.confirmed.alive === false)) {
-      this.stats.frozenPauses += 1;
+    if (!this.active) {
+      if (this.enabled && this.confirmed &&
+          (this.confirmed.frozen || this.confirmed.alive === false)) {
+        this.stats.frozenPauses += 1;
+      }
+      this.lastRunAt = now;
+      this.accumulator = 0;
+      return 0;
     }
+    if (this.lastRunAt === null) {
+      this.lastRunAt = now;
+      this.accumulator = 0;
+      return 0;
+    }
+    if (this.holdStepAt !== null && now <= this.holdStepAt) {
+      // observe() already presented this instant's movement.
+      this.lastRunAt = now;
+      return 0;
+    }
+    let dt = now - this.lastRunAt;
     this.lastRunAt = now;
-    return 0;
+    if (dt < 0) dt = 0;
+    if (dt > this.tickMs * this.limits.maxCatchupTicks) {
+      // A backgrounded tab must not burst-rewind the board when it wakes.
+      this.stats.catchupDiscards += 1;
+      this.accumulator = 0;
+      return 0;
+    }
+    this.accumulator += dt;
+    const lead = this.predicted.tick - this.confirmed.tick;
+    const sinceFrame = this.arrivalAt === null ? Infinity : now - this.arrivalAt;
+    const outage = sinceFrame > this.tickMs * 1.5;
+    // Healthy link: only as far as the measured apply delay. Outage: keep
+    // moving like single-player, then stop at the ceiling instead of inventing
+    // a path through a board nobody has validated.
+    const cap = outage ? this.limits.maxLeadTicks : this.leadTarget;
+    if (lead >= cap || lead >= this.limits.maxLeadTicks) {
+      if (lead >= this.limits.maxLeadTicks) this.stats.leadStalls += 1;
+      if (this.accumulator > this.tickMs) this.accumulator = this.tickMs;
+      return 0;
+    }
+    const behind = this.predicted.tick < this.confirmed.tick + this.leadTarget;
+    const period = behind ? this.tickMs * 0.5 : this.tickMs;
+    if (this.accumulator < period) return 0;
+    this.accumulator -= period;
+    if (this.accumulator > this.tickMs) this.accumulator = this.tickMs;
+    return this.runTick() ? 1 : 0;
   }
 
   // Re-simulates the local view back out to where it was, from confirmed state.
   // Bounded by the same ceiling as normal play, so a long outage cannot make the
-  // replay expensive.
-  // No speculative lead is ever reconstructed: that replayed several cells in a
-  // single frame and was the other half of the "it moved by itself" report.
-  replayAhead() {
-    return 0;
+  // replay expensive. Used when a real disagreement (or a rejected input) has
+  // rewound the body and the lead we were already showing has to be rebuilt.
+  // It is NOT used on a frame the prediction already got right.
+  replayAhead(ticks) {
+    if (!this.predicted || !ticks) return 0;
+    this.replaying = true;
+    let run = 0;
+    try {
+      while (run < ticks && run < this.limits.maxLeadTicks && this.predicted.tick <
+             this.confirmed.tick + this.limits.maxLeadTicks) {
+        if (!this.runTick()) break;
+        run += 1;
+      }
+    } finally {
+      this.replaying = false;
+    }
+    return run;
   }
 
   runTick() {
@@ -565,7 +682,7 @@ export class LocalPredictor {
     // rule is locally deterministic (the tail vacates unless growing). Duel
     // bodies and head-ons are NOT predictable, so nothing is assumed there.
     if (this.mode === 'brawl' && this.hitsSelf(state, target)) {
-      this.remember(tick, state.body[0]);
+      this.remember(tick, state.body[0], state.body.length);
       // The predicted head stops at the wall. The server declares the death; the
       // renderer never invents an elimination, a score freeze or a placement.
       this.stats.blockedTurns += 1;
@@ -586,6 +703,8 @@ export class LocalPredictor {
       state.grow += this.growth;
       this.stats.predictedFood += 1;
       this.stats.predictedGrowths += 1;
+      this.eatenCell = targetIndex;
+      this.ateAt = tick;
       this.food = null;
     }
     state.body.unshift(targetIndex);
@@ -595,19 +714,21 @@ export class LocalPredictor {
     state.tick = tick;
     this.predicted.tick = tick;
     if (!this.replaying) this.stats.predictedTicks += 1;
-    this.remember(tick, state.body[0]);
+    this.remember(tick, state.body[0], state.body.length);
 
     return true;
   }
 
-  // Every tick the local view paints is recorded as a claim, including one
-  // re-derived by a replay: the audit asks "was what you showed right?", and
-  // that includes a tick you had to reconstruct.
-  remember(tick, head) {
+  remember(tick, head, length) {
     this.predictedHeads.set(tick, head);
+    if (Number.isInteger(length)) this.predictedLengths.set(tick, length);
     if (this.confirmed) {
+      const floor = this.confirmed.tick - this.limits.maxLeadTicks;
       for (const key of this.predictedHeads.keys()) {
-        if (key < this.confirmed.tick - this.limits.maxLeadTicks) this.predictedHeads.delete(key);
+        if (key < floor) {
+          this.predictedHeads.delete(key);
+          this.predictedLengths.delete(key);
+        }
       }
     }
   }
@@ -694,16 +815,21 @@ export class LocalPredictor {
   // ---- rendering -------------------------------------------------------------
 
   // Returns the frame the canvas should PAINT. Only this player's cells,
-  // direction and length are replaced, and only while prediction is active;
-  // remote snakes, food, scoreboard, freeze rings, dust and results are read
-  // from the authoritative frame exactly as before, so Classic and every other
-  // theme/caching path is byte-for-byte the old renderer.
+  // direction and length are replaced, and only while prediction is active.
+  // The cells are the locally simulated body: one honest grid step per tick,
+  // never a pathfind back from a correction. Remote snakes, food, the
+  // scoreboard, dust and results stay on the authoritative frame.
   displayFrame(frame) {
     if (!this.active || !frame || !Array.isArray(frame.p)) return frame;
-    // rebuild() copies the confirmed body verbatim, so these ARE the server's
-    // cells: the head ring, the body and the freeze marker all read one array
-    // and can never disagree about where the head is.
     const cells = this.predicted.body;
+    let food = frame.f;
+    // The local snake may already have bitten a pellet the newest frame still
+    // shows. Drop that one pellet so it does not sit on a cell the head has
+    // passed. Every other pellet stays exactly where the server put it.
+    if (this.eatenCell !== null && Array.isArray(food)) {
+      food = food.filter((pellet) => !(Number(pellet.o) === Number(this.ownParticipantId) &&
+        pellet.c === this.eatenCell));
+    }
     const players = frame.p.map((player) => {
       if (Number(player.i) !== Number(this.ownParticipantId)) return player;
       // Playback may attach fractional remote coordinates to a frame. They
@@ -720,30 +846,31 @@ export class LocalPredictor {
         pr: 1
       };
     });
-    return { ...frame, p: players, pr: 1 };
+    return { ...frame, p: players, f: food, pr: 1 };
   }
 
   state() {
     if (!this.predicted) return null;
+    const lead = Math.max(0, this.predicted.tick - (this.confirmed?.tick ?? this.predicted.tick));
     return {
       tick: this.predicted.tick, confirmedTick: this.confirmed?.tick ?? null,
       body: this.predicted.body.slice(), direction: this.predicted.direction,
       queue: this.predicted.queue.slice(), length: this.predicted.body.length,
-      blocked: this.predicted.blocked, lead: 0,
+      blocked: this.predicted.blocked, lead,
       score: this.confirmed?.score ?? null, alive: this.confirmed?.alive ?? false,
-      frozen: this.confirmed?.frozen ?? false, official: true
+      frozen: this.confirmed?.frozen ?? false,
+      official: lead === 0
     };
   }
 
   summary() {
     const { limits, stats, pending, confirmed, predicted } = this;
+    const lead = predicted && confirmed ? Math.max(0, predicted.tick - confirmed.tick) : 0;
     return {
       ...stats,
       enabled: this.enabled, active: this.active, reason: this.reason,
       mode: this.mode, tickMs: this.tickMs, growth: this.growth,
-      // Always zero: the own snake is server-stepped, so there is no local lead.
-      lead: 0,
-      leadTarget: this.leadTarget,
+      lead, leadTarget: this.leadTarget,
       confirmedTick: confirmed?.tick ?? null, predictedTick: predicted?.tick ?? null,
       pending: pending.length,
       pendingSeqs: pending.map((entry) => entry.seq),
