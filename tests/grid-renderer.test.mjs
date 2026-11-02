@@ -520,3 +520,19 @@ test('a remote pellet is drawn until the snake you can see eats it', () => {
     `the pellet the visible snake has not reached yet must still be on the board: ${JSON.stringify(arcs.map((c) => c.args.slice(0, 2)))}`);
   h.close();
 });
+
+test('a frozen own snake does not stop the loop that ticks everyone else', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  r.accept(boardFrame(0));
+  h.refresh(0);
+  assert.notEqual(r.predictionLoop, null, 'responsive play arms one shared tick loop');
+  const frozen = boardFrame(1, { remote: [101, 100, 99] });
+  frozen.p[0] = { ...frozen.p[0], fr: true, cy: 'disconnected' };
+  assert.equal(r.accept(frozen), true);
+  h.refresh(100);
+  assert.equal(r.local.active, false, 'a frozen snake is not predicted forward');
+  assert.equal(r.playback.enabled, true);
+  assert.notEqual(r.predictionLoop, null, 'freeze must not kill remote ticks or leave the board dead');
+  h.close();
+});

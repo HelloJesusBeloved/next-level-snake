@@ -256,3 +256,42 @@ test('jitter, duplicates, dropped ticks and outages keep the displayed snake con
   assert.ok(local.summary().lead <= local.summary().limits.maxLeadTicks, 'outage does not run away');
   assert.equal(priorHead, local.state().body[0], 'the visual path settles');
 });
+
+test('a server respawn does not hide the pellet this snake is still eating', () => {
+  const { local } = make();
+  const first = frame(0);
+  first.f = [{ c: 126, o: 1 }];
+  local.observe(first);
+  assert.equal(local.state().body[0], 125);
+  const eaten = frame(1, { b: [126, 125, 124, 123], l: 4 });
+  eaten.f = [{ c: 200, o: 1 }];
+  local.observe(eaten);
+  assert.equal(local.state().body[0], 125, 'the confirming frame must not pull the head onto the bite');
+  assert.equal(local.food, 126, 'the pellet being walked toward stays until this head bites it');
+  const shown = local.displayFrame(eaten).f.find((pellet) => pellet.o === 1);
+  assert.equal(shown.c, 126, 'the owner draws the pellet the local head will bite, not the respawn');
+  assert.equal(local.runTick(), true);
+  assert.equal(local.state().body[0], 126);
+  assert.equal(local.state().length, 4, 'biting the cell on screen grows the snake');
+  const respawn = frame(2, { b: [127, 126, 125, 124], l: 4 });
+  respawn.f = [{ c: 200, o: 1 }];
+  local.observe(respawn);
+  assert.equal(local.food, 200, 'the respawn is adopted once this snake has bitten');
+  assert.equal(local.displayFrame(respawn).f.find((pellet) => pellet.o === 1).c, 200);
+});
+
+test('a freeze or disconnect rejection does not yank the snake back onto the server', () => {
+  const { local, set } = make();
+  local.observe(frame(0));
+  set(TICK);
+  assert.equal(local.advance(TICK), 1);
+  const head = local.state().body[0];
+  assert.notEqual(head, 125);
+  const turn = local.submit('down', 1);
+  assert.equal(turn.rejectedReason, null);
+  assert.equal(local.noteRejected(1, 'frozen'), true);
+  assert.equal(local.state().body[0], head, 'a socket blip must not rebuild the body');
+  assert.equal(local.state().direction, 'right');
+  assert.deepEqual(local.state().queue, [], 'the refused press must not steer the next cell');
+  assert.equal(local.pending.length, 0);
+});

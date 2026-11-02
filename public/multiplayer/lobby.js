@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-7';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-7';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-8';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-8';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-7';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-8';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -23,11 +23,11 @@ import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideElimina
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
 // staleThreshold * (1 + rate)^attempts seconds, plus a random 0..rate
-// multiplier (0..1 on the first try). First retry lands ~4 s, ~1.35x growth
-// per attempt after, up to ~50 % extra jitter — a server restart is never
-// hammered, and a single tab gives up fast enough to notice. Attempts are
-// surfaced in the connection chip.
-ConnectionMonitor.staleThreshold = 4;
+// multiplier (0..1 on the first try). The server pings about every 3s.
+// A 4s threshold treated one late Cloudflare Tunnel ping as a dead socket,
+// which unsubscribed the match and froze the snake. 15s is about four missed
+// pings: a real drop still reconnects, a slow ping does not.
+ConnectionMonitor.staleThreshold = 15;
 ConnectionMonitor.reconnectionBackoffRate = 0.35;
 
 const NAME_KEY = 'snake.multiplayer.name.v1';

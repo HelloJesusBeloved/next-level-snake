@@ -306,8 +306,12 @@ export class LocalPredictor {
       this.food = serverFood;
       this.ateAt = null;
       this.eatenCell = null;
+      // A freeze, death, or not-yet-running frame adopts the server body once.
+      // Replaying the local queue on top of that snap is the erratic second
+      // after a reconnect: those turns were already shown. The first running
+      // frame still schedules anything pressed before the snake existed.
       this.rebuild();
-      this.reschedulePending();
+      if (!stopped) this.reschedulePending();
       if (!oldPredicted) {
         this.lastRunAt = this.clock();
         this.accumulator = 0;
@@ -322,22 +326,52 @@ export class LocalPredictor {
     // inputs and refreshes food. Copying the server's queued directions back
     // onto this snake replays corners it has already taken.
     this.adoptFood(serverFood, tick);
+    // Same head as the server: a missed bite can leave the tail short. Fix the
+    // tail in place. Never move the head, and never shrink a bite we already
+    // showed — both of those are the jerk.
+    const serverCells = this.confirmed.body.map((cell) => cellIndex(cell[0], cell[1], this.columns));
+    const ourHead = this.predicted.body[0];
+    const serverHead = serverCells[0];
+    if (serverHead === ourHead && serverCells.length > this.predicted.body.length) {
+      this.predicted.body = serverCells.slice();
+      this.predicted.length = serverCells.length;
+      this.predicted.grow = this.confirmed.growthRemaining ?? 0;
+    } else if (serverHead !== ourHead && this.oneStep(ourHead, serverHead, this.predicted.direction) &&
+               serverCells.length >= this.predicted.body.length &&
+               serverCells.length <= this.predicted.body.length + this.growth &&
+               this.accumulator >= this.tickMs * 0.5 && this.accumulator < this.tickMs) {
+      // The server already took the step this clock is in the second half of.
+      // Take it on the next paint so the two screens are not a whole square
+      // apart for the rest of the period. One cell, same direction, no rewind.
+      this.accumulator = this.tickMs;
+    }
     this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
     return this.active;
   }
 
-  // Frames from before a predicted bite still carry that pellet. Putting it
-  // back would grow the snake a second time. A different pellet is the server
-  // respawn, and it waits until this snake has actually bitten.
+  // The pellet this snake is walking toward stays until THIS head bites it.
+  // The server drops a pellet the instant ITS head eats, which can be a tick
+  // before ours, and the respawn is a different cell. Taking that early is
+  // why every other food vanished on your own screen and awarded no length.
   adoptFood(serverFood, tick) {
-    if (this.ateAt !== null && tick <= this.ateAt) return;
-    if (this.food !== null && serverFood !== this.food) return;
     if (serverFood !== null && serverFood === this.eatenCell) return;
+    if (this.food !== null && serverFood !== this.food) return;
     this.food = serverFood;
-    if (serverFood !== null && serverFood !== this.eatenCell) {
+    if (serverFood !== null) {
       this.ateAt = null;
       this.eatenCell = null;
     }
+  }
+
+  // True when `to` is the single cell `from` enters by continuing `direction`,
+  // including a wrap. Anything else is a different path and must not be copied
+  // onto the snake the player is looking at.
+  oneStep(from, to, direction) {
+    const delta = DIRECTIONS[direction];
+    if (!delta || !Number.isInteger(from) || !Number.isInteger(to)) return false;
+    const x = wrap((from % this.columns) + delta[0], this.columns);
+    const y = wrap(Math.floor(from / this.columns) + delta[1], this.rows);
+    return y * this.columns + x === to;
   }
 
   // The only food the predictor knows is the food the server already published
@@ -375,10 +409,22 @@ export class LocalPredictor {
   noteRejected(seq, reason = null) {
     if (!Number.isInteger(seq)) return false;
     this.stats.rejectedAcks += 1;
-    const before = this.pending.length;
     const ahead = this.predicted && this.confirmed ? Math.max(0, this.predicted.tick - this.confirmed.tick) : 0;
+    const dropped = this.pending.find((entry) => entry.seq === seq);
     this.pending = this.pending.filter((entry) => entry.seq !== seq);
-    if (before === this.pending.length) return false;
+    if (!dropped) return false;
+    // Paused because the socket blipped. The body stays where the player saw
+    // it; rebuilding here yanks it back onto the server and replays the queue.
+    // The refused press itself must leave the local queue, or the next cell
+    // turns somewhere the server will not.
+    if (reason === 'frozen' || reason === 'disconnected') {
+      if (this.predicted && !dropped.consumed && dropped.direction) {
+        const index = this.predicted.queue.indexOf(dropped.direction);
+        if (index !== -1) this.predicted.queue.splice(index, 1);
+      }
+      this.emit({ type: 'input_rejected', seq, reason });
+      return true;
+    }
     this.rebuild();
     this.reschedulePending();
     this.replayAhead(ahead);
@@ -734,14 +780,15 @@ export class LocalPredictor {
   displayFrame(frame) {
     if (!this.active || !frame || !Array.isArray(frame.p)) return frame;
     const cells = this.predicted.body;
-    let food = frame.f;
-    // The local snake may already have bitten a pellet the newest frame still
-    // shows. Drop that one pellet so it does not sit on a cell the head has
-    // passed. Every other pellet stays exactly where the server put it.
-    if (this.eatenCell !== null && Array.isArray(food)) {
-      food = food.filter((pellet) => !(Number(pellet.o) === Number(this.ownParticipantId) &&
-        pellet.c === this.eatenCell));
-    }
+    const ownId = Number(this.ownParticipantId);
+    const frameFood = Array.isArray(frame.f) ? frame.f : [];
+    // Own pellet follows THIS snake, not the newest server frame. The server
+    // can already have eaten and respawned while our head is still one cell
+    // short of the bite. Drawing the respawn (or drawing nothing) made the
+    // food invisible, and the bite awarded no length because it was not the
+    // cell on screen. Other players' pellets stay on the server frame.
+    const food = frameFood.filter((pellet) => Number(pellet.o) !== ownId);
+    if (this.food !== null) food.push({ c: this.food, o: ownId });
     const players = frame.p.map((player) => {
       if (Number(player.i) !== Number(this.ownParticipantId)) return player;
       // Playback may attach fractional remote coordinates to a frame. They

@@ -6,8 +6,8 @@
 // one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-7';
-import { RemotePlayback } from './playback.js?v=step11-responsive-7';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-8';
+import { RemotePlayback } from './playback.js?v=step11-responsive-8';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -336,7 +336,8 @@ export class MultiplayerGameRenderer {
   // the engine's own rules, so a snake never rotates between grid ticks. The
   // rAF callback only decides WHEN to advance; elapsed time decides HOW MUCH.
   startPredictionLoop() {
-    if (this.predictionLoop !== null || !this.local?.enabled) return false;
+    if (this.predictionLoop !== null) return false;
+    if (!this.local?.enabled && !this.playback?.enabled) return false;
     // One coordinated animation loop. The local snake steps on its clock.
     // Remote snakes step when the playback playhead crosses into the next
     // confirmed tick. Both are whole cells. Neither glides, and neither
@@ -571,7 +572,13 @@ export class MultiplayerGameRenderer {
         this.lastPaintedPlaybackTick = smooth.tick;
       }
     }
-    if (this.local?.enabled && !this.local.active) this.stopPredictionLoop();
+    // A frozen or eliminated snake stops advancing, but this loop is also what
+    // steps every other snake. Stopping it here left the board dead until a
+    // reload: remote ticks never ran, and nothing started the loop again when
+    // the freeze lifted. advance() already holds a paused snake in place.
+    if ((this.local?.enabled || this.playback?.enabled) && this.predictionLoop === null) {
+      this.startPredictionLoop();
+    }
     this.hudBudget.add('scores', () => this.drawScoreboard());
     // Keep authoritative receipt/control state current even if display is
     // paced or paused. Only the visual frame goes through the tiny queue.
@@ -810,7 +817,7 @@ export class MultiplayerGameRenderer {
     // behind the newest frame. `smooth` is null for Classic, which keeps the
     // integer-cell path below byte-for-byte the old code.
     const smooth = this.smoothPlayers();
-    const ownId = this.ownParticipantId;
+    const ownId = this.ownParticipantId == null ? null : Number(this.ownParticipantId);
 
     // Food (zero allocations in the hot loop).
     //
@@ -826,7 +833,8 @@ export class MultiplayerGameRenderer {
     if (heldByOwner) {
       for (let i = 0; i < heldFood.length; i++) {
         const pellet = heldFood[i];
-        if (pellet && Number.isInteger(pellet.o)) heldByOwner.set(pellet.o, pellet);
+        const owner = Number(pellet && pellet.o);
+        if (pellet && Number.isInteger(owner)) heldByOwner.set(owner, pellet);
       }
     }
     const pelletColor = (owner) => {
@@ -848,8 +856,9 @@ export class MultiplayerGameRenderer {
     const newestOwners = new Set();
     for (let f = 0; f < snapshot.f.length; f++) {
       const food = snapshot.f[f];
-      if (Number.isInteger(food.o)) newestOwners.add(food.o);
-      const remote = heldByOwner && food.o !== ownId ? heldByOwner.get(food.o) : null;
+      const owner = Number(food.o);
+      if (Number.isInteger(owner)) newestOwners.add(owner);
+      const remote = heldByOwner && owner !== ownId ? heldByOwner.get(owner) : null;
       drawPellet(remote && Number.isInteger(remote.c) ? remote.c : food.c, pelletColor(food.o));
     }
     // A pellet the newest frame no longer carries, but whose (delayed) snake has
@@ -876,7 +885,7 @@ export class MultiplayerGameRenderer {
       ctx.fillStyle = color;
       const body = player.b;
       const remote = smooth && smooth.players ? smooth.players.get(player.i) : null;
-      const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && player.i !== ownId)
+      const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && Number(player.i) !== ownId)
         ? remote.cells : body;
       ctx.beginPath();
       for (let part = 0; part < drawn.length; part += 1) {
@@ -890,7 +899,7 @@ export class MultiplayerGameRenderer {
       ctx.fill();
 
       // Head ring reads the same cells that were just drawn.
-      if (drawn.length && (player.i === this.ownParticipantId || player.i === this.followId)) {
+      if (drawn.length && (Number(player.i) === ownId || player.i === this.followId)) {
         const index = drawn[0];
         const x = index % cols; const y = Math.floor(index / cols);
         const left = Math.round(ox + x * cell + pad);
@@ -913,7 +922,7 @@ export class MultiplayerGameRenderer {
       if (!player.a || !player.fr || !Array.isArray(player.b) || player.b.length === 0) continue;
       // The ring goes on the head that was actually drawn, not on the newest
       // frame's head, so it can never float off the snake.
-      const frozenRemote = smooth && smooth.players && player.i !== ownId
+      const frozenRemote = smooth && smooth.players && Number(player.i) !== ownId
         ? smooth.players.get(player.i) : null;
       const frozenCells = frozenRemote && Array.isArray(frozenRemote.cells) && frozenRemote.cells.length
         ? frozenRemote.cells : player.b;
