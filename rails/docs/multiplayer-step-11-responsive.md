@@ -1,70 +1,62 @@
-# Responsive Brawl (step 11): local prediction + buffered remote playback
+# Responsive Brawl (step 11): one confirmed tick, plus a one-cell input lead
 
 Responsive Brawl is a **presentation strategy**, not a game mode and not a rule
 set. A room's `mode` (`brawl`/`duel`) still decides the authoritative rules, and
-both presentation strategies are served by the same `Simulation::World`, the same
-scoring and collision rules, and the same match result.
+both presentation strategies are served by the same `Simulation::World`.
 
 | | Classic Brawl (default) | Responsive Brawl |
 | --- | --- | --- |
-| Own snake | painted from the confirmed snapshot | **predicted locally** (step 2) |
-| Other snakes | painted from the confirmed snapshot | **buffered, interpolated** (step 3) |
-| Wire | one complete snapshot per frame | compact movement frames + periodic snapshots |
-| Authority | server | server — unchanged |
+| Own snake | the confirmed snapshot | the same confirmed tick, plus at most one not-yet-applied turn |
+| Other snakes | the confirmed snapshot | that same confirmed tick, one tick behind the newest frame |
+| Pellets, score, length | the confirmed snapshot | that same tick. The client does not keep its own pellet |
+| Wire | one complete snapshot per published frame | one complete snapshot per simulated tick, with `tick_ms`, `tm`, food generation `g` and eaten events `fe` |
+| Authority | server | server — unchanged. The input envelope is still `{v,type,match,tick,seq,dir}` |
+
+A full snapshot of a normal board is about a kilobyte (two length-8 snakes on
+24×18). At 105 ms that is about 10 KB/s. Compact movement frames were smaller
+and could not say which pellet generation was eaten, and a catch-up of several
+`step!` calls used to publish only the last tick. Responsive matches therefore
+send the complete frame for every tick. Classic's snapshot bytes are unchanged.
 
 ## Where the code lives
 
 | Concern | File |
 | --- | --- |
 | Strategy as a room/match setting | `rails/app/models/room.rb`, `.../concerns/room_configuration.rb`, `rails/app/models/match.rb` |
-| Strategy on the wire | `rails/app/lib/simulation/protocol.rb` (`encode`, `encode_movement`) |
-| Which frame type is sent | `rails/app/models/match_runner.rb` (`publish_frame`) |
-| Chunking / resync | `rails/app/channels/match_channel.rb` |
-| Local prediction | `public/multiplayer/prediction.js` |
-| Remote playback | `public/multiplayer/playback.js` |
-| Canvas integration | `public/multiplayer/game-renderer.js` (`present`, `presentPlayback`, `draw`) |
-| Input/ack wiring, diagnostics | `public/multiplayer/lobby.js` |
+| Food generation and eaten events | `rails/app/lib/simulation/food.rb`, `world.rb`, `protocol.rb` |
+| One frame per simulated tick | `rails/app/models/match_runner.rb` (`capture_responsive_frame`, `publish_frame`) |
+| One-cell input lead | `public/multiplayer/prediction.js` |
+| Render delay of one tick | `public/multiplayer/playback.js` |
+| Canvas | `public/multiplayer/game-renderer.js` |
+
+## What the client draws
+
+Every snake, pellet, length and score on the canvas comes from one confirmed
+tick: `newest - 1`. The playhead slews toward that tick and keeps leftover
+time, so a burst does not become a permanent offset. It never glides and never
+invents a cell for a hole.
+
+The only thing predicted locally is a turn the server has not applied yet, drawn
+one cell ahead of that confirmed body. On the frame for that tick the predicted
+head is compared with the server head. If the difference is the pending turn,
+the turn stays. Any other difference snaps to the server body. Food is never
+predicted.
 
 ## Remote playback model
 
-A snapshot is a complete authoritative frame, so nothing is *simulated* for other
-players. The browser keeps server-confirmed frames **keyed by tick**, and renders
-at `playhead = newest confirmed tick - delayTicks`, advancing the playhead on the
-monotonic clock (not on packet arrival).
+A snapshot is a complete authoritative frame. The browser keeps those frames
+keyed by tick and renders `playhead = newest confirmed tick - 1`.
 
-Interpolation is between **two adjacent confirmed ticks only**, segment by
-segment:
+Interpolation is not used. Segment positions are whole cells from the frame
+being rendered. A missing tick is skipped to the next stored snapshot. The
+render delay is one tick, not an adaptive 90–600 ms cushion.
 
-* segment `i` of tick `T+1` animates from segment `i` of tick `T` to where it is
-  at `T+1`, so `Right -> Up -> Left` is played as those three turns;
-* a segment moves at most **one cell** per tick — a longer jump (a missing tick)
-  is never interpolated, the board holds instead;
-* movement is resolved in **toroidal** space (shortest step on a board whose
-  edges join), so a wrap slides off one edge and on to the other. A straddling
-  segment is drawn on both sides for one tick. It is never dragged across the
-  board;
-* growth is a longer body (tail stays), a vacated tail simply disappears;
-* the own snake is excluded whenever prediction is active, so the two systems
-  never write the same cells.
+## Input
 
-### Adaptive delay
+Clients still send only `{ v, type, match, tick, seq, dir }`.
+`FORBIDDEN_INPUT_KEYS` is unchanged. The server still applies a queued turn on
+the following `step!`.
 
-`PLAYBACK_TUNING` in `public/multiplayer/playback.js`:
-
-| Link | Target added delay |
-| --- | --- |
-| stable | 120 ms |
-| moderate jitter | 260 ms |
-| heavy jitter | 480 ms |
-| hard bounds | 90 – 600 ms |
-
-The delay is nudged at most `40 ms per second` toward its target — remote snakes
-never visibly change speed to chase it. Arrival spread (median + range of the
-excess over one tick) is the jitter signal, and it is reported as an **estimate**;
-the RTT in diagnostics is a **measured** input round trip. If confirmed history
-runs out the board stops at the newest confirmed tick (counted as an underrun); if
-the playhead falls more than `maxLagTicks` behind, stale history is dropped. At
-most `maxBufferTicks` (40) ticks are retained.
 
 ### Recovery
 
@@ -77,29 +69,21 @@ most `maxBufferTicks` (40) ticks are retained.
 
 ## Wire format
 
-`Simulation::Protocol.encode_movement` drops what does not change between ticks
-(standings, board dims, rules mode, names, colours, placements) and sends only
-heads, lengths and scalars. `Protocol.rebuild_body` documents the reconstruction
-(`[head, *previous.take(len - 1)]`), and `rails/test/simulation/movement_protocol_test.rb`
-proves a chain of movement frames rebuilds byte-identical bodies to the full
-snapshots the same world emitted.
+Responsive matches broadcast `Protocol.encode` — a complete snapshot — for every
+simulated tick, including each step of a catch-up burst. The additive fields are
+`tick_ms`, `tm` (tick × tick_ms), food generation `g`, and `fe` (eaten events:
+owner, generation, tick, cell). Classic snapshots do not include those keys, and
+Classic food stays `{c, o}`.
 
-Measured with `node scripts/measure-step11-wire.mjs`:
+`encode_movement` still exists and the Rails reconstruction test still proves a
+contiguous compact chain is lossless. Responsive does not put that chain on the
+wire. A compact frame cannot name which pellet generation was eaten, and a
+catch-up that published only the last tick forced the browser to invent the
+ones in between. A full snapshot of two length-8 snakes on 24×18 is about 1.1 KB,
+about 10 KB/s at 105 ms.
 
-| Case | Snapshot | Movement frame | Saved |
-| --- | --- | --- | --- |
-| 2 players, 3-cell bodies | 595 B | 351 B | 41 % |
-| 8 players, 3-cell bodies | 1 696 B | 1 095 B | 35 % |
-| **8 players, 250-cell bodies** | **8 060 B** | **466 B** | **94 %** |
-
-The realistic case also matters operationally: 8 060 B exceeds PostgreSQL's 8 kB
-NOTIFY payload and is **chunked into several messages**, while 466 B fits in one.
-Complete snapshots are still sent on the first frame, every
-`MOVEMENT_FULL_INTERVAL_TICKS` (12) ticks, and on every structural change
-(elimination, freeze/unfreeze, status), so recovery is always bounded.
-
-**Classic matches never receive a movement frame.** Their byte stream is
-unchanged from before this step.
+**Classic matches never receive a movement frame and never receive the
+Responsive fields.** Their byte stream is unchanged.
 
 ## Diagnostics
 
@@ -120,19 +104,20 @@ open:
 
 ## Tests
 
-* `rails/test/simulation/movement_protocol_test.rb` — compact frame shape and
-  lossless body reconstruction against the real engine.
+* `rails/test/simulation/responsive_food_identity_test.rb` — generation increments
+  once per eat, a catch-up keeps every tick, Classic snapshots gain no new keys.
 * `rails/test/channels/movement_broadcast_test.rb` — Classic sends snapshots
-  only; Responsive sends movement frames between periodic snapshots; structural
-  changes force a snapshot; oversized movement frames fall back; `resync`
-  transmits one complete frame; two participants steer only their own snakes.
+  only; Responsive sends one complete snapshot per tick with `tick_ms`, `tm`,
+  `fe` and food `g`.
+* `tests/responsive-authority.test.mjs` — two clients, loss and jitter, one
+  pellet per owner at the server cell, render offset does not grow.
 * `rails/test/controllers/api/brawl_presentation_strategy_test.rb` — a Responsive
   match starts and the strategy is reported truthfully on the start response, the
   frozen room configuration, the match row, the world and both frame types.
-* `tests/remote-playback.test.mjs` — ordering, bounded buffer, playhead lag,
-  path-faithful interpolation, turns, horizontal and vertical wrap, underruns,
-  missing ticks, adaptive delay bounds and gradualness, compact reconstruction,
-  freeze/elimination, two independent clients, Classic inert.
+* `tests/remote-playback.test.mjs` — ordering, bounded buffer, playhead held
+  at newest tick minus one, surplus time kept, a hole is not filled with an
+  invented body, compact reconstruction refused, freeze/elimination, two
+  independent clients, Classic inert.
 * `tests/grid-renderer.test.mjs` — renderer integration: which snake is painted
   from which source, refusal + resync, throttling, reconnect/destroy cleanup, and
   a Classic-vs-Responsive diagnostics comparison.

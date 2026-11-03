@@ -384,19 +384,13 @@ test('remote playback steps whole cells and never glides between them', () => {
   assert.equal(headOf(), 100);
   h.at(50);
   r.accept(boardFrame(1, { own: [31, 30, 29], remote: [101, 100, 99] }));
-  assert.equal(headOf(), 100, 'a packet must not move a remote snake');
+  assert.equal(headOf(), 100, 'the one-tick delay does not sit on the packet');
   h.at(105); h.refresh(105);
-  assert.equal(headOf(), 100, 'the delay buffer holds this cell; the packet does not spend it');
-  // One tick of the clock after the buffer was armed (the frame at t=50).
-  h.at(155); h.refresh(155);
-  assert.equal(headOf(), 101, 'the next confirmed cell is one square, on the clock');
-  h.at(200); h.refresh(200);
-  assert.equal(headOf(), 101, 'the cell is held until the next tick');
-  assert.equal(r.lastPlaybackSample.interpolated, false, 'remote snakes must not glide');
+  assert.equal(headOf(), 100, 'still the previous cell until a newer frame exists');
   r.accept(boardFrame(2, { own: [32, 31, 30], remote: [102, 101, 100] }));
-  assert.equal(headOf(), 101, 'the second packet does not skip the clock either');
-  h.at(305); h.refresh(305);
-  assert.equal(headOf(), 102);
+  h.at(210); h.refresh(210);
+  assert.equal(headOf(), 101, 'the playhead advances one confirmed cell, not onto the newest');
+  assert.equal(r.lastPlaybackSample.interpolated, false, 'remote snakes must not glide');
   const remote = r.lastPlaybackSample.players.get(2);
   assert.equal(remote.smooth, undefined, 'no fractional coordinates on a remote snake');
   for (const cell of remote.cells) assert.equal(typeof cell, 'number');
@@ -490,9 +484,10 @@ test('a remote pellet stays with the snake you can see, and leaves when that sna
   const pellet = { c: 101, o: 2 };
   r.accept(boardFrame(0, { remote: [99, 98, 97], extra: { f: [pellet] } }));
   r.accept(boardFrame(1, { remote: [100, 99, 98], extra: { f: [pellet] } }));
+  r.accept(boardFrame(2, { remote: [101, 100, 99], extra: { f: [pellet] } }));
   h.at(105); h.refresh(105);
   const before = r.lastPlaybackSample;
-  assert.equal(before.tick, 1, 'one tick of the clock shows the next confirmed cell');
+  assert.equal(before.tick, 1, 'the delay shows the previous confirmed tick');
   assert.deepEqual(before.food, [pellet], 'the pellet is still there because that snake has not eaten it');
   const cols = 24, rows = 18;
   const cell = Math.min(316 / cols, 237 / rows);
@@ -502,10 +497,13 @@ test('a remote pellet stays with the snake you can see, and leaves when that sna
   assert.ok(arcs.some((call) => Math.abs(call.args[0] - wantX) < 0.01 &&
     Math.abs(call.args[1] - wantY) < 0.01), 'the pellet is drawn on its cell');
   h.calls.length = 0;
-  r.accept(boardFrame(2, { remote: [101, 100, 99], extra: { f: [] } }));
-  h.at(210); h.refresh(210);
-  assert.equal(r.lastPlaybackSample.tick, 2);
+  r.accept(boardFrame(3, { remote: [102, 101, 100], extra: { f: [] } }));
+  r.accept(boardFrame(4, { remote: [103, 102, 101], extra: { f: [] } }));
+  h.at(420); h.refresh(420);
+  assert.equal(r.lastPlaybackSample.tick, 3);
   assert.deepEqual(r.lastPlaybackSample.food, [], 'once the visible snake eats, the pellet is gone');
+  h.calls.length = 0;
+  r.present(r.paintSnapshot, 420);
   const after = h.calls.filter((call) => call.name === 'arc');
   assert.ok(!after.some((call) => Math.abs(call.args[0] - wantX) < 0.01 &&
     Math.abs(call.args[1] - wantY) < 0.01), 'the eaten pellet is not left on the board');

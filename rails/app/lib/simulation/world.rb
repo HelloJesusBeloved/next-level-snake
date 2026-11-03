@@ -39,7 +39,8 @@ module Simulation
     end
 
     attr_reader :id, :config, :rules, :snakes, :tick, :status, :end_reason,
-                :started_at_tick, :ended_at_tick, :columns, :rows, :presentation_strategy
+                :started_at_tick, :ended_at_tick, :columns, :rows, :presentation_strategy,
+                :food_events
     # Ticks on which at least one alive snake could actually move. The match
     # DURATION limit is measured against this, not against the raw tick
     # counter, so a room where everybody backgrounded their tab simply pauses
@@ -59,6 +60,9 @@ module Simulation
       @columns = config.columns
       @rows = config.rows
       @server_time_ms = nil
+      @food_events = []
+      @responsive_frames = []
+      @responsive_noted_tick = nil
       @rng = state ? Rng.restore(state.fetch("rng")) : Rng.new(config.seed)
       @snakes = []
       @shared_food = []
@@ -188,6 +192,7 @@ module Simulation
       raise StateError, "match is #{status}" unless running?
 
       next_tick = @tick + 1
+      @food_events = []
       # Frozen snakes are present but immobile. They are NOT elimination
       # candidates and they never accrue survival ticks while frozen.
       movers = alive_snakes.reject(&:frozen?)
@@ -333,6 +338,26 @@ module Simulation
       Protocol.encode(self)
     end
 
+    # Responsive frames are recorded at the tick they describe, then drained by
+    # the broadcaster. A catch-up of several steps therefore cannot collapse
+    # into one frame: each step has already been encoded. Classic never notes
+    # a frame, so its byte stream is untouched.
+    def note_responsive_frame!
+      return [] unless presentation_strategy == "responsive"
+      # A tick is noted once. Draining the buffer for broadcast must not make
+      # the next scheduler pass emit the same snapshot again.
+      return @responsive_frames if @responsive_noted_tick == tick
+
+      @responsive_noted_tick = tick
+      @responsive_frames << Protocol.encode(self)
+    end
+
+    def drain_responsive_frames
+      frames = @responsive_frames
+      @responsive_frames = []
+      frames
+    end
+
     # Full checkpoint state — includes queued turns and the RNG cursor so an
     # owner can resume after a lease hand-over without replaying randomness.
     def to_state
@@ -376,16 +401,22 @@ module Simulation
         snake.score += 1
         snake.grow += config.growth
         snake.food_eaten_at_tick = next_tick
+        @food_events << {
+          owner: snake.id, generation: food.generation, tick: next_tick,
+          cell: food.index(@columns)
+        }
         [snake, food]
       end
     end
 
     # Brawl: immediately place a fresh owned food (single-player behaviour).
     def respawn_food!(eaten)
-      eaten.each do |snake, _food|
+      eaten.each do |snake, food|
         next unless snake.alive?
 
-        snake.food = pick_free_cell&.then { |cell| Food.new(x: cell[0], y: cell[1], owner_id: snake.id) }
+        snake.food = pick_free_cell&.then { |cell|
+          Food.new(x: cell[0], y: cell[1], owner_id: snake.id, generation: food.generation + 1)
+        }
       end
     end
 

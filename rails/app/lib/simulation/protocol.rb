@@ -16,7 +16,8 @@ module Simulation
     module_function
 
     def encode(world)
-      {
+      responsive = world.presentation_strategy == "responsive"
+      payload = {
         "v" => SNAPSHOT_VERSION,
         "m" => world.id,
         # Presentation metadata only; it never changes the authoritative rules.
@@ -36,17 +37,25 @@ module Simulation
           # has happened. Responsive clients need the still-queued turns and
           # outstanding growth to replay this exact authoritative state. Classic
           # snapshots are unchanged.
-          if world.presentation_strategy == "responsive"
+          if responsive
             player["dq"] = snake.queue.map(&:name)
             player["gr"] = snake.grow
           end
           player
         end,
-        "f" => world.foods.map { |food| encode_food(food, world.columns) },
+        "f" => world.foods.map { |food| encode_food(food, world.columns, responsive: responsive) },
         # Server wall clock for the grace countdown. The browser may render a
         # countdown from this, but transitions remain server-owned.
         "ts" => (world.server_time_ms || 0)
       }
+      # Responsive-only. Classic snapshots stay byte-for-byte the previous shape:
+      # no tick_ms, no monotonic tick stamp, no food generation, no eaten list.
+      if responsive
+        payload["tick_ms"] = world.config.tick_ms
+        payload["tm"] = world.tick * world.config.tick_ms
+        payload["fe"] = Array(world.food_events).map { |event| encode_food_event(event) }
+      end
+      payload
     end
 
     def encode_player(snake, columns)
@@ -67,8 +76,14 @@ module Simulation
       }
     end
 
-    def encode_food(food, columns)
-      { "c" => food.index(columns), "o" => food.owner_id }
+    def encode_food(food, columns, responsive: false)
+      encoded = { "c" => food.index(columns), "o" => food.owner_id }
+      encoded["g"] = food.generation if responsive
+      encoded
+    end
+
+    def encode_food_event(event)
+      { "o" => event[:owner], "g" => event[:generation], "t" => event[:tick], "c" => event[:cell] }
     end
 
     # ---- step 3: compact, tick-ordered movement frames ----------------------
@@ -93,7 +108,8 @@ module Simulation
     MOVEMENT_TYPE = "movement".freeze
 
     def encode_movement(world)
-      {
+      responsive = world.presentation_strategy == "responsive"
+      payload = {
         "v" => SNAPSHOT_VERSION,
         "type" => MOVEMENT_TYPE,
         "m" => world.id,
@@ -101,7 +117,7 @@ module Simulation
         "s" => world.status.to_s,
         "t" => world.tick,
         "ts" => (world.server_time_ms || 0),
-        "f" => world.foods.map { |food| encode_food(food, world.columns) },
+        "f" => world.foods.map { |food| encode_food(food, world.columns, responsive: responsive) },
         # Compact frames need the same reconciliation metadata as full frames.
         "p" => world.snakes.map do |snake|
           encode_movement_player(snake, world.columns).merge(
@@ -109,6 +125,12 @@ module Simulation
           )
         end
       }
+      if responsive
+        payload["tick_ms"] = world.config.tick_ms
+        payload["tm"] = world.tick * world.config.tick_ms
+        payload["fe"] = Array(world.food_events).map { |event| encode_food_event(event) }
+      end
+      payload
     end
 
     def encode_movement_player(snake, columns)

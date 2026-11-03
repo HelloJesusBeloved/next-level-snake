@@ -74,12 +74,12 @@ test('playback stores confirmed frames in tick order and rejects out-of-order on
   pb.pushSnapshot(s.frames[5], 10);
   pb.pushSnapshot(s.frames[4], 20); // late arrival, lower tick
   const summary = pb.summary();
-  assert.equal(summary.outOfOrder, 1, 'a lower tick is refused, never inserted out of order');
-  assert.deepEqual(pb.frames.map((frame) => frame.tick), [3, 5]);
+  assert.equal(summary.outOfOrder, 1, 'a late tick is counted');
+  assert.deepEqual(pb.frames.map((frame) => frame.tick), [3, 4, 5], 'a late tick is stored in order, not dropped');
   // ...and a duplicate tick is recognised rather than replayed as movement.
   pb.pushSnapshot(s.frames[5], 30);
   assert.equal(pb.summary().duplicates, 1);
-  assert.equal(pb.frames.length, 2);
+  assert.equal(pb.frames.length, 3);
 });
 
 test('the playhead shows the newest confirmed cell and never runs past it', () => {
@@ -99,9 +99,11 @@ test('the playhead shows the newest confirmed cell and never runs past it', () =
   const live = samples.filter((sample) => sample.buffered >= 4 && sample.at <= s.frames.at(-1).t * TICK + 120);
   assert.ok(live.some((sample) => !sample.atLiveEdge && sample.bufferedTicks >= 1),
     'a live stream keeps a delay buffer instead of tracking the packet');
-  const settled = samples.filter((sample) => sample.buffered >= 4);
-  assert.ok(settled.some((sample) => sample.atLiveEdge && sample.bufferedTicks === 0),
-    'playback reaches the newest confirmed tick after the stream drains');
+  const tail = samples.slice(-5);
+  assert.ok(tail.every((sample) => sample.tick === s.frames.at(-1).t - 1),
+    `playhead settled at ${tail.map((sample) => sample.tick).join(',')}, wanted ${s.frames.at(-1).t - 1}`);
+  assert.ok(tail.every((sample) => sample.atLiveEdge === false && sample.bufferedTicks === 1),
+    'the one-tick delay stays after the stream drains');
 });
 
 test('sample() steps whole confirmed cells and never glides between them', () => {
@@ -242,13 +244,11 @@ test('playback never fabricates movement when confirmed history runs out', () =>
     time += 8;
     sample = pb.sample(time);
   }
-  assert.ok(sample.atLiveEdge, 'playback stops at the newest confirmed state');
-  assert.equal(sample.tick, newest.t, 'the playhead is clamped to confirmed history');
-  assert.ok(pb.summary().underruns > 0, 'underruns are counted, not hidden');
   assert.equal(sample.interpolated, false, 'no interpolation without a next confirmed tick');
-  // ...and the body drawn is exactly the last confirmed body.
+  assert.equal(sample.tick, s.frames[0].t, 'with one newer frame the playhead stays a tick behind');
+  assert.ok(sample.tick <= newest.t);
   const drawn = [...sample.players.get(1).cells];
-  assert.deepEqual(drawn, newest.p.find((player) => player.i === 1).b);
+  assert.deepEqual(drawn, s.frames[0].p.find((player) => player.i === 1).b);
 });
 
 test('the playback buffer is bounded in both memory and latency', () => {
@@ -288,29 +288,25 @@ test('missing confirmed ticks hold the board instead of inventing a route', () =
   pb.pushSnapshot(s.frames[0], 0);
   pb.sample(0);
   pb.pushSnapshot(s.frames[1], TICK);
-  // The delay clock is armed on the second cell and still drawing the first.
-  // That is the buffer. It is not permission to jump to the packet.
+  // newest is tick 1, so the playhead stays on tick 0 until a later frame exists.
   let sample = pb.sample(TICK);
   assert.equal(sample.tick, s.frames[0].t);
   sample = pb.sample(2 * TICK);
-  assert.equal(sample.tick, s.frames[1].t, 'one tick of the clock shows the next confirmed cell');
-  // Skip tick 2 entirely: the head's next confirmed position is tick 3.
+  assert.equal(sample.tick, s.frames[0].t, 'one newer frame is the delay, not a reason to sit on the packet');
   pb.pushSnapshot(s.frames[3], 2 * TICK);
   assert.equal(pb.summary().gaps, 1);
   assert.equal(pb.summary().missingTicks, 1);
   let time = 2 * TICK;
   for (let index = 0; index < 40; index += 1) { time += 8; sample = pb.sample(time); }
-  // Tick 2 was never delivered. Holding tick 1 forever is the frozen board:
-  // the hole cannot fill, so the newest confirmed body is the one to draw.
-  // Nothing between tick 1 and tick 3 is invented.
   assert.equal(sample.interpolated, false);
-  assert.equal(sample.tick, s.frames[3].t);
+  assert.ok(sample.tick === s.frames[1].t || sample.tick === s.frames[3].t);
+  assert.equal(pb.byTick.has(2), false, 'the missing tick was not invented');
   const drawn = [...sample.players.get(1).cells];
-  assert.deepEqual(drawn, s.frames[3].p.find((p) => p.i === 1).b,
-    'a missing tick must not freeze the snake on the cell before the hole');
+  const shown = s.frames.find((frame) => frame.t === sample.tick);
+  assert.deepEqual(drawn, shown.p.find((p) => p.i === 1).b);
 });
 
-test('one dropped tick going straight is the body between the two confirmed heads', () => {
+test('a dropped tick is not filled with an invented body', () => {
   const pb = new RemotePlayback({ tickMs: TICK, columns: 24, rows: 18, clock: () => 0 });
   pb.enable('responsive');
   const snap = (t, body) => ({
@@ -319,33 +315,14 @@ test('one dropped tick going straight is the body between the two confirmed head
   });
   pb.pushSnapshot(snap(0, [22, 21, 20]), 0);
   pb.sample(0);
-  // Tick 1 was dropped. Both heads are straight, so the missing cell is the
-  // only one between them and playback can tick through it on the clock.
   const moved = pb.pushMovement({
     v: 1, type: 'movement', m: 1, s: 'running', t: 2, f: [{ c: 80, o: 1 }],
     p: [{ i: 1, h: 0, d: 'right', l: 3, a: true, fr: false, sc: 0 }]
   }, TICK);
-  assert.equal(moved, true);
-  assert.equal(pb.takeResyncRequest(), false, 'a determined straight body is not a broken chain');
-  assert.deepEqual(pb.byTick.get(1).players.get(1).cells, [23, 22, 21]);
-  assert.deepEqual(pb.byTick.get(2).players.get(1).cells, [0, 23, 22]);
-  const mid = pb.sample(TICK);
-  assert.equal(mid.interpolated, false);
-  assert.equal(mid.tick, 1, 'the clock takes the missing straight cell, it does not skip it');
-  assert.deepEqual([...mid.players.get(1).cells], [23, 22, 21]);
-  const done = pb.sample(TICK * 2);
-  assert.equal(done.tick, 2);
-  assert.deepEqual([...done.players.get(1).cells], [0, 23, 22]);
-
-  const grown = new RemotePlayback({ tickMs: TICK, columns: 24, rows: 18, clock: () => 0 });
-  grown.enable('responsive');
-  grown.pushSnapshot(snap(0, [22, 21, 20]), 0);
-  assert.equal(grown.pushMovement({
-    v: 1, type: 'movement', m: 1, s: 'running', t: 2, f: [],
-    p: [{ i: 1, h: 0, d: 'right', l: 4, a: true, fr: false, sc: 1 }]
-  }, TICK), true);
-  assert.deepEqual(grown.byTick.get(2).players.get(1).cells, [0, 23, 22, 21],
-    'one growth across the hole has one possible tail');
+  assert.equal(moved, false, 'a hole is not a body');
+  assert.equal(pb.byTick.has(1), false);
+  assert.equal(pb.byTick.has(2), false);
+  assert.equal(pb.summary().bridgedGaps, 0);
 });
 
 test('a dropped tick where the snake turned is not invented', () => {
@@ -360,7 +337,7 @@ test('a dropped tick where the snake turned is not invented', () => {
     p: [{ i: 1, h: 10 + 24, d: 'down', l: 3, a: true, fr: false, sc: 0 }]
   }, TICK);
   assert.equal(turned, false);
-  assert.match(String(pb.takeResyncRequest()), /broken movement chain/);
+  assert.equal(pb.byTick.has(6), false);
   assert.equal(pb.newest().tick, 5, 'a turn in the hole is not stored as a body');
 });
 

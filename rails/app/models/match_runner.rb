@@ -135,6 +135,7 @@ class MatchRunner
         # scheduler pass is opportunistic and throttled, but the input queue
         # must be completely drained immediately before movement.
         before_step: ->(world) { deliver_inputs(world, force: true) },
+        after_step: ->(world) { capture_responsive_frame(world) },
         on_error: lambda do |match_id, error|
           Rails.logger.error("Match #{match_id} detached after simulation error: " \
                              "#{error.class}: #{error.message}")
@@ -158,6 +159,8 @@ class MatchRunner
         # is frozen before it can move another cell.
         presence = reconcile_connections(now: now, monotonic_ms: monotonic_ms)
         connections = sync_connections(now: now, monotonic_ms: monotonic_ms)
+        @broadcast_now = now
+        supervisor.entries.each_value { |entry| capture_responsive_frame(entry.world) }
         # Every step force-drains durable commands immediately before moving.
         # A second query on each inter-tick pass only competes with movement.
         report = supervisor.tick!(now_ms: monotonic_ms)
@@ -334,24 +337,32 @@ class MatchRunner
       supervisor.entries.each do |match_id, entry|
         begin
           world = entry.world
-          state = [world.tick, world.status]
-          last_state = snapshot_broadcast_state[match_id]
-          last_at = snapshot_broadcast_at[match_id]
-          # A tick advanced, the status changed, or the board has been idle
-          # long enough to warrant a re-sync frame.
-          due = last_state != state ||
-                last_at.nil? ||
-                monotonic_ms - last_at >= SNAPSHOT_KEEPALIVE_INTERVAL_MS
-          if due
-            world.server_time_ms = (now.to_f * 1000).round
-            frame = Simulation::Protocol.encode(world)
-            # live_frames is the reconnect seed and must always be COMPLETE, so
-            # it is written from the full encoding regardless of what goes on the
-            # wire.
-            live_frames[match_id] = frame
-            publish_frame(world, frame)
-            snapshot_broadcast_state[match_id] = state
+          pending = world.presentation_strategy == "responsive" ? world.drain_responsive_frames : []
+          if pending.any?
+            pending.each { |frame| publish_frame(world, frame) }
+            live_frames[match_id] = pending.last
+            snapshot_broadcast_state[match_id] = [world.tick, world.status]
             snapshot_broadcast_at[match_id] = monotonic_ms
+          else
+            state = [world.tick, world.status]
+            last_state = snapshot_broadcast_state[match_id]
+            last_at = snapshot_broadcast_at[match_id]
+            # A tick advanced, the status changed, or the board has been idle
+            # long enough to warrant a re-sync frame.
+            due = last_state != state ||
+                  last_at.nil? ||
+                  monotonic_ms - last_at >= SNAPSHOT_KEEPALIVE_INTERVAL_MS
+            if due
+              world.server_time_ms = (now.to_f * 1000).round
+              frame = Simulation::Protocol.encode(world)
+              # live_frames is the reconnect seed and must always be COMPLETE, so
+              # it is written from the full encoding regardless of what goes on the
+              # wire.
+              live_frames[match_id] = frame
+              publish_frame(world, frame)
+              snapshot_broadcast_state[match_id] = state
+              snapshot_broadcast_at[match_id] = monotonic_ms
+            end
           end
 
           last_persist = snapshot_persist_at[match_id]
@@ -376,31 +387,27 @@ class MatchRunner
     # Classic: one complete snapshot per published frame, byte for byte what this
     # method has always sent. Nothing about the Classic stream changes.
     #
-    # Responsive: complete snapshots stay the recovery channel, but between them
-    # the frame is reduced to the parts that actually moved. A structural change
-    # (elimination, freeze/unfreeze, status) or the periodic full interval forces
-    # a complete snapshot, because those are exactly the moments a client cannot
-    # safely reconstruct from head+length alone.
+    # Responsive: one complete snapshot per simulated tick. Compact movement
+    # frames are not sent. A full snapshot of a normal board is about a kilobyte
+    # (two length-8 snakes on 24×18 is ~1.1 KB, ~10 KB/s at 105 ms). That is
+    # small enough that reconstructing bodies from a head chain — and inventing
+    # the ticks a catch-up burst skipped — costs more correctness than it saves.
     def publish_frame(world, full_frame)
-      unless world.presentation_strategy == "responsive"
-        movement_plan.delete(world.id)
-        MatchChannel.broadcast_snapshot(world.id, full_frame)
-        return :snapshot
-      end
-
-      signature = frame_signature(world)
-      plan = movement_plan[world.id]
-      due_full = plan.nil? || plan[:signature] != signature ||
-                 world.tick - plan[:full_tick] >= MOVEMENT_FULL_INTERVAL_TICKS
-      if !due_full && MatchChannel.broadcast_movement(world.id, Simulation::Protocol.encode_movement(world))
-        return :movement
-      end
-
+      movement_plan.delete(world.id)
       MatchChannel.broadcast_snapshot(world.id, full_frame)
-      movement_plan[world.id] = { signature: signature, full_tick: world.tick }
       :snapshot
-    ensure
-      movement_plan.delete(world.id) if world.status != :running
+    end
+
+    def capture_responsive_frame(world)
+      return unless world.presentation_strategy == "responsive"
+
+      world.server_time_ms = (@broadcast_now || Time.current).to_f * 1000
+      world.server_time_ms = world.server_time_ms.round
+      world.note_responsive_frame!
+    end
+
+    def responsive_seen
+      @responsive_seen ||= {}
     end
 
     def frame_signature(world)
@@ -472,6 +479,7 @@ class MatchRunner
       @claim_scan_at = nil
       @live_frames = {}
       @movement_plan = {}
+      @responsive_seen = {}
       input_poll_at.clear
       snapshot_broadcast_at.clear
       snapshot_broadcast_state.clear

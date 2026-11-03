@@ -1,10 +1,11 @@
 require "test_helper"
 
 # Step 3 wire policy at the channel/runner boundary:
-#   * Classic  -> complete snapshots only, exactly as before this step
-#   * Responsive -> compact movement frames between periodic complete snapshots,
-#                   with a full frame forced on every structural change
-#   * either    -> a client can ask for one complete frame (resync) at any time
+#   * Classic    -> complete snapshots only, exactly as before this step
+#   * Responsive -> one complete snapshot per simulated tick (tick_ms, tm,
+#                   food generation, eaten events). Compact movement frames
+#                   are not broadcast.
+#   * either     -> a client can ask for one complete frame (resync) at any time
 class MovementBroadcastTest < ActiveSupport::TestCase
   setup do
     MatchRunner.reset!
@@ -44,37 +45,35 @@ class MovementBroadcastTest < ActiveSupport::TestCase
     refute payloads.any? { |payload| payload["type"] == "movement" }
   end
 
-  def test_responsive_matches_send_movement_frames_between_complete_snapshots
+  def test_responsive_matches_send_a_complete_snapshot_for_every_tick
     match = started_match("responsive")
     assert_equal "responsive", match.presentation_strategy
-        world = world_for(match)
+    world = world_for(match)
     stream = MatchChannel.stream_for(match.id)
 
-    # The first published frame of a Responsive match is a complete snapshot: a
-    # client may have just subscribed, and a head-only frame is useless without
-    # a body to extend.
     assert_equal :snapshot, MatchRunner.publish_frame(world, Simulation::Protocol.encode(world))
-    emitted = [world.presentation_strategy]
-
     types = []
     MatchRunner::MOVEMENT_FULL_INTERVAL_TICKS.times do
       world.step!
-      types << MatchRunner.publish_frame(world, Simulation::Protocol.encode(world))
+      world.server_time_ms = world.tick * world.config.tick_ms
+      world.note_responsive_frame!
+      world.drain_responsive_frames.each do |frame|
+        types << MatchRunner.publish_frame(world, frame)
+      end
     end
-    assert_equal emitted + [:movement] * (MatchRunner::MOVEMENT_FULL_INTERVAL_TICKS - 1) + [:snapshot],
-                 [world.presentation_strategy] + types
+    assert_equal [:snapshot] * MatchRunner::MOVEMENT_FULL_INTERVAL_TICKS, types
 
     payloads = ActionCable.server.pubsub.broadcasts(stream).map { |raw| JSON.parse(raw) }
-    movement = payloads.select { |payload| payload["type"] == "movement" }
-    refute_empty movement, "the Responsive stream must actually carry movement frames"
-    movement.each do |frame|
+    assert payloads.any?, "a Responsive match must broadcast its frames"
+    assert_equal ["snapshot"], payloads.map { |payload| payload["type"] }.uniq
+    payloads.each do |frame|
       assert_equal "responsive", frame["strategy"]
-      assert frame["t"].is_a?(Integer)
-      assert frame["p"].all? { |player| player["h"].nil? || player["h"].is_a?(Integer) }
-      refute frame.key?("q"), "standings do not ride on every movement tick"
+      assert frame["tick_ms"].is_a?(Integer)
+      assert frame["tm"].is_a?(Integer)
+      assert frame["fe"].is_a?(Array)
+      assert frame["f"].all? { |food| food["g"].is_a?(Integer) }
+      assert frame["p"].all? { |player| player["b"].is_a?(Array) }
     end
-    # A complete snapshot still arrives at the interval, so recovery is bounded.
-    assert_operator payloads.count { |payload| payload["type"] == "snapshot" }, :>=, 2
   end
 
   def test_a_structural_change_forces_a_complete_snapshot_immediately
@@ -82,7 +81,7 @@ class MovementBroadcastTest < ActiveSupport::TestCase
         world = world_for(match)
     MatchRunner.publish_frame(world, Simulation::Protocol.encode(world))
     world.step!
-    assert_equal :movement, MatchRunner.publish_frame(world, Simulation::Protocol.encode(world))
+    assert_equal :snapshot, MatchRunner.publish_frame(world, Simulation::Protocol.encode(world))
 
     # Freeze is a structural change: a client cannot infer it from a head cell.
     world.freeze_player!(world.snakes.first.id, now_ms: 1_000, until_ms: 31_000)

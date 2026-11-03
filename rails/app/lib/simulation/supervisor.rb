@@ -22,17 +22,19 @@ module Simulation
     # Renewal is intentionally throttled: the lease is a database write, and the
     # requirement is to keep PostgreSQL out of the tick path. It is still much
     # shorter than the lease TTL, so ownership is refreshed well before it lapses.
-    def initialize(ownership:, checkpoint_every: 20, renew_interval_ms: 2_000, on_error: nil, before_step: nil)
+    def initialize(ownership:, checkpoint_every: 20, renew_interval_ms: 2_000, on_error: nil, before_step: nil, after_step: nil)
       raise ArgumentError, "checkpoint_every must be positive" unless checkpoint_every.is_a?(Integer) && checkpoint_every.positive?
       raise ArgumentError, "renew_interval_ms must not be negative" unless renew_interval_ms.is_a?(Integer) && renew_interval_ms >= 0
       raise ArgumentError, "on_error must respond to #call" if on_error && !on_error.respond_to?(:call)
       raise ArgumentError, "before_step must respond to #call" if before_step && !before_step.respond_to?(:call)
+      raise ArgumentError, "after_step must respond to #call" if after_step && !after_step.respond_to?(:call)
 
       @ownership = ownership
       @checkpoint_every = checkpoint_every
       @renew_interval_ms = renew_interval_ms
       @on_error = on_error
       @before_step = before_step
+      @after_step = after_step
       @entries = {}
     end
 
@@ -110,6 +112,7 @@ module Simulation
 
         entry.world.step!
         report[:steps] += 1
+        @after_step&.call(entry.world)
         next unless entry.world.completed?
 
         # Report a completion only when the fenced write actually persisted it.

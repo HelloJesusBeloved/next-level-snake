@@ -6,8 +6,8 @@
 // one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-12';
-import { RemotePlayback } from './playback.js?v=step11-responsive-12';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-13';
+import { RemotePlayback } from './playback.js?v=step11-responsive-13';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -292,15 +292,7 @@ export class MultiplayerGameRenderer {
     const added = this.playback.pushMovement(frame, this.clock());
     const resync = this.playback.takeResyncRequest();
     if (resync) this.requestResync(resync);
-    if (!added) {
-      // The body was refused, but the frame still names the pellet the server
-      // is drawing. Apply that without moving the snake. Waiting for the
-      // snapshot is why mobile food vanished while everyone else could see it.
-      if (typeof resync === 'string' && resync.startsWith('broken movement chain')) {
-        this.local?.glimpse(frame);
-      }
-      return false;
-    }
+    if (!added) return false;
     return this.playback.materialize(frame, this.snapshot) || false;
   }
 
@@ -485,13 +477,11 @@ export class MultiplayerGameRenderer {
   }
 
   present(frame, at) {
-    this.paintSnapshot = frame;
-    // Only the own snake's cells/direction/length may come from prediction; the
-    // frame painted is otherwise this exact authoritative frame, so remote
-    // snakes, food, freeze rings, dust, themes and the canvas cache are all
-    // still 100% server-confirmed. `paintSnapshot` stays authoritative so the
-    // HUD, scoreboard and results never read a predicted value.
-    const predicted = this.local && this.local.active ? this.local.displayFrame(frame) : null;
+    const renderFrame = (this.playback?.enabled && this.lastPlaybackSample?.frame) || frame;
+    this.paintSnapshot = renderFrame;
+    // Own snake may be one unapplied turn ahead of this same frame. Food,
+    // scores, length and every other snake stay on the frame.
+    const predicted = this.local && this.local.active ? this.local.displayFrame(renderFrame) : null;
     this.paintOverride = predicted && predicted !== frame ? predicted : null;
     this.localDisplay = !!this.paintOverride;
     const start = this.clock();
@@ -699,23 +689,24 @@ export class MultiplayerGameRenderer {
 
   // Signature-based reconciliation: only rows that changed are touched.
   drawScoreboard() {
-    if (!this.scoreboard || !this.snapshot) return;
+    if (!this.scoreboard || !(this.paintSnapshot || this.snapshot)) return;
+    const board = this.paintSnapshot || this.snapshot;
     // Visibility is stateful, never offsetParent (which forces layout on a
     // dirty DOM). The browser still gets every authoritative canvas frame.
     if (this.hidden || !this.active) return;
     // Cheap signature: string concatenation, no JSON.stringify and no
     // intermediate arrays per snapshot (this runs at the tick rate).
-    const signature = hudKey(this.snapshot, this.ownParticipantId, this.tickMs);
+    const signature = hudKey(board, this.ownParticipantId, this.tickMs);
     if (signature === this.scoreSignature) {
       this.paintFrozenLabels();
       return;
     }
     this.scoreSignature = signature;
-    const players = new Map((this.snapshot.p || []).map((player) => [player.i, player]));
+    const players = new Map((board.p || []).map((player) => [player.i, player]));
     const fragment = document.createDocumentFragment();
     const nextRows = new Map();
     let structureChanged = false;
-    for (const standing of this.snapshot.q || []) {
+    for (const standing of board.q || []) {
       const player = players.get(standing.i);
       if (!player) continue;
       const existing = this.scoreRows.get(standing.i);
@@ -827,24 +818,9 @@ export class MultiplayerGameRenderer {
     const smooth = this.smoothPlayers();
     const ownId = this.ownParticipantId == null ? null : Number(this.ownParticipantId);
 
-    // Food (zero allocations in the hot loop).
-    //
-    // A remote snake is deliberately held behind the newest frame, so its pellet
-    // must be drawn where the snake you can SEE is — not where the newest frame
-    // says it already ate it. Otherwise the pellet vanishes into empty board
-    // several ticks before the visible bite. Brawl food is per player ("o" is the
-    // owner), which makes the split exact: each pellet follows its own snake's
-    // displayed tick, and the local player's pellet follows the newest frame
-    // because the local snake does.
-    const heldFood = smooth && Array.isArray(smooth.food) ? smooth.food : null;
-    const heldByOwner = heldFood ? new Map() : null;
-    if (heldByOwner) {
-      for (let i = 0; i < heldFood.length; i++) {
-        const pellet = heldFood[i];
-        const owner = Number(pellet && pellet.o);
-        if (pellet && Number.isInteger(owner)) heldByOwner.set(owner, pellet);
-      }
-    }
+    // One confirmed tick for every pellet. The frame is the playback tick when
+    // Responsive is on, and the snapshot itself for Classic. Nothing here holds
+    // an old pellet, invents one, or substitutes a locally guessed cell.
     const pelletColor = (owner) => {
       for (let p = 0; p < snapshot.p.length; p++) {
         if (snapshot.p[p].i === owner && HEX.test(snapshot.p[p].c)) return snapshot.p[p].c;
@@ -861,29 +837,12 @@ export class MultiplayerGameRenderer {
       ctx.lineWidth = Math.max(1, cell * .06);
       ctx.stroke();
     };
-    const newestOwners = new Set();
-    for (let f = 0; f < snapshot.f.length; f++) {
-      const food = snapshot.f[f];
-      const owner = Number(food.o);
-      if (Number.isInteger(owner)) newestOwners.add(owner);
-      const remote = heldByOwner && owner !== ownId ? heldByOwner.get(owner) : null;
-      // Own pellet is the cell THIS head will bite, not the respawn the server
-      // already published. Drawing that respawn is the food that vanishes on
-      // your screen and awards nothing when you reach the real one.
-      let cell = food.c;
-      if (owner === ownId && this.local?.active && Number.isInteger(this.local.food)) cell = this.local.food;
-      else if (remote && Number.isInteger(remote.c)) cell = remote.c;
-      drawPellet(cell, pelletColor(food.o));
-    }
-    // A pellet the newest frame no longer carries, but whose (delayed) snake has
-    // not reached it yet on the board we are drawing: keep showing it until the
-    // bite you can actually see happens.
-    if (heldByOwner) {
-      for (const [owner, pellet] of heldByOwner) {
-        if (owner === ownId || newestOwners.has(owner)) continue;
-        if (!Number.isInteger(pellet.c)) continue;
-        drawPellet(pellet.c, pelletColor(owner));
-      }
+    const foodFrame = this.paintSnapshot || snapshot;
+    const pellets = Array.isArray(foodFrame.f) ? foodFrame.f : [];
+    for (let f = 0; f < pellets.length; f++) {
+      const food = pellets[f];
+      if (!food || !Number.isInteger(food.c)) continue;
+      drawPellet(food.c, pelletColor(food.o));
     }
 
     // Snakes. The local player's cells are whatever present() put on the frame

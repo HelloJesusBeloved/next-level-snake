@@ -37,11 +37,11 @@ const DIRECTIONS = Object.freeze({
 // hurt. These ceilings are the whole policy, and every time one of them stops a
 // tick it is counted so Movement diagnostics can show it.
 export const PREDICTION_LIMITS = Object.freeze({
-  // How many ticks the local view may run ahead of the last CONFIRMED tick.
-  // At the fastest server speed (40 ms) that is ~240 ms ≈ two round trips of
-  // a bad tunnel; beyond it the snake simply waits for the server instead of
-  // inventing a path through a board nobody has validated.
-  maxLeadTicks: 6,
+  // How many ticks an unapplied turn may be drawn ahead of the last confirmed
+  // body. One cell: a press shows on the next tick, and a wrong guess is at
+  // most one cell from the server when the frame arrives. This is not a second
+  // simulation and it does not own food, growth, score or collisions.
+  maxLeadTicks: 2,
   // A turn is only worth predicting if the server can plausibly still act on
   // it inside its own input window (Match#INPUT_FUTURE_WINDOW) — anything
   // further out is refused locally rather than queued into a guaranteed
@@ -100,6 +100,8 @@ function emptyStats() {
     horizonRefusals: 0, leadStalls: 0, catchupDiscards: 0,
     queuedAcks: 0, appliedAcks: 0, rejectedAcks: 0, foreignApplied: 0,
     reconciliations: 0, corrections: 0, maxCorrectionCells: 0, snapped: 0,
+    matches: 0, mismatches: 0, correctedBody: 0, correctedDirection: 0,
+    correctedLength: 0, correctedGrowth: 0, correctedQueue: 0,
     staleFrames: 0, duplicateFrames: 0, rejectedFrames: 0,
     predictedFood: 0, predictedGrowths: 0, blockedTurns: 0, frozenPauses: 0,
     retiredByFrame: 0,
@@ -172,6 +174,9 @@ export class LocalPredictor {
       return next;
     };
     this.tickMs = num(tickMs, this.tickMs);
+    // Learning tick_ms from a frame must not wipe the snake. Only a real
+    // board-size or rules change invalidates the body we are showing.
+    changed = false;
     this.columns = num(columns, this.columns, false);
     this.rows = num(rows, this.rows, false);
     this.growth = num(growth, this.growth, false);
@@ -301,20 +306,12 @@ export class LocalPredictor {
       appliedTick: Number.isInteger(player.it) ? player.it : null,
       growthRemaining: Number.isInteger(player.gr) ? player.gr : null
     };
-    const serverFood = this.foodFor(player, snapshot);
+    const serverFood = this.noteFood(snapshot);
     const stopped = snapshot.s !== 'running' || player.a === false || !!player.fr;
 
-    // First frame, death, or freeze: there is no local clock to protect yet,
-    // or the server has ended this snake's movement. Adopt that body once.
+    // First frame, death, or freeze: there is no overlay to protect yet.
     if (!oldPredicted || stopped) {
-      this.food = serverFood;
-      this.ateAt = null;
-      this.eatenCell = null;
       this.pendingGap = false;
-      // A freeze, death, or not-yet-running frame adopts the server body once.
-      // Replaying the local queue on top of that snap is the erratic second
-      // after a reconnect: those turns were already shown. The first running
-      // frame still schedules anything pressed before the snake existed.
       this.rebuild();
       if (!stopped) this.reschedulePending();
       if (!oldPredicted) {
@@ -325,85 +322,71 @@ export class LocalPredictor {
       return this.active;
     }
 
-    // Already simulating and still alive. The rendered snake belongs to the
-    // local clock, exactly as single-player does: one cell per tickMs, turns
-    // on the next cell, never relocated by a packet. A frame only retires
-    // inputs and refreshes food. Stepping or rewinding here is what made
-    // Responsive feel like Classic: the snake moved when the packet arrived.
-    this.adoptFood(serverFood, tick);
-    this.eatIfCoveringFood(serverFood);
-    this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
+    // The confirmed tick is the server's body. An unapplied turn may sit one
+    // cell ahead of it; anything else is a hard snap. Food, growth and score
+    // are never taken from this object.
+    const correction = this.reconcileRunning(oldPredicted, tick);
+    this.emit({ type: 'reconciled', tick, correction, pending: this.pending.length });
     return this.active;
   }
 
-  // The pellet this snake is walking toward stays until THIS head bites it.
-  // The server drops a pellet the instant ITS head eats, which can be a tick
-  // before ours, and the respawn is a different cell. Taking that early is
-  // why every other food vanished on your own screen and awarded no length.
-  adoptFood(serverFood, tick) {
-    if (serverFood === null || serverFood === this.eatenCell) return;
-    if (this.food !== null && serverFood !== this.food) {
-      // One cell short of the bite: the respawn must not replace it. Any other
-      // cell is a pellet this head will not enter — holding it is the food
-      // that vanishes on a phone after a dropped frame, while everyone else
-      // draws the one the server actually spawned. A frame with no food at all
-      // must not clear the pellet (that is not a respawn).
-      const head = this.predicted?.body?.[0];
-      if (head === this.food || this.oneStep(head, this.food, this.predicted?.direction)) return;
+  // Compare the head we previously claimed for this confirmed tick with the
+  // server head. A one-cell difference that is exactly a still-pending turn is
+  // the visual lead, not an error. Anything else snaps back to the server body
+  // and the pending turn, if it is still unapplied, is drawn on top again.
+  // The confirmed body is the server body. Turns the server has not applied
+  // yet are replayed on top of THAT body, at most maxLeadTicks of them, and
+  // only the ones the player has already been shown. A new press waits for
+  // the local tick. Replaying onto the latest head is what keeps the turn
+  // from sticking to an old cell and then snapping back when the server
+  // frame — still going straight — arrives.
+  reconcileRunning(oldPredicted, tick) {
+    const serverHead = cellIndex(this.confirmed.body[0][0], this.confirmed.body[0][1], this.columns);
+    const remembered = this.predictedHeads.get(tick);
+    const shown = this.pending.filter((entry) => !entry.rejectedReason &&
+      (entry.consumed || entry.appliedLocallyAt));
+    // A turn we already drew is a lead, not a wrong body. Counting it is how
+    // the corrections counter stayed noisy while the snake was doing what the
+    // player asked.
+    const explained = shown.length > 0 && remembered !== undefined && remembered !== serverHead;
+    let correction = 0;
+    if (remembered !== undefined && remembered !== serverHead && !explained) {
+      this.stats.mismatches += 1;
+      this.stats.corrections += 1;
+      this.stats.correctedBody += 1;
+      correction = this.correctionDistance([remembered], serverHead);
+      if (correction > this.stats.maxCorrectionCells) this.stats.maxCorrectionCells = correction;
+      this.lastCorrection = { tick, distance: correction, remembered, serverHead };
+    } else if (remembered === serverHead) {
+      this.stats.matches += 1;
     }
-    this.food = serverFood;
-    if (serverFood !== null) {
-      this.ateAt = null;
-      this.eatenCell = null;
+    for (const entry of shown) {
+      entry.consumed = false;
+      entry.appliedLocallyAt = null;
     }
+    this.rebuild();
+    this.reschedulePending();
+    if (shown.length) this.replayAhead(Math.min(this.limits.maxLeadTicks, shown.length));
+    return correction;
   }
 
-  // A movement frame arrived with a hole in front of it, so its body was
-  // refused. The pellet in that frame is still the one the server is drawing.
-  // Taking it now (unless this head is about to bite the one it already sees)
-  // is what keeps your food from vanishing for the whole wait until a snapshot.
-  // The body is not moved: a refused chain is not a position we can copy.
-  glimpse(frame) {
-    if (!this.active || !frame || !Array.isArray(frame.f)) return false;
-    const tick = Number.isInteger(frame.t) ? frame.t : null;
-    const entry = frame.f.find((food) => food && Number(food.o) === Number(this.ownParticipantId));
-    const serverFood = entry && Number.isInteger(entry.c) ? entry.c : null;
-    const before = this.food;
-    this.adoptFood(serverFood, tick);
-    return this.food !== before;
+  // Two heads that share an origin and took different one-cell steps land at
+  // most two cells apart (including a wrap). A still-pending turn is that
+  // case. A larger gap is a real disagreement and snaps.
+  explainedByPending(serverHead, rememberedHead) {
+    const turn = this.pending.find((entry) => !entry.rejectedReason);
+    if (!turn) return false;
+    const distance = this.correctionDistance([rememberedHead], serverHead);
+    return distance > 0 && distance <= 2;
   }
 
-  // Food that spawned on the cell the head already occupies. Entry-eat already
-  // happened inside runTick; this only covers a pellet that appeared under us.
-  // The growth is spent on the next step (tail stays), which is one segment.
-  eatIfCoveringFood(serverFood) {
-    if (this.food === null || !this.predicted || this.predicted.body[0] !== this.food) return;
-    this.predicted.grow += this.growth;
-    this.stats.predictedFood += 1;
-    this.stats.predictedGrowths += 1;
-    this.eatenCell = this.food;
-    this.ateAt = this.predicted.tick;
-    this.food = null;
-    if (serverFood !== null && serverFood !== this.eatenCell) this.food = serverFood;
-  }
-
-  // True when `to` is the single cell `from` enters by continuing `direction`,
-  // including a wrap. Anything else is a different path and must not be copied
-  // onto the snake the player is looking at.
-  oneStep(from, to, direction) {
-    const delta = DIRECTIONS[direction];
-    if (!delta || !Number.isInteger(from) || !Number.isInteger(to)) return false;
-    const x = wrap((from % this.columns) + delta[0], this.columns);
-    const y = wrap(Math.floor(from / this.columns) + delta[1], this.rows);
-    return y * this.columns + x === to;
-  }
-
-  // The only food the predictor knows is the food the server already published
-  // for this player. It never invents or relocates a cell.
-  foodFor(player, snapshot) {
+  noteFood(snapshot) {
     const entry = (snapshot.f || []).find((food) => Number(food.o) === Number(this.ownParticipantId));
-    const index = entry ? entry.c : (Number.isInteger(player.fc) ? player.fc : null);
-    return Number.isInteger(index) ? index : null;
+    this.serverFood = entry && Number.isInteger(entry.c) ? entry.c : null;
+    this.serverFoodTick = Number.isInteger(snapshot.t) ? snapshot.t : null;
+    this.serverFoodGeneration = entry && Number.isInteger(entry.g) ? entry.g : null;
+    this.lastEaten = Array.isArray(snapshot.fe) ? snapshot.fe.filter((event) => Number(event.o) === Number(this.ownParticipantId)) : [];
+    return this.serverFood;
   }
 
   // input_ack: the frame is QUEUED at the server. Nothing may be retired here.
@@ -597,17 +580,16 @@ export class LocalPredictor {
     }
     this.accumulator += dt;
     const lead = this.predicted.tick - this.confirmed.tick;
-    // Never run more than the lead ceiling ahead of the last confirmed tick.
-    // The period does not change to get there, and a packet cannot pull the
-    // snake back, so this only ever inserts a pause after a long gap.
-    if (lead >= this.limits.maxLeadTicks) {
-      this.stats.leadStalls += 1;
+    const owed = this.pending.some((entry) => !entry.rejectedReason && !entry.consumed);
+    // Idle movement comes from confirmed frames. The clock spends a tick only
+    // to draw a turn the server has not applied yet, and only one such cell.
+    if (!owed || lead >= this.limits.maxLeadTicks) {
+      if (lead >= this.limits.maxLeadTicks) this.stats.leadStalls += 1;
       if (this.accumulator > this.tickMs) this.accumulator = this.tickMs;
       return 0;
     }
     if (this.accumulator < this.tickMs) return 0;
     this.accumulator -= this.tickMs;
-    // Carry at most one tick so the next paint takes the next cell, never two.
     if (this.accumulator > this.tickMs) this.accumulator = this.tickMs;
     return this.runTick() ? 1 : 0;
   }
@@ -637,6 +619,10 @@ export class LocalPredictor {
     if (!this.active) return false;
     const tick = this.predicted.tick + 1;
     const state = this.predicted;
+    // Straight movement is the server's. This clock only spends a tick when a
+    // turn is waiting, so a frame and a press in the same paint cannot add
+    // two cells and cut a diagonal.
+    if (!state.queue.length) return false;
     // Single-player step(): one queued turn per tick, from the front of the
     // local queue. The queue was filled when the key was pressed. A packet may
     // retire the bookkeeping for that press, but it does not decide when the
@@ -678,20 +664,11 @@ export class LocalPredictor {
 
     state.direction = direction;
     const targetIndex = target[1] * this.columns + target[0];
-    // World#consume_food! adds growth before Snake#advance!. That means the
-    // tail stays on the eating tick; do not append duplicate tail cells or add
-    // growth again on subsequent ticks.
-    if (this.food !== null && targetIndex === this.food) {
-      state.grow += this.growth;
-      this.stats.predictedFood += 1;
-      this.stats.predictedGrowths += 1;
-      this.eatenCell = targetIndex;
-      this.ateAt = tick;
-      this.food = null;
-    }
+    // Growth, food and score belong to the server. This step only shows the
+    // next cell of a turn that has not been applied yet, so the tail vacates.
+    state.grow = 0;
     state.body.unshift(targetIndex);
-    if (state.grow > 0) state.grow -= 1;
-    else state.body.pop();
+    state.body.pop();
     state.length = state.body.length;
     state.tick = tick;
     this.predicted.tick = tick;
@@ -730,10 +707,12 @@ export class LocalPredictor {
       direction: this.confirmed.direction,
       serverQueue: this.confirmed.queue.slice(),
       queue: this.confirmed.queue.slice(),
-      grow: this.confirmed.growthRemaining ?? 0,
+      grow: 0,
       length: this.confirmed.length,
       blocked: null
     };
+    this.predictedHeads.set(this.predicted.tick, this.predicted.body[0]);
+    this.predictedLengths.set(this.predicted.tick, this.predicted.body.length);
   }
 
   // Outstanding turns are replayed forward from the confirmed state. Anything
@@ -761,6 +740,12 @@ export class LocalPredictor {
     this.predicted.queue = this.predicted.serverQueue.slice();
     let floor = this.confirmed.tick + this.predicted.serverQueue.length + 1;
     for (const entry of this.pending) {
+      // Already drawn on top of an earlier confirmed body. Queueing it again
+      // steers a second corner the server never made.
+      if (entry.consumed || entry.appliedLocallyAt) {
+        keep.push(entry);
+        continue;
+      }
       if (keep.length >= this.maxQueuedDirections) {
         this.stats.droppedPending += 1;
         continue;
@@ -772,8 +757,6 @@ export class LocalPredictor {
       }
       if (target > (entry.intendedTick ?? target)) this.stats.lateRescheduled += 1;
       entry.scheduledTick = target;
-      entry.consumed = false;
-      entry.appliedLocallyAt = null;
       entry.status = 'pending';
       keep.push(entry);
       this.predicted.queue.push(entry.direction);
@@ -803,33 +786,42 @@ export class LocalPredictor {
   // scoreboard, dust and results stay on the authoritative frame.
   displayFrame(frame) {
     if (!this.active || !frame || !Array.isArray(frame.p)) return frame;
-    const cells = this.predicted.body;
-    const ownId = Number(this.ownParticipantId);
-    const frameFood = Array.isArray(frame.f) ? frame.f : [];
-    // Own pellet follows THIS snake, not the newest server frame. The server
-    // can already have eaten and respawned while our head is still one cell
-    // short of the bite. Drawing the respawn (or drawing nothing) made the
-    // food invisible, and the bite awarded no length because it was not the
-    // cell on screen. Other players' pellets stay on the server frame.
-    const food = frameFood.filter((pellet) => Number(pellet.o) !== ownId);
-    if (this.food !== null) food.push({ c: this.food, o: ownId });
+    const own = frame.p.find((player) => Number(player.i) === Number(this.ownParticipantId));
+    if (!own || !Array.isArray(own.b) || !own.b.length) return frame;
+    // bp/points are playback leftovers. They must not ride along on the own
+    // snake or the head ring detaches from the cell.
+    let cells = own.b.slice();
+    let direction = own.d;
+    const shown = this.pending.filter((entry) => !entry.rejectedReason &&
+      (entry.consumed || entry.appliedLocallyAt));
+    const steps = Math.min(this.limits.maxLeadTicks, shown.length);
+    for (let index = 0; index < steps; index += 1) {
+      const next = shown[index].direction;
+      if (!DIRECTIONS[next] || reverseOf(next, direction)) break;
+      direction = next;
+      const head = cells[0];
+      const [dx, dy] = DIRECTIONS[direction];
+      const target = cellIndex(
+        wrap((head % this.columns) + dx, this.columns),
+        wrap(Math.floor(head / this.columns) + dy, this.rows),
+        this.columns
+      );
+      cells = [target, ...cells];
+      cells.pop();
+    }
+    const turned = cells[0] !== own.b[0];
     const players = frame.p.map((player) => {
       if (Number(player.i) !== Number(this.ownParticipantId)) return player;
-      // Playback may attach fractional remote coordinates to a frame. They
-      // must never survive on the locally predicted player: otherwise a head
-      // marker can use an older playback position than its predicted body.
-      const { bp, points, ...own } = player;
+      const { bp, points, ...rest } = player;
       return {
-        ...own,
+        ...rest,
         b: cells.slice(),
-        d: this.predicted.direction,
-        l: cells.length,
-        // Marked so the canvas and any reviewer can tell a predicted head from
-        // a confirmed one. It is never authoritative and never persists.
-        pr: 1
+        d: direction,
+        l: player.l ?? cells.length,
+        pr: turned ? 1 : rest.pr
       };
     });
-    return { ...frame, p: players, f: food, pr: 1 };
+    return { ...frame, p: players, pr: turned ? 1 : frame.pr };
   }
 
   state() {
@@ -860,6 +852,11 @@ export class LocalPredictor {
       highestSeq: this.highestSeq, appliedSeq: confirmed?.appliedSeq ?? 0,
       limits: { ...limits },
       correctionRate: stats.reconciliations ? stats.corrections / stats.reconciliations : 0,
+      serverFood: this.serverFood ?? null,
+      serverFoodTick: this.serverFoodTick ?? null,
+      serverFoodGeneration: this.serverFoodGeneration ?? null,
+      lastEaten: this.lastEaten || [],
+      lastCorrection: this.lastCorrection || null,
       // The local view's own claims, tick by tick, for audits and diagnostics.
       predictedHeads: Object.fromEntries([...this.predictedHeads.entries()].sort((a, b) => a[0] - b[0]))
     };

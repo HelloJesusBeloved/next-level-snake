@@ -63,6 +63,7 @@ export class RemotePlayback {
     this.byTick = new Map();
     this.playhead = null;
     this.lastSampleAt = null;
+    this.surplusMs = 0;
     this.clockArmed = false;
     this.lastFrameAt = null;
     this.delayMs = this.limits.stableDelayMs;
@@ -113,6 +114,7 @@ export class RemotePlayback {
     this.byTick.clear();
     this.playhead = null;
     this.lastSampleAt = null;
+    this.surplusMs = 0;
     this.clockArmed = false;
     this.lastFrameAt = null;
     this.arrivals = [];
@@ -139,7 +141,9 @@ export class RemotePlayback {
       this.columns = frame.b.c; this.rows = frame.b.r;
     }
     this.stats.snapshotFrames += 1;
-    this.accept({ tick: frame.t, players, food: frame.f, status: frame.s, ts: frame.ts, full: true }, at);
+    this.accept({
+      tick: frame.t, players, food: frame.f, status: frame.s, ts: frame.ts, full: true, raw: frame
+    }, at);
     return true;
   }
 
@@ -164,30 +168,8 @@ export class RemotePlayback {
       return false;
     }
     if (frame.t !== previous.tick + 1) {
-      // Exactly one missing tick, and every snake still on the same heading:
-      // both confirmed heads determine one body. Rebuild that, so a single
-      // dropped movement (the usual mobile loss) does not freeze the board
-      // until the next full snapshot. A turn, a death, or a wider hole is not
-      // determined — refuse it and ask for the snapshot instead of guessing.
-      if (frame.t === previous.tick + 2) {
-        const bridged = this.straightBridge(previous, frame);
-        if (bridged) {
-          // The missing tick is stored only when its body is the only one
-          // those two heads allow, so playback can tick through it. A guessed
-          // middle cell is worse than showing the confirmed end on the clock.
-          if (bridged.intermediate) this.accept(bridged.intermediate, at);
-          this.accept(bridged.current, at);
-          this.stats.movementFrames += 1;
-          this.stats.bridgedGaps += 1;
-          return this.byTick.has(frame.t);
-        }
-      }
-      // Movement frames only make sense as a contiguous chain: a body is rebuilt
-      // by shifting the previous one, so a jump means the chain is broken and
-      // rebuilding across it would be a guess. Ask for an authoritative snapshot
-      // IMMEDIATELY rather than waiting for a large gap. Without this every later
-      // compact frame is refused too, and the remote snakes appear frozen until
-      // the next periodic full snapshot happens to arrive.
+      // A hole is not a body we are allowed to invent. Ask for the snapshot
+      // that actually contains it. One request, not a reconstructed snake.
       this.noteGap(previous.tick, frame.t);
       this.requestResync(`broken movement chain at tick ${frame.t}`);
       return false;
@@ -250,13 +232,17 @@ export class RemotePlayback {
       return false;
     }
     const newest = this.newest();
-    if (newest && frame.tick < newest.tick) {
+    if (!newest || frame.tick > newest.tick) {
+      if (newest && frame.tick > newest.tick + 1) this.noteGap(newest.tick, frame.tick);
+      this.frames.push(frame);
+    } else {
+      // Late, but still the server's statement for that tick. Discarding it
+      // is how ±120 ms of jitter became a permanent hole. Keep tick order.
       this.stats.outOfOrder += 1;
-      return false;
+      const index = this.frames.findIndex((entry) => entry.tick > frame.tick);
+      if (index < 0) this.frames.push(frame);
+      else this.frames.splice(index, 0, frame);
     }
-    if (newest && frame.tick > newest.tick + 1) this.noteGap(newest.tick, frame.tick);
-
-    this.frames.push(frame);
     this.byTick.set(frame.tick, frame);
     this.stats.frames += 1;
     this.lastFrameAt = at;
@@ -527,103 +513,71 @@ export class RemotePlayback {
   }
 
   get delayTicks() {
-    return Math.max(1, Math.round(this.delayMs / this.tickMs));
+    // One confirmed tick of render delay. Not an adaptive cushion: a cushion
+    // that only grows is how snakes drifted further apart the longer you played.
+    return 1;
   }
 
   // ---- playhead -----------------------------------------------------------
 
-  // Whole confirmed cells, on a fixed clock. The playhead is a float tick. It
-  // advances one server tick per tickMs, and the cell drawn is the floor of
-  // that tick. A packet must not move a remote snake: that is Classic.
-  //
-  // The clock does not start on the live edge. It waits until `delayTicks`
-  // confirmed cells are already in hand (about one tick, 120ms, on a stable
-  // link — more when jitter has raised the delay), then runs at 1x from the
-  // cell it is already showing. Spending that lead is what hides a late
-  // packet. Nothing in here speeds up to eat a burst, rewinds when the delay
-  // grows, or draws a position between two squares. A tick that will never
-  // arrive is skipped once, to the next stored cell, so a hole cannot freeze
-  // the board or dump every buffered cell in one paint.
+  // Whole confirmed cells. The target is newest.tick - 1 on every sample.
+  // Elapsed time moves the playhead toward that target and is kept, so a late
+  // frame or a catch-up burst is spent instead of becoming a permanent offset.
+  // Nothing is drawn between squares, and a missing tick is the next stored
+  // cell rather than an invented body.
   sample(now = this.clock()) {
     if (!this.enabled) return null;
     const newest = this.newest();
     if (!newest) return null;
     const oldest = this.oldest();
+    const target = Math.max(oldest.tick, newest.tick - this.delayTicks);
 
     if (this.playhead === null || this.lastSampleAt === null) {
-      this.playhead = oldest.tick;
+      this.playhead = target;
       this.lastSampleAt = now;
-      this.clockArmed = false;
-    }
-    const dt = Math.max(0, now - this.lastSampleAt);
-    this.lastSampleAt = now;
-    this.adaptDelay(dt);
-
-    const liveTarget = Math.max(oldest.tick, newest.tick - this.delayTicks);
-    if (liveTarget - this.playhead > this.limits.maxLagTicks) {
-      // Far behind the buffer: drop stale history. This is recovery from a
-      // stall, not how ordinary jitter is hidden.
-      this.stats.staleDrops += 1;
-      this.playhead = liveTarget;
+      this.surplusMs = 0;
       this.clockArmed = true;
-      this.trim();
-    }
-
-    const leadTicks = newest.tick - this.playhead;
-    const quiet = this.lastFrameAt !== null && now - this.lastFrameAt > this.tickMs * 1.5;
-    if (!this.clockArmed) {
-      // Show the first cell immediately. Start the clock only once a late
-      // packet has somewhere to land, or the stream has gone quiet and the
-      // last cells still need to play out. The wait itself is not movement:
-      // do not add it to the playhead or the buffer is spent in one jump.
-      if (quiet || leadTicks >= this.delayTicks) {
-        if (!quiet && this.playhead <= oldest.tick && leadTicks > this.delayTicks) {
-          const start = newest.tick - this.delayTicks;
-          if (start > this.playhead) this.playhead = start;
-        }
-        this.clockArmed = true;
-      }
     } else {
-      const next = this.playhead + dt / this.tickMs;
-      if (next > newest.tick) {
-        // Out of confirmed history. Stop. Nothing past the live edge is invented,
-        // and the extra time is not stored to fast-forward the next burst.
-        this.playhead = newest.tick;
-        if (dt > 0) this.stats.underruns += 1;
-      } else {
-        this.playhead = next;
+      const dt = Math.max(0, now - this.lastSampleAt);
+      this.lastSampleAt = now;
+      this.surplusMs += dt;
+      let steps = 0;
+      while (this.surplusMs >= this.tickMs && this.playhead < target && steps < 2) {
+        this.surplusMs -= this.tickMs;
+        this.playhead += 1;
+        steps += 1;
       }
+      if (this.playhead > target) this.playhead = target;
+      if (this.playhead >= target && this.surplusMs > this.tickMs) this.surplusMs = this.tickMs;
     }
     if (this.playhead < oldest.tick) this.playhead = oldest.tick;
 
-    // A missing tick never arrives. Take the next real cell once — not every
-    // cell up to the live edge — so the snake does not vanish for the hole.
-    if (!this.byTick.has(Math.floor(this.playhead))) {
-      const floorTick = Math.floor(this.playhead);
-      const nextStored = this.frames.find((frame) => frame.tick >= floorTick);
-      this.playhead = nextStored ? nextStored.tick : newest.tick;
+    if (!this.byTick.has(this.playhead)) {
+      const floorTick = this.playhead;
+      const nextStored = this.frames.find((frame) => frame.tick >= floorTick && frame.tick <= newest.tick);
+      if (nextStored) {
+        this.playhead = nextStored.tick;
+        this.stats.heldFrames += 1;
+      }
     }
 
     this.stats.samples += 1;
-    const base = Math.floor(this.playhead);
+    const base = this.playhead;
     const older = this.byTick.get(base);
-    const newer = this.byTick.get(base + 1);
     const sample = {
-      tick: base, nextTick: newer ? base + 1 : null, alpha: 0,
-      delayMs: Math.round(this.delayMs), targetDelayMs: this.targetDelayMs,
+      tick: older ? older.tick : base, nextTick: null, alpha: 0,
+      delayMs: this.delayTicks * this.tickMs, targetDelayMs: this.delayTicks * this.tickMs,
       buffered: this.frames.length, bufferedTicks: Math.max(0, newest.tick - base),
-      atLiveEdge: this.playhead >= newest.tick, players: null
+      atLiveEdge: base >= newest.tick, players: null, interpolated: false, frame: null
     };
     if (!older) {
-      sample.players = null;
       sample.food = null;
-      sample.interpolated = false;
       return sample;
     }
     sample.food = Array.isArray(older.food) ? older.food : null;
     sample.players = older.players;
-    sample.interpolated = false;
-    if (!newer) this.stats.heldFrames += 1;
+    sample.frame = older.raw || null;
+    sample.tick = older.tick;
     this.stats.steppedFrames += 1;
     return sample;
   }
