@@ -6,8 +6,8 @@
 // one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-9';
-import { RemotePlayback } from './playback.js?v=step11-responsive-9';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-10';
+import { RemotePlayback } from './playback.js?v=step11-responsive-10';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -292,7 +292,15 @@ export class MultiplayerGameRenderer {
     const added = this.playback.pushMovement(frame, this.clock());
     const resync = this.playback.takeResyncRequest();
     if (resync) this.requestResync(resync);
-    if (!added) return false;
+    if (!added) {
+      // The body was refused, but the frame still names the pellet the server
+      // is drawing. Apply that without moving the snake. Waiting for the
+      // snapshot is why mobile food vanished while everyone else could see it.
+      if (typeof resync === 'string' && resync.startsWith('broken movement chain')) {
+        this.local?.glimpse(frame);
+      }
+      return false;
+    }
     return this.playback.materialize(frame, this.snapshot) || false;
   }
 

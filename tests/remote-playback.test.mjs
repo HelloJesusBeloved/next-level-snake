@@ -272,20 +272,76 @@ test('missing confirmed ticks hold the board instead of inventing a route', () =
   const pb = playbackFor(s);
   pb.pushSnapshot(s.frames[0], 0);
   pb.pushSnapshot(s.frames[1], TICK);
+  // The playhead has caught the last delivered tick. This is the state a
+  // phone is in when the next movement frame is dropped.
+  let sample = pb.sample(TICK);
+  assert.equal(sample.tick, s.frames[1].t);
   // Skip tick 2 entirely: the head's next confirmed position is tick 3.
   pb.pushSnapshot(s.frames[3], 3 * TICK);
   assert.equal(pb.summary().gaps, 1);
   assert.equal(pb.summary().missingTicks, 1);
   let time = 3 * TICK;
-  let sample = null;
   for (let index = 0; index < 40; index += 1) { time += 8; sample = pb.sample(time); }
-  // Between tick 1 and tick 3 there is no adjacent pair, so nothing is drawn as
-  // motion; the board holds a real confirmed body.
+  // Tick 2 was never delivered. Holding tick 1 forever is the frozen board:
+  // the hole cannot fill, so the newest confirmed body is the one to draw.
+  // Nothing between tick 1 and tick 3 is invented.
   assert.equal(sample.interpolated, false);
+  assert.equal(sample.tick, s.frames[3].t);
   const drawn = [...sample.players.get(1).cells];
-  const validBodies = [s.frames[1], s.frames[3]].map((frame) => frame.p.find((p) => p.i === 1).b);
-  assert.ok(validBodies.some((body) => JSON.stringify(body) === JSON.stringify(drawn)),
-    'the displayed body is always one the server actually confirmed');
+  assert.deepEqual(drawn, s.frames[3].p.find((p) => p.i === 1).b,
+    'a missing tick must not freeze the snake on the cell before the hole');
+});
+
+test('one dropped tick going straight is the body between the two confirmed heads', () => {
+  const pb = new RemotePlayback({ tickMs: TICK, columns: 24, rows: 18, clock: () => 0 });
+  pb.enable('responsive');
+  const snap = (t, body) => ({
+    v: 1, type: 'snapshot', m: 1, s: 'running', t, b: { c: 24, r: 18 }, f: [{ c: 50, o: 1 }],
+    p: [{ i: 1, n: 'A', c: '#00FF00', b: body, l: body.length, a: true, d: 'right', sc: 0, fr: false }]
+  });
+  pb.pushSnapshot(snap(0, [22, 21, 20]), 0);
+  pb.sample(0);
+  // Tick 1 was dropped. Tick 2 is two straight steps, including the wrap.
+  // The missing tick is not stored. The body at tick 2 is the only one both
+  // heads allow, so the board shows that cell instead of freezing on tick 0.
+  const moved = pb.pushMovement({
+    v: 1, type: 'movement', m: 1, s: 'running', t: 2, f: [{ c: 80, o: 1 }],
+    p: [{ i: 1, h: 0, d: 'right', l: 3, a: true, fr: false, sc: 0 }]
+  }, TICK);
+  assert.equal(moved, true);
+  assert.equal(pb.takeResyncRequest(), false, 'a determined straight body is not a broken chain');
+  assert.equal(pb.byTick.has(1), false, 'the dropped tick is not invented');
+  assert.deepEqual(pb.byTick.get(2).players.get(1).cells, [0, 23, 22]);
+  const sample = pb.sample(TICK);
+  assert.equal(sample.interpolated, false);
+  assert.equal(sample.tick, 2, 'playback must not stay on the cell before the hole');
+  assert.deepEqual([...sample.players.get(1).cells], [0, 23, 22]);
+
+  const grown = new RemotePlayback({ tickMs: TICK, columns: 24, rows: 18, clock: () => 0 });
+  grown.enable('responsive');
+  grown.pushSnapshot(snap(0, [22, 21, 20]), 0);
+  assert.equal(grown.pushMovement({
+    v: 1, type: 'movement', m: 1, s: 'running', t: 2, f: [],
+    p: [{ i: 1, h: 0, d: 'right', l: 4, a: true, fr: false, sc: 1 }]
+  }, TICK), true);
+  assert.deepEqual(grown.byTick.get(2).players.get(1).cells, [0, 23, 22, 21],
+    'one growth across the hole has one possible tail');
+});
+
+test('a dropped tick where the snake turned is not invented', () => {
+  const pb = new RemotePlayback({ tickMs: TICK, columns: 24, rows: 18, clock: () => 0 });
+  pb.enable('responsive');
+  pb.pushSnapshot({
+    v: 1, type: 'snapshot', m: 1, s: 'running', t: 5, b: { c: 24, r: 18 }, f: [],
+    p: [{ i: 1, n: 'A', c: '#00FF00', b: [10, 9, 8], l: 3, a: true, d: 'right', sc: 0, fr: false }]
+  }, 0);
+  const turned = pb.pushMovement({
+    v: 1, type: 'movement', m: 1, s: 'running', t: 7,
+    p: [{ i: 1, h: 10 + 24, d: 'down', l: 3, a: true, fr: false, sc: 0 }]
+  }, TICK);
+  assert.equal(turned, false);
+  assert.match(String(pb.takeResyncRequest()), /broken movement chain/);
+  assert.equal(pb.newest().tick, 5, 'a turn in the hole is not stored as a body');
 });
 
 test('a large gap asks for an authoritative resync, and a request is dequeued once', () => {

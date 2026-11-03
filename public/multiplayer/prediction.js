@@ -150,6 +150,8 @@ export class LocalPredictor {
     this.food = null;
     this.ateAt = null;
     this.eatenCell = null;
+    this.pendingGap = false;
+    this.gapTicks = 0;
     this.diagnostic = null;
     // What the local view asserted about each tick, kept so reconciliation can
     // answer the only question that matters — "was the prediction right about
@@ -211,7 +213,7 @@ export class LocalPredictor {
     this.reason = reason;
     if (was) {
       this.confirmed = null; this.predicted = null; this.pending = []; this.food = null;
-      this.ateAt = null; this.eatenCell = null;
+      this.ateAt = null; this.eatenCell = null; this.pendingGap = false;
       this.lastRunAt = null; this.arrivalAt = null; this.accumulator = 0;
     }
     return was;
@@ -235,6 +237,8 @@ export class LocalPredictor {
     this.food = null;
     this.ateAt = null;
     this.eatenCell = null;
+    this.pendingGap = false;
+    this.gapTicks = 0;
     this.lastRunAt = null;
     this.arrivalAt = null;
     this.accumulator = 0;
@@ -286,6 +290,7 @@ export class LocalPredictor {
     this.stats.reconciliations += 1;
     this.arrivalAt = this.clock();
     const oldPredicted = this.predicted;
+    const priorTick = this.confirmed?.tick ?? null;
     this.trim(appliedSeq);
     this.confirmed = {
       tick, body, direction: player.d,
@@ -306,6 +311,7 @@ export class LocalPredictor {
       this.food = serverFood;
       this.ateAt = null;
       this.eatenCell = null;
+      this.pendingGap = false;
       // A freeze, death, or not-yet-running frame adopts the server body once.
       // Replaying the local queue on top of that snap is the erratic second
       // after a reconnect: those turns were already shown. The first running
@@ -329,7 +335,16 @@ export class LocalPredictor {
     // that frame's food. The server has already eaten and respawned by then;
     // taking the new pellet first is why the one you were about to bite
     // vanished and awarded no length.
+    // A phone drops movement frames. The next thing that arrives is a later
+    // snapshot, more than one tick ahead. One-cell catch-up cannot close that,
+    // and keeping the old pellet hides the food the server (and everyone else)
+    // is already drawing. Remember the hole; recover once we are going straight.
+    if (Number.isInteger(priorTick) && tick > priorTick + 1) {
+      this.pendingGap = true;
+      this.gapTicks = tick - priorTick;
+    }
     this.alignWithServer();
+    this.recoverFromGap();
     this.adoptFood(serverFood, tick);
     this.eatIfCoveringFood(serverFood);
     this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
@@ -373,18 +388,113 @@ export class LocalPredictor {
     }
   }
 
+  // The ticks between priorTick and this frame never arrived. While a turn is
+  // still queued, leave the corner the player pressed. Once the snake is
+  // straight again, a server that is more than one cell away (or on another
+  // path) is the real position — staying a row off for the rest of the match
+  // is the mobile offset. Being AHEAD of a fresh frame is prediction, not a
+  // hole, and is not pulled backward.
+  recoverFromGap() {
+    if (!this.pendingGap || !this.predicted || !this.confirmed) return;
+    if (this.predicted.queue.length) return;
+    if (this.predicted.direction !== this.confirmed.direction) return;
+    const serverCells = this.confirmed.body.map((cell) => cellIndex(cell[0], cell[1], this.columns));
+    const serverHead = serverCells[0];
+    const ourHead = this.predicted.body[0];
+    const direction = this.predicted.direction;
+    const toServer = this.forwardSteps(ourHead, serverHead, direction);
+    const toUs = this.forwardSteps(serverHead, ourHead, direction);
+    // Same cell, one step either way, or we are the one in front: the clock
+    // and alignWithServer already handle those. A torus walk must not call
+    // "a lap behind" what is actually a few cells ahead.
+    const weAreAhead = toUs != null && (toServer == null || toUs <= toServer);
+    if (ourHead === serverHead || toServer === 1 || toUs === 1 || weAreAhead) {
+      this.pendingGap = false;
+      return;
+    }
+    const hole = Math.max(1, this.gapTicks || 1);
+    const serverIsAhead = toServer != null && toServer > 1 && toServer <= hole &&
+      (toUs == null || toServer < toUs);
+    const leftTheLine = toServer == null && toUs == null;
+    if (!serverIsAhead && !leftTheLine) {
+      this.pendingGap = false;
+      return;
+    }
+    this.predicted.body = serverCells.slice();
+    this.predicted.length = serverCells.length;
+    this.predicted.tick = this.confirmed.tick;
+    this.predicted.grow = this.confirmed.growthRemaining ?? 0;
+    this.predicted.queue = [];
+    this.accumulator = 0;
+    this.lastRunAt = this.clock();
+    // The body we just took already includes every eat those missing ticks
+    // scored. The pellet to draw is the server's, not the one we were holding
+    // when the hole opened.
+    this.food = null;
+    this.eatenCell = null;
+    this.ateAt = null;
+    this.pendingGap = false;
+    this.stats.snapped += 1;
+  }
+
+  // Steps along `direction` from `from` until `target`, not counting a wrap
+  // that has gone all the way around. Null when `target` is not on that line.
+  forwardSteps(from, target, direction) {
+    if (!Number.isInteger(from) || !Number.isInteger(target)) return null;
+    if (from === target) return 0;
+    const delta = DIRECTIONS[direction];
+    if (!delta) return null;
+    const span = direction === 'left' || direction === 'right' ? this.columns : this.rows;
+    let cell = from;
+    for (let i = 1; i < span; i += 1) {
+      const x = wrap((cell % this.columns) + delta[0], this.columns);
+      const y = wrap(Math.floor(cell / this.columns) + delta[1], this.rows);
+      cell = y * this.columns + x;
+      if (cell === target) return i;
+    }
+    return null;
+  }
+
   // The pellet this snake is walking toward stays until THIS head bites it.
   // The server drops a pellet the instant ITS head eats, which can be a tick
   // before ours, and the respawn is a different cell. Taking that early is
   // why every other food vanished on your own screen and awarded no length.
   adoptFood(serverFood, tick) {
-    if (serverFood !== null && serverFood === this.eatenCell) return;
-    if (this.food !== null && serverFood !== this.food) return;
+    if (serverFood === null || serverFood === this.eatenCell) return;
+    if (this.food !== null && serverFood !== this.food) {
+      // One cell short of the bite: the respawn must not replace it. Any other
+      // cell is a pellet this head will not enter — holding it is the food
+      // that vanishes on a phone after a dropped frame, while everyone else
+      // draws the one the server actually spawned. A frame with no food at all
+      // must not clear the pellet (that is not a respawn).
+      const head = this.predicted?.body?.[0];
+      if (head === this.food || this.oneStep(head, this.food, this.predicted?.direction)) return;
+    }
     this.food = serverFood;
     if (serverFood !== null) {
       this.ateAt = null;
       this.eatenCell = null;
     }
+  }
+
+  // A movement frame arrived with a hole in front of it, so its body was
+  // refused. The pellet in that frame is still the one the server is drawing.
+  // Taking it now (unless this head is about to bite the one it already sees)
+  // is what keeps your food from vanishing for the whole wait until a snapshot.
+  // The body is not moved: a refused chain is not a position we can copy.
+  glimpse(frame) {
+    if (!this.active || !frame || !Array.isArray(frame.f)) return false;
+    const tick = Number.isInteger(frame.t) ? frame.t : null;
+    const prior = this.confirmed?.tick ?? null;
+    if (Number.isInteger(prior) && Number.isInteger(tick) && tick > prior + 1) {
+      this.pendingGap = true;
+      this.gapTicks = Math.max(this.gapTicks || 0, tick - prior);
+    }
+    const entry = frame.f.find((food) => food && Number(food.o) === Number(this.ownParticipantId));
+    const serverFood = entry && Number.isInteger(entry.c) ? entry.c : null;
+    const before = this.food;
+    this.adoptFood(serverFood, tick);
+    return this.food !== before;
   }
 
   // Food that spawned on the cell the head already occupies. Entry-eat already

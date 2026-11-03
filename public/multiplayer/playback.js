@@ -2,11 +2,13 @@
  * Responsive Brawl — smooth playback of OTHER players' authoritative movement.
  *
  * The server stays the only source of movement. This module does not simulate,
- * predict or extrapolate anything: it stores server-confirmed frames in tick
- * order and plays those cells. A healthy stream is shown on the newest
- * confirmed tick, so a remote snake sits on the same square the server (and
- * that player) just reached. A burst is still stepped one cell per tickMs —
- * turns are never skipped, and nothing is drawn between squares.
+ * predict or guess a turn: it stores server-confirmed frames in tick order and
+ * plays those cells. A healthy stream is shown on the newest confirmed tick, so
+ * a remote snake sits on the same square the server (and that player) just
+ * reached. A burst is still stepped one cell per tickMs — turns are never
+ * skipped, and nothing is drawn between squares. One dropped tick is applied
+ * only when every snake kept going straight and both confirmed heads leave a
+ * single possible body. Any turn, or a wider hole, waits for a real snapshot.
  */
 
 // Tuning targets from the step-3 brief. They are targets, not guarantees: the
@@ -38,6 +40,10 @@ export const PLAYBACK_TUNING = Object.freeze({
 });
 
 const isTick = (value) => Number.isSafeInteger(value) && value >= 0;
+const wrap = (value, size) => ((value % size) + size) % size;
+const DIRECTIONS = Object.freeze({
+  up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0]
+});
 
 export class RemotePlayback {
   constructor({ tickMs = 105, columns = 24, rows = 18, clock = () => performance.now(), limits = {} } = {}) {
@@ -65,7 +71,7 @@ export class RemotePlayback {
   blankStats() {
     return {
       frames: 0, movementFrames: 0, snapshotFrames: 0, dropped: 0, duplicates: 0, outOfOrder: 0,
-      missingTicks: 0, gaps: 0, underruns: 0, resyncs: 0, staleDrops: 0,
+      missingTicks: 0, gaps: 0, underruns: 0, resyncs: 0, staleDrops: 0, bridgedGaps: 0,
       delayRaised: 0, delayLowered: 0, adaptSteps: 0, samples: 0, interpolatedFrames: 0,
       steppedFrames: 0, heldFrames: 0, wrapSegments: 0, reconstructed: 0, reconstructRejects: 0
     };
@@ -154,6 +160,20 @@ export class RemotePlayback {
       return false;
     }
     if (frame.t !== previous.tick + 1) {
+      // Exactly one missing tick, and every snake still on the same heading:
+      // both confirmed heads determine one body. Rebuild that, so a single
+      // dropped movement (the usual mobile loss) does not freeze the board
+      // until the next full snapshot. A turn, a death, or a wider hole is not
+      // determined — refuse it and ask for the snapshot instead of guessing.
+      if (frame.t === previous.tick + 2) {
+        const bridged = this.straightBridge(previous, frame);
+        if (bridged) {
+          this.accept(bridged, at);
+          this.stats.movementFrames += 1;
+          this.stats.bridgedGaps += 1;
+          return this.byTick.has(frame.t);
+        }
+      }
       // Movement frames only make sense as a contiguous chain: a body is rebuilt
       // by shifting the previous one, so a jump means the chain is broken and
       // rebuilding across it would be a guess. Ask for an authoritative snapshot
@@ -300,14 +320,84 @@ export class RemotePlayback {
     return [head, ...body.slice(0, length - 1)];
   }
 
+  // One dropped tick while every snake kept its heading. The tail after two
+  // straight steps depends only on how many cells were added, not on which of
+  // the two ticks added them. The missing tick itself is not invented. If the
+  // body is not determined, this returns null and the caller asks for a snapshot.
+  straightBridge(previous, frame) {
+    const entries = frame.p || [];
+    if (!entries.length || entries.length !== previous.players.size) return null;
+    const players = new Map();
+    for (const entry of entries) {
+      const before = previous.players.get(entry.i);
+      const built = before ? this.straightPair(before, entry) : null;
+      if (!built) return null;
+      players.set(entry.i, built);
+    }
+    if (players.size !== previous.players.size) return null;
+    this.stats.reconstructed += players.size;
+    return {
+      tick: frame.t, players, food: frame.f,
+      status: frame.s, ts: frame.ts, full: false
+    };
+  }
+
+  straightPair(before, entry) {
+    const length = Number.isInteger(entry.l) ? entry.l : null;
+    if (!Number.isInteger(length) || length < 1 || !Number.isSafeInteger(entry.h)) return null;
+    const sameState = !!entry.fr === !!before.frozen && (entry.a === false) === (before.alive === false);
+    if (!sameState || entry.d !== before.dir) return null;
+    if (entry.fr === true || entry.a === false) {
+      if (entry.h !== before.cells[0] || length !== before.cells.length) return null;
+      return this.movementPlayer(entry, before.cells.slice());
+    }
+    const delta = length - before.cells.length;
+    if (delta < 0 || delta > 2) return null;
+    const mid = this.stepCell(before.cells[0], before.dir);
+    const head = mid === null ? null : this.stepCell(mid, before.dir);
+    if (head !== entry.h) return null;
+    let finalCells;
+    if (delta === 0 || delta === 2) {
+      const grew = delta === 2;
+      const midCells = this.stepBody(before.cells, mid, grew);
+      finalCells = midCells && this.stepBody(midCells, head, grew);
+    } else {
+      finalCells = [head, mid, ...before.cells].slice(0, length);
+    }
+    if (!finalCells || finalCells.length !== length || finalCells[0] !== head) return null;
+    return this.movementPlayer(entry, finalCells);
+  }
+
+  movementPlayer(entry, cells, direction = entry.d) {
+    return {
+      cells, dir: direction, len: cells.length, alive: entry.a !== false,
+      frozen: !!entry.fr, score: entry.sc, raw: entry
+    };
+  }
+
+  stepCell(index, direction) {
+    const delta = DIRECTIONS[direction];
+    if (!delta || !Number.isSafeInteger(index)) return null;
+    const x = wrap((index % this.columns) + delta[0], this.columns);
+    const y = wrap(Math.floor(index / this.columns) + delta[1], this.rows);
+    return y * this.columns + x;
+  }
+
+  stepBody(cells, newHead, grew) {
+    if (!Array.isArray(cells) || !cells.length || !Number.isSafeInteger(newHead)) return null;
+    const next = [newHead, ...cells];
+    if (!grew) next.pop();
+    return next;
+  }
+
   // Turns the newest RECONSTRUCTED tick back into a complete, Protocol-v1
   // shaped snapshot. The bodies are the ones pushMovement rebuilt (lossless, as
   // the Rails movement_protocol_test proves), the per-player scalars are the
   // movement frame's own, and the fields a compact frame does not carry (names,
   // colours, standings, board, rules) are carried forward from `previous`, the
   // last complete frame the renderer holds. Survival and frozen-tick counters
-  // advance by exactly the engine's rule for one tick (survivors +1, frozen +1),
-  // which is possible only because movement frames form a contiguous chain.
+  // advance once per tick this frame covers (two when a straight dropped tick
+  // was rebuilt with it).
   //
   // This is what lets local prediction reconcile on EVERY tick in Responsive
   // Brawl instead of only on the periodic complete snapshot: without it the own
@@ -323,6 +413,9 @@ export class RemotePlayback {
       if (!rebuilt || !meta) return null;
       const alive = entry.a !== false;
       const frozen = entry.fr === true;
+      // A bridged frame covers the dropped tick too. Survival and freeze
+      // counters step once per confirmed tick, so a one-tick hole adds two.
+      const passed = frame.t === previous.t + 2 ? 2 : 1;
       players.push({
         ...meta,
         ...entry,
@@ -330,9 +423,9 @@ export class RemotePlayback {
         l: rebuilt.cells.length,
         a: alive,
         fr: frozen,
-        sv: (Number.isInteger(meta.sv) ? meta.sv : 0) + (alive && !frozen && meta.a !== false ? 1 : 0),
+        sv: (Number.isInteger(meta.sv) ? meta.sv : 0) + (alive && !frozen && meta.a !== false ? passed : 0),
         lg: Math.max(Number.isInteger(meta.lg) ? meta.lg : 0, rebuilt.cells.length),
-        fz: (Number.isInteger(meta.fz) ? meta.fz : 0) + (alive && frozen ? 1 : 0)
+        fz: (Number.isInteger(meta.fz) ? meta.fz : 0) + (alive && frozen ? passed : 0)
       });
       // A compact frame has no `h` in a snapshot; drop the movement-only key.
       delete players[players.length - 1].h;
@@ -445,7 +538,16 @@ export class RemotePlayback {
 
     const behind = newest.tick - this.playhead;
     const nextTick = this.playhead + 1;
-    if (behind === 1 && this.byTick.has(nextTick)) {
+    // The next confirmed tick is not in the buffer. A dropped movement frame
+    // (the usual mobile case) opens a hole here. Waiting for that tick freezes
+    // every other snake for the rest of the match: nothing will ever fill the
+    // hole, and the live edge keeps moving. The missing turn was never
+    // delivered, so showing the newest cell we DO have is not a skipped turn.
+    if (behind > 0 && !this.byTick.has(nextTick)) {
+      this.playhead = newest.tick;
+      this.lastVisualAt = now;
+      this.edgeWait = 0;
+    } else if (behind === 1 && this.byTick.has(nextTick)) {
       this.playhead = nextTick;
       this.lastVisualAt = now;
       this.edgeWait = 0;
