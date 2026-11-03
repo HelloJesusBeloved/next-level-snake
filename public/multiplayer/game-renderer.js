@@ -6,8 +6,8 @@
 // one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-8';
-import { RemotePlayback } from './playback.js?v=step11-responsive-8';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-9';
+import { RemotePlayback } from './playback.js?v=step11-responsive-9';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -859,7 +859,13 @@ export class MultiplayerGameRenderer {
       const owner = Number(food.o);
       if (Number.isInteger(owner)) newestOwners.add(owner);
       const remote = heldByOwner && owner !== ownId ? heldByOwner.get(owner) : null;
-      drawPellet(remote && Number.isInteger(remote.c) ? remote.c : food.c, pelletColor(food.o));
+      // Own pellet is the cell THIS head will bite, not the respawn the server
+      // already published. Drawing that respawn is the food that vanishes on
+      // your screen and awards nothing when you reach the real one.
+      let cell = food.c;
+      if (owner === ownId && this.local?.active && Number.isInteger(this.local.food)) cell = this.local.food;
+      else if (remote && Number.isInteger(remote.c)) cell = remote.c;
+      drawPellet(cell, pelletColor(food.o));
     }
     // A pellet the newest frame no longer carries, but whose (delayed) snake has
     // not reached it yet on the board we are drawing: keep showing it until the

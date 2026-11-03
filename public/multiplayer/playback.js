@@ -3,14 +3,10 @@
  *
  * The server stays the only source of movement. This module does not simulate,
  * predict or extrapolate anything: it stores server-confirmed frames in tick
- * order and plays them back a short, intentional distance behind the live edge.
- *
- * Remote snakes tick the same way the local snake ticks. The playhead advances
- * on the monotonic clock, one server tick per tickMs, and each sample is the
- * whole confirmed cells of that tick. Nothing is drawn between squares. A late
- * packet is absorbed by the buffer instead of stuttering the snake or sliding
- * it. A missing tick holds the last real body. Turns are never skipped and
- * movement is never invented to catch up.
+ * order and plays those cells. A healthy stream is shown on the newest
+ * confirmed tick, so a remote snake sits on the same square the server (and
+ * that player) just reached. A burst is still stepped one cell per tickMs —
+ * turns are never skipped, and nothing is drawn between squares.
  */
 
 // Tuning targets from the step-3 brief. They are targets, not guarantees: the
@@ -56,6 +52,8 @@ export class RemotePlayback {
     this.byTick = new Map();
     this.playhead = null;
     this.lastSampleAt = null;
+    this.lastVisualAt = null;
+    this.edgeWait = 0;
     this.delayMs = this.limits.stableDelayMs;
     this.targetDelayMs = this.limits.stableDelayMs;
     this.arrivals = [];
@@ -93,6 +91,8 @@ export class RemotePlayback {
     if (Number.isFinite(tickMs) && tickMs > 0 && tickMs !== this.tickMs) {
       this.tickMs = tickMs;
       this.playhead = null; // a speed change re-anchors the clock, it never stretches
+      this.lastVisualAt = null;
+      this.edgeWait = 0;
     }
     if (Number.isInteger(columns) && columns > 0) this.columns = columns;
     if (Number.isInteger(rows) && rows > 0) this.rows = rows;
@@ -103,6 +103,8 @@ export class RemotePlayback {
     this.byTick.clear();
     this.playhead = null;
     this.lastSampleAt = null;
+    this.lastVisualAt = null;
+    this.edgeWait = 0;
     this.arrivals = [];
     this.jitterMs = 0;
     this.needsResync = false;
@@ -410,57 +412,70 @@ export class RemotePlayback {
 
   // ---- playhead -----------------------------------------------------------
 
-  // The playhead is a float tick advanced by the MONOTONIC clock, not by frame
-  // arrivals: that is what makes playback smooth when packets are not.
+  // Whole confirmed cells only. A one-tick stream is shown on the tick that
+  // just arrived: parking an extra tickMs behind it is the permanent
+  // "one square off" between this snake and everyone else's screen. A burst
+  // (more than one confirmed tick waiting) still advances one cell per tickMs
+  // so a turn is never skipped and one paint never teleports.
   sample(now = this.clock()) {
     if (!this.enabled) return null;
     const newest = this.newest();
     if (!newest) return null;
 
-    if (this.lastSampleAt === null) {
+    if (this.lastSampleAt === null || this.playhead === null) {
       this.lastSampleAt = now;
-      // Start one delay behind the live edge: that lag IS the jitter buffer.
-      this.playhead = newest.tick - this.delayTicks;
+      this.playhead = newest.tick;
+      this.lastVisualAt = now;
+      this.edgeWait = 0;
     }
     const dt = Math.max(0, now - this.lastSampleAt);
     this.lastSampleAt = now;
     this.adaptDelay(dt);
 
-    this.playhead += dt / this.tickMs;
-
-    const liveTarget = newest.tick - this.delayTicks;
-    if (liveTarget - this.playhead > this.limits.maxLagTicks) {
-      // Far behind the buffer target: the history we hold is stale, so drop it
-      // rather than replaying seconds of old board. This is the only jump, and
-      // it is a recovery from a stall, not how ordinary jitter is hidden.
+    const oldest = this.oldest();
+    if (newest.tick - this.playhead > this.limits.maxLagTicks) {
+      // Far behind: the history we hold is stale. Drop it rather than replaying
+      // seconds of old board. This is recovery from a stall, not normal play.
       this.stats.staleDrops += 1;
-      this.playhead = liveTarget;
+      this.playhead = newest.tick;
+      this.lastVisualAt = now;
       this.trim();
     }
-
-    const oldest = this.oldest();
     if (this.playhead < oldest.tick) this.playhead = oldest.tick;
-    if (this.playhead > newest.tick) {
-      // Out of confirmed history. STOP at the newest confirmed state; no
-      // movement is fabricated to fill the gap.
-      this.playhead = newest.tick;
-      if (dt > 0) this.stats.underruns += 1;
-    }
-    this.stats.samples += 1;
 
-    const base = Math.floor(this.playhead);
-    const alpha = Math.min(1, Math.max(0, this.playhead - base));
+    const behind = newest.tick - this.playhead;
+    const nextTick = this.playhead + 1;
+    if (behind === 1 && this.byTick.has(nextTick)) {
+      this.playhead = nextTick;
+      this.lastVisualAt = now;
+      this.edgeWait = 0;
+    } else if (behind > 1 && this.byTick.has(nextTick) &&
+               now - (this.lastVisualAt ?? now) >= this.tickMs) {
+      this.playhead = nextTick;
+      this.lastVisualAt = now;
+      this.edgeWait = 0;
+    }
+
+    if (this.playhead > newest.tick) this.playhead = newest.tick;
+    if (this.playhead >= newest.tick) {
+      this.edgeWait += dt;
+      // A missed server tick, not the gap between two on-time frames.
+      if (this.edgeWait >= this.tickMs * 1.5) {
+        this.stats.underruns += 1;
+        this.edgeWait = 0;
+      }
+    } else this.edgeWait = 0;
+
+    this.stats.samples += 1;
+    const base = this.playhead;
     const older = this.byTick.get(base);
     const newer = this.byTick.get(base + 1);
     const sample = {
-      tick: base, nextTick: newer ? base + 1 : null, alpha,
+      tick: base, nextTick: newer ? base + 1 : null, alpha: 0,
       delayMs: Math.round(this.delayMs), targetDelayMs: this.targetDelayMs,
-      buffered: this.frames.length, bufferedTicks: newest.tick - base,
-      atLiveEdge: this.playhead >= newest.tick, players: null
+      buffered: this.frames.length, bufferedTicks: Math.max(0, newest.tick - base),
+      atLiveEdge: base >= newest.tick, players: null
     };
-    // Interpolation needs BOTH adjacent confirmed ticks. Without the next one
-    // the display holds exactly where the server last confirmed it — nothing
-    // is invented past the live edge, and no turn is skipped to catch up.
     if (!older) {
       sample.players = null;
       sample.food = null;
@@ -468,9 +483,6 @@ export class RemotePlayback {
       return sample;
     }
     sample.food = Array.isArray(older.food) ? older.food : null;
-    // Whole confirmed cells of this tick. Remote snakes step square to square
-    // on the playhead, the same way the local snake steps on its clock. They
-    // are not slid between cells, and a gap is not bridged.
     sample.players = older.players;
     sample.interpolated = false;
     if (!newer) this.stats.heldFrames += 1;

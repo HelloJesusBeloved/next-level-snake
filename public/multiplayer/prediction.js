@@ -325,28 +325,52 @@ export class LocalPredictor {
     // on the next cell, never relocated by a packet. A frame only retires
     // inputs and refreshes food. Copying the server's queued directions back
     // onto this snake replays corners it has already taken.
+    // Step onto a server head that is exactly one cell ahead BEFORE adopting
+    // that frame's food. The server has already eaten and respawned by then;
+    // taking the new pellet first is why the one you were about to bite
+    // vanished and awarded no length.
+    this.alignWithServer();
     this.adoptFood(serverFood, tick);
-    // Same head as the server: a missed bite can leave the tail short. Fix the
-    // tail in place. Never move the head, and never shrink a bite we already
-    // showed — both of those are the jerk.
+    this.eatIfCoveringFood(serverFood);
+    this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
+    return this.active;
+  }
+
+  // One cell, same direction, before this frame is painted. Other players are
+  // looking at this server head. Matching it is not a rewind and it is not a
+  // second step: the clock is disarmed so the paint takes this cell once.
+  // A queued turn is left alone so the corner the player just pressed still
+  // happens on the next cell, instead of being overwritten by the server.
+  alignWithServer() {
+    if (!this.predicted || !this.confirmed) return;
     const serverCells = this.confirmed.body.map((cell) => cellIndex(cell[0], cell[1], this.columns));
-    const ourHead = this.predicted.body[0];
     const serverHead = serverCells[0];
-    if (serverHead === ourHead && serverCells.length > this.predicted.body.length) {
+    const ourHead = this.predicted.body[0];
+    if (!Number.isInteger(serverHead) || !Number.isInteger(ourHead)) return;
+    const straight = this.predicted.queue.length === 0 &&
+      this.predicted.direction === this.confirmed.direction;
+    if (straight && this.oneStep(ourHead, serverHead, this.predicted.direction) &&
+        serverCells.length >= this.predicted.body.length &&
+        serverCells.length <= this.predicted.body.length + Math.max(1, this.growth)) {
+      this.runTick();
+      this.accumulator = 0;
+      this.lastRunAt = this.clock();
+    }
+    if (this.predicted.body[0] === serverHead &&
+        serverCells.length > this.predicted.body.length &&
+        serverCells.length <= this.predicted.body.length + Math.max(1, this.growth)) {
       this.predicted.body = serverCells.slice();
       this.predicted.length = serverCells.length;
       this.predicted.grow = this.confirmed.growthRemaining ?? 0;
-    } else if (serverHead !== ourHead && this.oneStep(ourHead, serverHead, this.predicted.direction) &&
-               serverCells.length >= this.predicted.body.length &&
-               serverCells.length <= this.predicted.body.length + this.growth &&
-               this.accumulator >= this.tickMs * 0.5 && this.accumulator < this.tickMs) {
-      // The server already took the step this clock is in the second half of.
-      // Take it on the next paint so the two screens are not a whole square
-      // apart for the rest of the period. One cell, same direction, no rewind.
-      this.accumulator = this.tickMs;
     }
-    this.emit({ type: 'reconciled', tick, correction: 0, pending: this.pending.length });
-    return this.active;
+    // Both screens are on this cell. The next period starts now, so a tick
+    // that already elapsed locally cannot walk off the square everyone else
+    // is still looking at.
+    if (straight && this.predicted.body[0] === serverHead &&
+        this.predicted.tick >= this.confirmed.tick) {
+      this.accumulator = 0;
+      this.lastRunAt = this.clock();
+    }
   }
 
   // The pellet this snake is walking toward stays until THIS head bites it.
@@ -361,6 +385,20 @@ export class LocalPredictor {
       this.ateAt = null;
       this.eatenCell = null;
     }
+  }
+
+  // Food that spawned on the cell the head already occupies. Entry-eat already
+  // happened inside runTick; this only covers a pellet that appeared under us.
+  // The growth is spent on the next step (tail stays), which is one segment.
+  eatIfCoveringFood(serverFood) {
+    if (this.food === null || !this.predicted || this.predicted.body[0] !== this.food) return;
+    this.predicted.grow += this.growth;
+    this.stats.predictedFood += 1;
+    this.stats.predictedGrowths += 1;
+    this.eatenCell = this.food;
+    this.ateAt = this.predicted.tick;
+    this.food = null;
+    if (serverFood !== null && serverFood !== this.eatenCell) this.food = serverFood;
   }
 
   // True when `to` is the single cell `from` enters by continuing `direction`,
@@ -582,10 +620,35 @@ export class LocalPredictor {
       return 0;
     }
     if (this.accumulator < this.tickMs) return 0;
+    // Already one cell ahead of a server frame that is still arriving, and
+    // nothing is turning. Another step now is the square the other screens
+    // do not have yet. A dead link (no fresh frame) does not hold: the snake
+    // coasts up to the lead ceiling instead of freezing.
+    if (this.oneAheadOfFreshServer(now)) {
+      if (this.accumulator > this.tickMs) this.accumulator = this.tickMs;
+      return 0;
+    }
     this.accumulator -= this.tickMs;
     // Carry at most one tick so the next paint takes the next cell, never two.
     if (this.accumulator > this.tickMs) this.accumulator = this.tickMs;
     return this.runTick() ? 1 : 0;
+  }
+
+  // True when this head is exactly one straight step past the latest server
+  // head and that frame is not stale. A queued turn is not "ahead"; it has to
+  // happen on the next cell whether or not the packet is here.
+  oneAheadOfFreshServer(now) {
+    if (!this.predicted || !this.confirmed || this.arrivalAt === null) return false;
+    if (this.predicted.queue.length) return false;
+    if (this.predicted.direction !== this.confirmed.direction) return false;
+    const age = now - this.arrivalAt;
+    // A clock that is not the one that stamped the frame (or a link that has
+    // gone quiet) must not freeze the snake on the last cell.
+    if (!Number.isFinite(age) || age < 0 || age >= this.tickMs * 3) return false;
+    const head = this.confirmed.body[0];
+    if (!head) return false;
+    const serverHead = cellIndex(head[0], head[1], this.columns);
+    return this.oneStep(serverHead, this.predicted.body[0], this.predicted.direction);
   }
 
   // Re-simulates the local view back out to where it was, from confirmed state.

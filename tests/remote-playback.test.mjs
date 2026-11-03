@@ -82,19 +82,21 @@ test('playback stores confirmed frames in tick order and rejects out-of-order on
   assert.equal(pb.frames.length, 2);
 });
 
-test('the playhead runs behind the live edge by the buffer delay, never ahead of it', () => {
+test('the playhead shows the newest confirmed cell and never runs past it', () => {
   const s = scenario('wrap');
   const { samples } = runPlayback(s, { oneWayMs: 120 });
   assert.ok(samples.length > 50);
   for (const sample of samples) {
-    assert.ok(sample.tick <= sample.nextTick - 1 || sample.nextTick === null,
+    assert.ok(sample.nextTick === null || sample.tick <= sample.nextTick,
       'the playhead never samples beyond the confirmed edge');
     assert.ok(sample.bufferedTicks >= 0);
+    assert.ok(sample.tick <= s.frames.at(-1).t);
   }
-  // It also does not sit at the live edge: that lag is the whole point.
+  // A steady stream is drawn on the server's latest cell. Sitting a tick
+  // behind that cell is the permanent one-square offset between screens.
   const settled = samples.filter((sample) => sample.buffered >= 4);
-  assert.ok(settled.some((sample) => sample.bufferedTicks >= 1),
-    'settled playback must lag the newest confirmed tick');
+  assert.ok(settled.some((sample) => sample.atLiveEdge && sample.bufferedTicks === 0),
+    'settled playback must reach the newest confirmed tick');
 });
 
 test('sample() steps whole confirmed cells and never glides between them', () => {
