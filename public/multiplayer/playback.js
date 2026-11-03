@@ -1,14 +1,15 @@
 /*!
  * Responsive Brawl — smooth playback of OTHER players' authoritative movement.
  *
- * The server stays the only source of movement. This module does not simulate,
- * predict or guess a turn: it stores server-confirmed frames in tick order and
- * plays those cells. A healthy stream is shown on the newest confirmed tick, so
- * a remote snake sits on the same square the server (and that player) just
- * reached. A burst is still stepped one cell per tickMs — turns are never
- * skipped, and nothing is drawn between squares. One dropped tick is applied
- * only when every snake kept going straight and both confirmed heads leave a
- * single possible body. Any turn, or a wider hole, waits for a real snapshot.
+ * The server stays the only source of what other snakes did. This module does
+ * not predict a turn. It stores confirmed frames and plays them on the same
+ * fixed clock as single-player: one whole cell per tickMs, never when a packet
+ * happens to arrive, and never between squares. A little jitter cushion holds
+ * the next cell so a late packet does not hitch that clock. One dropped tick
+ * is filled in only when every snake kept going straight and both confirmed
+ * heads leave a single possible body. Any turn, or a wider hole, waits for a
+ * real snapshot and then takes the next stored cell — it does not freeze, and
+ * it does not dump the whole buffer in one paint.
  */
 
 // Tuning targets from the step-3 brief. They are targets, not guarantees: the
@@ -60,6 +61,7 @@ export class RemotePlayback {
     this.lastSampleAt = null;
     this.lastVisualAt = null;
     this.edgeWait = 0;
+    this.lastFrameAt = null;
     this.delayMs = this.limits.stableDelayMs;
     this.targetDelayMs = this.limits.stableDelayMs;
     this.arrivals = [];
@@ -111,6 +113,7 @@ export class RemotePlayback {
     this.lastSampleAt = null;
     this.lastVisualAt = null;
     this.edgeWait = 0;
+    this.lastFrameAt = null;
     this.arrivals = [];
     this.jitterMs = 0;
     this.needsResync = false;
@@ -168,7 +171,11 @@ export class RemotePlayback {
       if (frame.t === previous.tick + 2) {
         const bridged = this.straightBridge(previous, frame);
         if (bridged) {
-          this.accept(bridged, at);
+          // The missing tick is stored only when its body is the only one
+          // those two heads allow, so playback can tick through it. A guessed
+          // middle cell is worse than showing the confirmed end on the clock.
+          if (bridged.intermediate) this.accept(bridged.intermediate, at);
+          this.accept(bridged.current, at);
           this.stats.movementFrames += 1;
           this.stats.bridgedGaps += 1;
           return this.byTick.has(frame.t);
@@ -251,6 +258,7 @@ export class RemotePlayback {
     this.frames.push(frame);
     this.byTick.set(frame.tick, frame);
     this.stats.frames += 1;
+    this.lastFrameAt = at;
     this.trim();
     this.observeArrival(frame.tick, at);
     return true;
@@ -320,26 +328,37 @@ export class RemotePlayback {
     return [head, ...body.slice(0, length - 1)];
   }
 
-  // One dropped tick while every snake kept its heading. The tail after two
-  // straight steps depends only on how many cells were added, not on which of
-  // the two ticks added them. The missing tick itself is not invented. If the
-  // body is not determined, this returns null and the caller asks for a snapshot.
+  // One dropped tick while every snake kept its heading. The cell between the
+  // two confirmed heads is the only one a straight step can land on, and the
+  // tail after two steps depends only on how many cells were added. When that
+  // middle body is unique it is stored too, so the clock can tick through the
+  // gap instead of skipping a square. A turn is not unique: return null and
+  // the caller asks for a snapshot.
   straightBridge(previous, frame) {
     const entries = frame.p || [];
     if (!entries.length || entries.length !== previous.players.size) return null;
-    const players = new Map();
+    const currentPlayers = new Map();
+    const intermediatePlayers = new Map();
+    let canShowMissing = true;
     for (const entry of entries) {
       const before = previous.players.get(entry.i);
       const built = before ? this.straightPair(before, entry) : null;
       if (!built) return null;
-      players.set(entry.i, built);
+      currentPlayers.set(entry.i, built.current);
+      if (!built.intermediate) canShowMissing = false;
+      else intermediatePlayers.set(entry.i, built.intermediate);
     }
-    if (players.size !== previous.players.size) return null;
-    this.stats.reconstructed += players.size;
-    return {
-      tick: frame.t, players, food: frame.f,
+    if (currentPlayers.size !== previous.players.size) return null;
+    this.stats.reconstructed += currentPlayers.size * (canShowMissing ? 2 : 1);
+    const current = {
+      tick: frame.t, players: currentPlayers, food: frame.f,
       status: frame.s, ts: frame.ts, full: false
     };
+    const intermediate = canShowMissing ? {
+      tick: previous.tick + 1, players: intermediatePlayers, food: previous.food,
+      status: previous.status, ts: previous.ts, full: false
+    } : null;
+    return { intermediate, current };
   }
 
   straightPair(before, entry) {
@@ -349,23 +368,30 @@ export class RemotePlayback {
     if (!sameState || entry.d !== before.dir) return null;
     if (entry.fr === true || entry.a === false) {
       if (entry.h !== before.cells[0] || length !== before.cells.length) return null;
-      return this.movementPlayer(entry, before.cells.slice());
+      const player = this.movementPlayer(entry, before.cells.slice());
+      return { current: player, intermediate: this.movementPlayer(entry, before.cells.slice()) };
     }
     const delta = length - before.cells.length;
     if (delta < 0 || delta > 2) return null;
     const mid = this.stepCell(before.cells[0], before.dir);
     const head = mid === null ? null : this.stepCell(mid, before.dir);
     if (head !== entry.h) return null;
-    let finalCells;
     if (delta === 0 || delta === 2) {
       const grew = delta === 2;
       const midCells = this.stepBody(before.cells, mid, grew);
-      finalCells = midCells && this.stepBody(midCells, head, grew);
-    } else {
-      finalCells = [head, mid, ...before.cells].slice(0, length);
+      const finalCells = midCells && this.stepBody(midCells, head, grew);
+      if (!finalCells || finalCells.length !== length || finalCells[0] !== head) return null;
+      return {
+        current: this.movementPlayer(entry, finalCells),
+        intermediate: this.movementPlayer(entry, midCells, before.dir)
+      };
     }
-    if (!finalCells || finalCells.length !== length || finalCells[0] !== head) return null;
-    return this.movementPlayer(entry, finalCells);
+    const finalCells = [head, mid, ...before.cells].slice(0, length);
+    if (finalCells.length !== length || finalCells[0] !== head) return null;
+    // One eat across the two ticks: the final body is fixed, the middle tail
+    // is not. Leave the hole so the clock shows this confirmed body instead
+    // of a tail we would have to invent.
+    return { current: this.movementPlayer(entry, finalCells), intermediate: null };
   }
 
   movementPlayer(entry, cells, direction = entry.d) {
@@ -505,11 +531,13 @@ export class RemotePlayback {
 
   // ---- playhead -----------------------------------------------------------
 
-  // Whole confirmed cells only. A one-tick stream is shown on the tick that
-  // just arrived: parking an extra tickMs behind it is the permanent
-  // "one square off" between this snake and everyone else's screen. A burst
-  // (more than one confirmed tick waiting) still advances one cell per tickMs
-  // so a turn is never skipped and one paint never teleports.
+  // Whole confirmed cells, on a fixed clock. A packet must not move a remote
+  // snake: that is Classic, and on a phone the arrivals are uneven, so the
+  // snakes jitter and feel late. The next cell is shown when tickMs has
+  // elapsed, if we already have it. Jitter raises a cushion so that cell is
+  // usually waiting. A missing tick cannot be waited out (it never arrives);
+  // the next cell we DO have is taken on that same clock, one stored frame
+  // at a time, not the whole buffer in one paint.
   sample(now = this.clock()) {
     if (!this.enabled) return null;
     const newest = this.newest();
@@ -538,24 +566,24 @@ export class RemotePlayback {
 
     const behind = newest.tick - this.playhead;
     const nextTick = this.playhead + 1;
-    // The next confirmed tick is not in the buffer. A dropped movement frame
-    // (the usual mobile case) opens a hole here. Waiting for that tick freezes
-    // every other snake for the rest of the match: nothing will ever fill the
-    // hole, and the live edge keeps moving. The missing turn was never
-    // delivered, so showing the newest cell we DO have is not a skipped turn.
-    if (behind > 0 && !this.byTick.has(nextTick)) {
-      this.playhead = newest.tick;
-      this.lastVisualAt = now;
-      this.edgeWait = 0;
-    } else if (behind === 1 && this.byTick.has(nextTick)) {
-      this.playhead = nextTick;
-      this.lastVisualAt = now;
-      this.edgeWait = 0;
-    } else if (behind > 1 && this.byTick.has(nextTick) &&
-               now - (this.lastVisualAt ?? now) >= this.tickMs) {
-      this.playhead = nextTick;
-      this.lastVisualAt = now;
-      this.edgeWait = 0;
+    const due = this.lastVisualAt === null || now - this.lastVisualAt >= this.tickMs;
+    // How many confirmed ticks to keep in hand so a late packet does not hitch
+    // the clock. A clean link is zero: parking a mandatory extra tick is the
+    // permanent one-square offset. Measured arrival spread is what grows it.
+    const cushion = Math.max(0, Math.min(6, Math.round(this.jitterMs / this.tickMs)));
+    if (due && behind > 0) {
+      if (!this.byTick.has(nextTick)) {
+        const nextStored = this.frames.find((frame) => frame.tick > this.playhead);
+        if (nextStored) {
+          this.playhead = nextStored.tick;
+          this.lastVisualAt = now;
+          this.edgeWait = 0;
+        }
+      } else if (behind > cushion) {
+        this.playhead = nextTick;
+        this.lastVisualAt = now;
+        this.edgeWait = 0;
+      }
     }
 
     if (this.playhead > newest.tick) this.playhead = newest.tick;

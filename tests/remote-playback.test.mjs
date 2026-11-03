@@ -301,21 +301,23 @@ test('one dropped tick going straight is the body between the two confirmed head
   });
   pb.pushSnapshot(snap(0, [22, 21, 20]), 0);
   pb.sample(0);
-  // Tick 1 was dropped. Tick 2 is two straight steps, including the wrap.
-  // The missing tick is not stored. The body at tick 2 is the only one both
-  // heads allow, so the board shows that cell instead of freezing on tick 0.
+  // Tick 1 was dropped. Both heads are straight, so the missing cell is the
+  // only one between them and playback can tick through it on the clock.
   const moved = pb.pushMovement({
     v: 1, type: 'movement', m: 1, s: 'running', t: 2, f: [{ c: 80, o: 1 }],
     p: [{ i: 1, h: 0, d: 'right', l: 3, a: true, fr: false, sc: 0 }]
   }, TICK);
   assert.equal(moved, true);
   assert.equal(pb.takeResyncRequest(), false, 'a determined straight body is not a broken chain');
-  assert.equal(pb.byTick.has(1), false, 'the dropped tick is not invented');
+  assert.deepEqual(pb.byTick.get(1).players.get(1).cells, [23, 22, 21]);
   assert.deepEqual(pb.byTick.get(2).players.get(1).cells, [0, 23, 22]);
-  const sample = pb.sample(TICK);
-  assert.equal(sample.interpolated, false);
-  assert.equal(sample.tick, 2, 'playback must not stay on the cell before the hole');
-  assert.deepEqual([...sample.players.get(1).cells], [0, 23, 22]);
+  const mid = pb.sample(TICK);
+  assert.equal(mid.interpolated, false);
+  assert.equal(mid.tick, 1, 'the clock takes the missing straight cell, it does not skip it');
+  assert.deepEqual([...mid.players.get(1).cells], [23, 22, 21]);
+  const done = pb.sample(TICK * 2);
+  assert.equal(done.tick, 2);
+  assert.deepEqual([...done.players.get(1).cells], [0, 23, 22]);
 
   const grown = new RemotePlayback({ tickMs: TICK, columns: 24, rows: 18, clock: () => 0 });
   grown.enable('responsive');

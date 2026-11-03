@@ -6,8 +6,8 @@
 // one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-10';
-import { RemotePlayback } from './playback.js?v=step11-responsive-10';
+import { LocalPredictor } from './prediction.js?v=step11-responsive-11';
+import { RemotePlayback } from './playback.js?v=step11-responsive-11';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 

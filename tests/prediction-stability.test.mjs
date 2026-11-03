@@ -180,11 +180,11 @@ test('a burst of confirmed updates is painted one cell at a time', () => {
   assert.equal(local.displayFrame(seed).p[0].b[0], 126);
   assert.equal(local.advance(TICK), 0, 'the same instant cannot take a second cell');
   set(TICK * 2);
-  assert.equal(local.advance(TICK * 2), 0, 'a fresh frame holds the extra cell other players cannot see');
-  assert.equal(local.displayFrame(seed).p[0].b[0], 126);
-  set(TICK * 3);
-  assert.equal(local.advance(TICK * 3), 1, 'once that frame is stale the clock coasts again');
+  assert.equal(local.advance(TICK * 2), 1, 'the local clock does not wait for a server frame');
   assert.equal(local.displayFrame(seed).p[0].b[0], 127);
+  set(TICK * 3);
+  assert.equal(local.advance(TICK * 3), 1);
+  assert.equal(local.displayFrame(seed).p[0].b[0], 128);
 });
 
 test('an idle snake is not rewound by a server frame it already predicted', () => {
@@ -260,22 +260,24 @@ test('jitter, duplicates, dropped ticks and outages keep the displayed snake con
   assert.equal(priorHead, local.state().body[0], 'the visual path settles');
 });
 
-test('a dropped span of ticks puts the snake and its food back on the server', () => {
+test('a dropped span updates the pellet and does not yank the snake', () => {
   const { local } = make();
   const first = frame(0);
   first.f = [{ c: 140, o: 1 }];
   local.observe(first);
   assert.equal(local.food, 140);
-  // The phone never sees ticks 1..8 (movement frames dropped). The next
-  // snapshot is the server, several cells on, with a new pellet.
+  // The phone never sees ticks 1..8. The next snapshot is several cells on,
+  // with a new pellet. Copying that body is the server yank. The pellet still
+  // has to become the one everyone else is drawing, because this head is not
+  // about to bite the old one.
   const later = frame(9, { b: [134, 133, 132], l: 3 });
   later.f = [{ c: 200, o: 1 }];
   local.observe(later);
-  assert.equal(local.state().body[0], 134, 'a multi-tick hole is not left as a permanent offset');
+  assert.equal(local.state().body[0], 125, 'a packet must not relocate the local snake');
   assert.equal(local.state().length, 3);
   assert.equal(local.food, 200, 'the pellet everyone else sees replaces the one from before the hole');
   assert.equal(local.displayFrame(later).f.find((pellet) => pellet.o === 1).c, 200);
-  assert.equal(local.summary().snapped, 1);
+  assert.equal(local.summary().snapped, 0);
 });
 
 test('a pellet one cell ahead is not replaced when the server has already respawned', () => {
@@ -291,8 +293,8 @@ test('a pellet one cell ahead is not replaced when the server has already respaw
   assert.equal(local.displayFrame(early).f.find((pellet) => pellet.o === 1).c, 126);
 });
 
-test('a server bite one cell ahead grows this snake and shows the respawn', () => {
-  const { local } = make();
+test('a server respawn does not steal the pellet this head is about to bite', () => {
+  const { local, set } = make();
   const first = frame(0);
   first.f = [{ c: 126, o: 1 }];
   local.observe(first);
@@ -300,10 +302,13 @@ test('a server bite one cell ahead grows this snake and shows the respawn', () =
   const eaten = frame(1, { b: [126, 125, 124, 123], l: 4 });
   eaten.f = [{ c: 200, o: 1 }];
   local.observe(eaten);
-  assert.equal(local.state().body[0], 126, 'one cell ahead on the same line is taken before the paint');
-  assert.equal(local.state().length, 4, 'that bite grows the snake');
-  assert.equal(local.food, 200, 'the respawn replaces the pellet only after the bite');
-  assert.equal(local.displayFrame(eaten).f.find((pellet) => pellet.o === 1).c, 200);
+  assert.equal(local.state().body[0], 125, 'the packet does not step the snake');
+  assert.equal(local.state().length, 3, 'growth happens on the local tick, not the packet');
+  assert.equal(local.food, 126, 'the bite in front of the head is kept');
+  set(TICK);
+  assert.equal(local.advance(TICK), 1);
+  assert.equal(local.state().body[0], 126);
+  assert.equal(local.state().length, 4, 'that local bite grows the snake');
 });
 
 test('a frame that carries no food does not erase the pellet', () => {
@@ -347,21 +352,21 @@ test('a refused movement still shows the server pellet and does not move the hea
   assert.equal(other.local.food, 126);
 });
 
-test('a straight snake does not stay a cell ahead of a fresh server frame', () => {
+test('a server frame does not hold or yank the local clock', () => {
   const { local, set } = make();
   local.observe(frame(0));
   set(TICK);
   assert.equal(local.advance(TICK), 1);
   assert.equal(local.state().body[0], 126);
   set(TICK * 2);
-  assert.equal(local.advance(TICK * 2), 0, 'no second cell while the server is still a square behind');
-  assert.equal(local.state().body[0], 126);
+  assert.equal(local.advance(TICK * 2), 1, 'the clock takes the next cell even if the server is behind');
+  assert.equal(local.state().body[0], 127);
   set(TICK * 2 + 10);
   local.observe(frame(1, { b: [126, 125, 124] }));
-  assert.equal(local.state().body[0], 126, 'the frame that catches up does not yank or double-step');
+  assert.equal(local.state().body[0], 127, 'a confirming frame must not pull the head back');
   set(TICK * 3 + 10);
   assert.equal(local.advance(TICK * 3 + 10), 1);
-  assert.equal(local.state().body[0], 127);
+  assert.equal(local.state().body[0], 128);
 });
 
 test('a freeze or disconnect rejection does not yank the snake back onto the server', () => {
