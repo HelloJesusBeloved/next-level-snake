@@ -4,12 +4,16 @@
  * The server stays the only source of what other snakes did. This module does
  * not predict a turn. It stores confirmed frames and plays them on the same
  * fixed clock as single-player: one whole cell per tickMs, never when a packet
- * happens to arrive, and never between squares. A little jitter cushion holds
- * the next cell so a late packet does not hitch that clock. One dropped tick
- * is filled in only when every snake kept going straight and both confirmed
- * heads leave a single possible body. Any turn, or a wider hole, waits for a
- * real snapshot and then takes the next stored cell — it does not freeze, and
- * it does not dump the whole buffer in one paint.
+ * happens to arrive, and never between squares.
+ *
+ * The clock starts a short delay behind the newest confirmed tick (the adaptive
+ * buffer, about one tick on a stable link) and then runs at 1x. A late packet
+ * is already in that buffer, so the snake does not hitch. An early packet
+ * waits for the clock. The playhead never speeds up to catch a burst and never
+ * rewinds. One dropped tick is filled in only when every snake kept going
+ * straight and both confirmed heads leave a single possible body. Any turn, or
+ * a wider hole, waits for a real snapshot and then takes the next stored cell
+ * — it does not freeze, and it does not dump the whole buffer in one paint.
  */
 
 // Tuning targets from the step-3 brief. They are targets, not guarantees: the
@@ -59,8 +63,7 @@ export class RemotePlayback {
     this.byTick = new Map();
     this.playhead = null;
     this.lastSampleAt = null;
-    this.lastVisualAt = null;
-    this.edgeWait = 0;
+    this.clockArmed = false;
     this.lastFrameAt = null;
     this.delayMs = this.limits.stableDelayMs;
     this.targetDelayMs = this.limits.stableDelayMs;
@@ -99,8 +102,7 @@ export class RemotePlayback {
     if (Number.isFinite(tickMs) && tickMs > 0 && tickMs !== this.tickMs) {
       this.tickMs = tickMs;
       this.playhead = null; // a speed change re-anchors the clock, it never stretches
-      this.lastVisualAt = null;
-      this.edgeWait = 0;
+      this.clockArmed = false;
     }
     if (Number.isInteger(columns) && columns > 0) this.columns = columns;
     if (Number.isInteger(rows) && rows > 0) this.rows = rows;
@@ -111,8 +113,7 @@ export class RemotePlayback {
     this.byTick.clear();
     this.playhead = null;
     this.lastSampleAt = null;
-    this.lastVisualAt = null;
-    this.edgeWait = 0;
+    this.clockArmed = false;
     this.lastFrameAt = null;
     this.arrivals = [];
     this.jitterMs = 0;
@@ -531,80 +532,87 @@ export class RemotePlayback {
 
   // ---- playhead -----------------------------------------------------------
 
-  // Whole confirmed cells, on a fixed clock. A packet must not move a remote
-  // snake: that is Classic, and on a phone the arrivals are uneven, so the
-  // snakes jitter and feel late. The next cell is shown when tickMs has
-  // elapsed, if we already have it. Jitter raises a cushion so that cell is
-  // usually waiting. A missing tick cannot be waited out (it never arrives);
-  // the next cell we DO have is taken on that same clock, one stored frame
-  // at a time, not the whole buffer in one paint.
+  // Whole confirmed cells, on a fixed clock. The playhead is a float tick. It
+  // advances one server tick per tickMs, and the cell drawn is the floor of
+  // that tick. A packet must not move a remote snake: that is Classic.
+  //
+  // The clock does not start on the live edge. It waits until `delayTicks`
+  // confirmed cells are already in hand (about one tick, 120ms, on a stable
+  // link — more when jitter has raised the delay), then runs at 1x from the
+  // cell it is already showing. Spending that lead is what hides a late
+  // packet. Nothing in here speeds up to eat a burst, rewinds when the delay
+  // grows, or draws a position between two squares. A tick that will never
+  // arrive is skipped once, to the next stored cell, so a hole cannot freeze
+  // the board or dump every buffered cell in one paint.
   sample(now = this.clock()) {
     if (!this.enabled) return null;
     const newest = this.newest();
     if (!newest) return null;
+    const oldest = this.oldest();
 
-    if (this.lastSampleAt === null || this.playhead === null) {
+    if (this.playhead === null || this.lastSampleAt === null) {
+      this.playhead = oldest.tick;
       this.lastSampleAt = now;
-      this.playhead = newest.tick;
-      this.lastVisualAt = now;
-      this.edgeWait = 0;
+      this.clockArmed = false;
     }
     const dt = Math.max(0, now - this.lastSampleAt);
     this.lastSampleAt = now;
     this.adaptDelay(dt);
 
-    const oldest = this.oldest();
-    if (newest.tick - this.playhead > this.limits.maxLagTicks) {
-      // Far behind: the history we hold is stale. Drop it rather than replaying
-      // seconds of old board. This is recovery from a stall, not normal play.
+    const liveTarget = Math.max(oldest.tick, newest.tick - this.delayTicks);
+    if (liveTarget - this.playhead > this.limits.maxLagTicks) {
+      // Far behind the buffer: drop stale history. This is recovery from a
+      // stall, not how ordinary jitter is hidden.
       this.stats.staleDrops += 1;
-      this.playhead = newest.tick;
-      this.lastVisualAt = now;
+      this.playhead = liveTarget;
+      this.clockArmed = true;
       this.trim();
+    }
+
+    const leadTicks = newest.tick - this.playhead;
+    const quiet = this.lastFrameAt !== null && now - this.lastFrameAt > this.tickMs * 1.5;
+    if (!this.clockArmed) {
+      // Show the first cell immediately. Start the clock only once a late
+      // packet has somewhere to land, or the stream has gone quiet and the
+      // last cells still need to play out. The wait itself is not movement:
+      // do not add it to the playhead or the buffer is spent in one jump.
+      if (quiet || leadTicks >= this.delayTicks) {
+        if (!quiet && this.playhead <= oldest.tick && leadTicks > this.delayTicks) {
+          const start = newest.tick - this.delayTicks;
+          if (start > this.playhead) this.playhead = start;
+        }
+        this.clockArmed = true;
+      }
+    } else {
+      const next = this.playhead + dt / this.tickMs;
+      if (next > newest.tick) {
+        // Out of confirmed history. Stop. Nothing past the live edge is invented,
+        // and the extra time is not stored to fast-forward the next burst.
+        this.playhead = newest.tick;
+        if (dt > 0) this.stats.underruns += 1;
+      } else {
+        this.playhead = next;
+      }
     }
     if (this.playhead < oldest.tick) this.playhead = oldest.tick;
 
-    const behind = newest.tick - this.playhead;
-    const nextTick = this.playhead + 1;
-    const due = this.lastVisualAt === null || now - this.lastVisualAt >= this.tickMs;
-    // How many confirmed ticks to keep in hand so a late packet does not hitch
-    // the clock. A clean link is zero: parking a mandatory extra tick is the
-    // permanent one-square offset. Measured arrival spread is what grows it.
-    const cushion = Math.max(0, Math.min(6, Math.round(this.jitterMs / this.tickMs)));
-    if (due && behind > 0) {
-      if (!this.byTick.has(nextTick)) {
-        const nextStored = this.frames.find((frame) => frame.tick > this.playhead);
-        if (nextStored) {
-          this.playhead = nextStored.tick;
-          this.lastVisualAt = now;
-          this.edgeWait = 0;
-        }
-      } else if (behind > cushion) {
-        this.playhead = nextTick;
-        this.lastVisualAt = now;
-        this.edgeWait = 0;
-      }
+    // A missing tick never arrives. Take the next real cell once — not every
+    // cell up to the live edge — so the snake does not vanish for the hole.
+    if (!this.byTick.has(Math.floor(this.playhead))) {
+      const floorTick = Math.floor(this.playhead);
+      const nextStored = this.frames.find((frame) => frame.tick >= floorTick);
+      this.playhead = nextStored ? nextStored.tick : newest.tick;
     }
 
-    if (this.playhead > newest.tick) this.playhead = newest.tick;
-    if (this.playhead >= newest.tick) {
-      this.edgeWait += dt;
-      // A missed server tick, not the gap between two on-time frames.
-      if (this.edgeWait >= this.tickMs * 1.5) {
-        this.stats.underruns += 1;
-        this.edgeWait = 0;
-      }
-    } else this.edgeWait = 0;
-
     this.stats.samples += 1;
-    const base = this.playhead;
+    const base = Math.floor(this.playhead);
     const older = this.byTick.get(base);
     const newer = this.byTick.get(base + 1);
     const sample = {
       tick: base, nextTick: newer ? base + 1 : null, alpha: 0,
       delayMs: Math.round(this.delayMs), targetDelayMs: this.targetDelayMs,
       buffered: this.frames.length, bufferedTicks: Math.max(0, newest.tick - base),
-      atLiveEdge: base >= newest.tick, players: null
+      atLiveEdge: this.playhead >= newest.tick, players: null
     };
     if (!older) {
       sample.players = null;

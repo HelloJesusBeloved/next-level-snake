@@ -92,11 +92,16 @@ test('the playhead shows the newest confirmed cell and never runs past it', () =
     assert.ok(sample.bufferedTicks >= 0);
     assert.ok(sample.tick <= s.frames.at(-1).t);
   }
-  // A steady stream is drawn on the server's latest cell. Sitting a tick
-  // behind that cell is the permanent one-square offset between screens.
+  // During a live stream the delay is the jitter buffer: other snakes tick
+  // behind the newest packet so a late frame does not hitch them. Sitting on
+  // the packet is Classic. Once the stream goes quiet the last confirmed cell
+  // is still reached, and the playhead never runs past it.
+  const live = samples.filter((sample) => sample.buffered >= 4 && sample.at <= s.frames.at(-1).t * TICK + 120);
+  assert.ok(live.some((sample) => !sample.atLiveEdge && sample.bufferedTicks >= 1),
+    'a live stream keeps a delay buffer instead of tracking the packet');
   const settled = samples.filter((sample) => sample.buffered >= 4);
   assert.ok(settled.some((sample) => sample.atLiveEdge && sample.bufferedTicks === 0),
-    'settled playback must reach the newest confirmed tick');
+    'playback reaches the newest confirmed tick after the stream drains');
 });
 
 test('sample() steps whole confirmed cells and never glides between them', () => {
@@ -107,6 +112,7 @@ test('sample() steps whole confirmed cells and never glides between them', () =>
   let changes = 0;
   let held = 0;
   let previous = null;
+  const intervals = [];
   for (const sample of samples) {
     assert.equal(sample.interpolated, false, 'playback must not report an in-between frame');
     const player = sample.players?.get(playerId);
@@ -117,6 +123,7 @@ test('sample() steps whole confirmed cells and never glides between them', () =>
     if (previous === null || previous.head !== head) {
       if (previous) {
         changes += 1;
+        intervals.push(sample.at - previous.at);
         const columns = s.frames[0].b.c;
         const rows = s.frames[0].b.r;
         const dx = Math.abs((head % columns) - (previous.head % columns));
@@ -130,6 +137,14 @@ test('sample() steps whole confirmed cells and never glides between them', () =>
   }
   assert.ok(held > changes, 'a remote cell is held across frames, not redrawn between squares');
   assert.ok(changes > 0, 'the remote snake still ticks forward');
+  // The first interval includes arming the delay buffer. After that a clean
+  // link steps about once per tickMs. A jitter cushion that freezes the snake
+  // until several packets pile up, then leaves it that far behind, fails this.
+  const steady = intervals.slice(1);
+  assert.ok(steady.length >= 4, 'the fixture has to actually run');
+  for (const interval of steady) {
+    assert.ok(interval <= TICK + 24, `clean-link step took ${interval}ms; the clock stalled`);
+  }
 });
 
 test('remote interpolation walks the confirmed path: every segment moves at most one cell', () => {
@@ -271,16 +286,19 @@ test('missing confirmed ticks hold the board instead of inventing a route', () =
   const s = scenario('turns');
   const pb = playbackFor(s);
   pb.pushSnapshot(s.frames[0], 0);
+  pb.sample(0);
   pb.pushSnapshot(s.frames[1], TICK);
-  // The playhead has caught the last delivered tick. This is the state a
-  // phone is in when the next movement frame is dropped.
+  // The delay clock is armed on the second cell and still drawing the first.
+  // That is the buffer. It is not permission to jump to the packet.
   let sample = pb.sample(TICK);
-  assert.equal(sample.tick, s.frames[1].t);
+  assert.equal(sample.tick, s.frames[0].t);
+  sample = pb.sample(2 * TICK);
+  assert.equal(sample.tick, s.frames[1].t, 'one tick of the clock shows the next confirmed cell');
   // Skip tick 2 entirely: the head's next confirmed position is tick 3.
-  pb.pushSnapshot(s.frames[3], 3 * TICK);
+  pb.pushSnapshot(s.frames[3], 2 * TICK);
   assert.equal(pb.summary().gaps, 1);
   assert.equal(pb.summary().missingTicks, 1);
-  let time = 3 * TICK;
+  let time = 2 * TICK;
   for (let index = 0; index < 40; index += 1) { time += 8; sample = pb.sample(time); }
   // Tick 2 was never delivered. Holding tick 1 forever is the frozen board:
   // the hole cannot fill, so the newest confirmed body is the one to draw.

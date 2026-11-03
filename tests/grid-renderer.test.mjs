@@ -384,15 +384,18 @@ test('remote playback steps whole cells and never glides between them', () => {
   assert.equal(headOf(), 100);
   h.at(50);
   r.accept(boardFrame(1, { own: [31, 30, 29], remote: [101, 100, 99] }));
-  assert.equal(headOf(), 100, 'a packet must not move a remote snake before the tick');
+  assert.equal(headOf(), 100, 'a packet must not move a remote snake');
   h.at(105); h.refresh(105);
+  assert.equal(headOf(), 100, 'the delay buffer holds this cell; the packet does not spend it');
+  // One tick of the clock after the buffer was armed (the frame at t=50).
+  h.at(155); h.refresh(155);
   assert.equal(headOf(), 101, 'the next confirmed cell is one square, on the clock');
-  h.at(140); h.refresh(140);
+  h.at(200); h.refresh(200);
   assert.equal(headOf(), 101, 'the cell is held until the next tick');
   assert.equal(r.lastPlaybackSample.interpolated, false, 'remote snakes must not glide');
   r.accept(boardFrame(2, { own: [32, 31, 30], remote: [102, 101, 100] }));
   assert.equal(headOf(), 101, 'the second packet does not skip the clock either');
-  h.at(210); h.refresh(210);
+  h.at(305); h.refresh(305);
   assert.equal(headOf(), 102);
   const remote = r.lastPlaybackSample.players.get(2);
   assert.equal(remote.smooth, undefined, 'no fractional coordinates on a remote snake');
