@@ -128,13 +128,12 @@ export class DecisiveSnake {
     return false;
   }
 
-  // Stop the clock without throwing away the body. A finished board, a
-  // paused match, or a rematch click all hold here so the snake stays on the
-  // cell it was already on.
+  // Stop the clock without throwing away the body or a turn that is already
+  // queued. Clearing the queue is what made a keypress arrive late and then
+  // snap. Only a finished board calls this.
   hold(reason = 'hold') {
     this.running = false;
     this.nextStepAt = null;
-    this.queue = [];
     this.reason = reason;
     return true;
   }
@@ -201,7 +200,6 @@ export class DecisiveSnake {
       this.frozen = !!own.fr;
       this.running = false;
       this.nextStepAt = null;
-      this.queue = [];
       return;
     }
     const resume = !this.running && !this.dead;

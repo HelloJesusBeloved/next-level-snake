@@ -5,8 +5,8 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-15';
-import { RemotePlayback } from './playback.js?v=step11-responsive-15';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-16';
+import { RemotePlayback } from './playback.js?v=step11-responsive-16';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -255,9 +255,10 @@ export class MultiplayerGameRenderer {
     this.playback.enable(next.source === 'test' ? 'test override' : 'responsive');
     this.playback.configure({ tickMs: this.tickMs, columns: match?.columns, rows: match?.rows });
     this.configureLocal(match);
-    // A finished, abandoned or not-yet-started match must not step. The body
-    // stays on the cells the snapshot already has.
-    if (match && match.status && match.status !== 'running') this.local.hold(match.status);
+    // Only a finished match holds. Holding on pending, or on any render while
+    // the round is live, stopped the clock and dropped the queued turn — that
+    // is the input delay and the rubberband.
+    if (match && (match.status === 'completed' || match.status === 'abandoned')) this.local.hold(match.status);
     this.startPredictionLoop();
     return changed;
   }

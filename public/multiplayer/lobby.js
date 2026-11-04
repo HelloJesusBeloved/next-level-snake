@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-15';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-15';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-16';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-16';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-15';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-16';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -543,9 +543,9 @@ export function mountLobby(root) {
           : 'Responsive Brawl: your snake steps on your clock. Everyone else sees those cells a moment later.', 'info');
       }
     }
-    // A finished board is a still picture. Never step it, even if a stale
-    // snapshot still says running.
-    if (match.status !== 'running') gameRenderer?.holdLocal(match.status);
+    // A finished board is a still picture. A live round is never held here:
+    // holding it stopped the clock and dropped the turn that was already queued.
+    if (match.status === 'completed' || match.status === 'abandoned') gameRenderer?.holdLocal(match.status);
     if (el.gameTick && state.gameSnapshot) text(el.gameTick, `Tick ${state.gameSnapshot.t}`);
     // Roster/palette/board are lobby-only, and must not schedule any
     // background work on a moving snake. A match's controls already do not
@@ -1229,7 +1229,9 @@ export function mountLobby(root) {
         : message.s;
       state.match = { ...(state.match || {}), id: Number(message.m), status: nextStatus,
                       tick: message.t, columns: message.b?.c, rows: message.b?.r };
-      if (finishedRoom || state.match.status !== 'running') gameRenderer.holdLocal(state.match.status || 'finished');
+      if (finishedRoom || state.match.status === 'completed' || state.match.status === 'abandoned') {
+        gameRenderer.holdLocal(state.match.status || 'finished');
+      }
       state.liveHudBudget.add('movement-metrics', renderMovementDiagnostics);
       state.liveHudBudget.add('tick', () => {
       text(el.gameTick, `Tick ${state.gameSnapshot?.t}`);
