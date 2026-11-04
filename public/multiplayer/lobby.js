@@ -12,10 +12,11 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-16';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-16';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-17';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-17';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-16';
+import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-17';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-17';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -110,6 +111,8 @@ export function mountLobby(root) {
     game: $('mp-game'),
     gameCanvas: $('mp-game-canvas'),
     gameScores: $('mp-game-scores'),
+    pageFocusBtn: $('mp-page-focus'),
+    standingsEmpty: $('mp-standings-empty'),
     gameStatus: $('mp-game-status'),
     movementDetails: $('mp-movement-diagnostics'),
     movementMetrics: $('mp-movement-metrics'),
@@ -173,7 +176,8 @@ export function mountLobby(root) {
     standingsSignature: '',
     resultsSignature: '',
     liveHudBudget: createPlayBudget(),
-    gamePane: 'board',
+    revealedMatchId: null,
+    focusDismissed: false,
     frozenDeadline: '',
     controls: null,
   };
@@ -190,6 +194,7 @@ export function mountLobby(root) {
   let timer = null;
   const configuration = mountConfiguration({ api, apply, getState: () => state });
   const snapshotChunks = new SnapshotChunks();
+  let pageFocus = null;
   const gameRenderer = el.gameCanvas ? new MultiplayerGameRenderer({
     onResyncNeeded: (reason) => requestMatchResync(reason),
     canvas: el.gameCanvas,
@@ -516,11 +521,12 @@ export function mountLobby(root) {
       hideEliminationOverlay(document);
       if (el.results) el.results.hidden = true;
       if (el.gameInputStatus) el.gameInputStatus.textContent = '';
+      pageFocus?.disable();
       return;
     }
     const participantId = state.member?.match_participant_id;
     gameRenderer?.setOwnParticipant(participantId);
-    gameRenderer?.setActive(state.gamePane === 'board');
+    gameRenderer?.setActive(true);
     state.liveHudBudget.start();
     gameRenderer?.setTickMs(match.tick_ms);
     // Step 2: Responsive Brawl arms local prediction; Classic does not, and
@@ -557,29 +563,53 @@ export function mountLobby(root) {
     if (state.gameSnapshot) renderStandingsTable();
     if ((match.status === 'completed' || match.status === 'abandoned') && state.gameSnapshot) renderResults();
     else if (el.results) el.results.hidden = true;
+    const field = document.querySelector('.mp-snake-field');
+    if (field && match.columns && match.rows) field.style.aspectRatio = `${match.columns} / ${match.rows}`;
+    if (el.standingsEmpty) el.standingsEmpty.hidden = !!state.gameSnapshot;
+    syncPageFocus();
   }
 
-  // Board / Standings / Lobby switcher. Purely presentational: membership,
-  // sockets and the simulation are untouched, so nothing here can drop a seat.
+  function canSteer() {
+    const match = state.match;
+    if (!match || match.status !== 'running' || match.spectator) return false;
+    const ownId = state.member?.match_participant_id;
+    const own = state.gameSnapshot?.p?.find((player) => player.i === ownId);
+    return !!(own && own.a && !own.fr);
+  }
+
+  function coarsePointer() {
+    return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
+  }
+
+  // Scroll to the board once per match. Mobile players who can steer also
+  // get page-wide touch focus. Spectators are scrolled, not locked.
+  function syncPageFocus() {
+    const match = state.match;
+    const running = !!(match && match.status === 'running');
+    if (pageFocus && shouldRevealBoard(state.revealedMatchId, match)) {
+      state.revealedMatchId = match.id;
+      state.focusDismissed = false;
+      pageFocus.reveal();
+    }
+    if (!pageFocus || !running || !canSteer()) {
+      pageFocus?.disable();
+    } else if (coarsePointer() && !state.focusDismissed && !pageFocus.active) {
+      pageFocus.enable();
+    }
+    if (el.pageFocusBtn) {
+      const show = running && canSteer();
+      el.pageFocusBtn.hidden = !show;
+      el.pageFocusBtn.textContent = pageFocus?.active ? 'Unfocus' : 'Focus game';
+      el.pageFocusBtn.setAttribute('aria-pressed', String(!!pageFocus?.active));
+    }
+  }
+
   function showGamePane(name) {
-    state.gamePane = name;
-    gameRenderer?.setActive(name === 'board');
-    if (el.gameBoardPane) el.gameBoardPane.hidden = name !== 'board';
-    if (el.gameStandingsPane) el.gameStandingsPane.hidden = name !== 'standings';
-    const backRow = document.getElementById('mp-back-to-board-row');
-    if (backRow) backRow.hidden = !(name === 'lobby' && state.match);
-    if (el.gameTabs) {
-      el.gameTabs.querySelectorAll('[data-game-pane]').forEach((button) => {
-        button.setAttribute('aria-pressed', String(button.dataset.gamePane === name));
-      });
+    if (name === 'lobby') {
+      document.getElementById('mp-room-rest')?.scrollIntoView({ block: 'start' });
+      return;
     }
-    if (name === 'standings') renderStandingsTable(true);
-    if (name === 'lobby' && el.room) {
-      el.game.hidden = true;
-      el.room.scrollIntoView({ block: 'nearest' });
-    } else if (el.game && state.match) {
-      el.game.hidden = false;
-    }
+    document.getElementById('mp-game')?.scrollIntoView({ block: 'center' });
   }
 
   // Spectator perspective picker: follow one living player (ring highlight +
@@ -1232,6 +1262,7 @@ export function mountLobby(root) {
       if (finishedRoom || state.match.status === 'completed' || state.match.status === 'abandoned') {
         gameRenderer.holdLocal(state.match.status || 'finished');
       }
+      syncPageFocus();
       state.liveHudBudget.add('movement-metrics', renderMovementDiagnostics);
       state.liveHudBudget.add('tick', () => {
       text(el.gameTick, `Tick ${state.gameSnapshot?.t}`);
@@ -1805,22 +1836,28 @@ export function mountLobby(root) {
   // emitted turn, so a fast L-shaped swipe (down then left) commits BOTH turns
   // instead of waiting for the second leg to out-travel the first.
   const swipes = new SwipeSteering({ send: (direction) => sendDirection(direction) });
+  pageFocus = createPageFocus({
+    send: (direction) => sendDirection(direction),
+    board: el.game,
+    reducedMotion: () => window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches,
+  });
 
   on(el.gameCanvas, 'pointerdown', (event) => {
+    if (pageFocus?.active) return;
     if (event.pointerType === 'mouse') return;
     swipes.begin({ x: event.clientX, y: event.clientY });
     if (el.gameCanvas.setPointerCapture) { try { el.gameCanvas.setPointerCapture(event.pointerId); } catch (err) { /* unsupported */ } }
   });
   on(el.gameCanvas, 'pointermove', (event) => {
+    if (pageFocus?.active) return;
     if (event.pointerType === 'mouse') return;
     swipes.move({ x: event.clientX, y: event.clientY });
   });
   on(el.gameCanvas, 'pointerup', (event) => {
-    // A short flick that never crossed the threshold mid-drag still counts, and
-    // so does the second leg of a very fast L-swipe.
+    if (pageFocus?.active) return;
     swipes.end({ x: event.clientX, y: event.clientY });
   });
-  on(el.gameCanvas, 'pointercancel', () => { swipes.cancel(); });
+  on(el.gameCanvas, 'pointercancel', () => { if (!pageFocus?.active) swipes.cancel(); });
   if (el.gameCanvas) {
     // iOS Safari without touch-action support still needs a preventDefault to
     // stop the arena swipe from scrolling/zooming the page.
@@ -1855,10 +1892,19 @@ export function mountLobby(root) {
       history.replaceState({}, '', '/multiplayer');
     });
   });
-  el.gameTabs?.querySelectorAll('[data-game-pane]').forEach((button) => {
-    button.addEventListener('click', () => showGamePane(button.dataset.gamePane));
+  on(el.lobbyViewBtn, 'click', () => showGamePane('lobby'));
+  on(el.pageFocusBtn, 'click', () => {
+    if (!pageFocus) return;
+    if (pageFocus.active) {
+      state.focusDismissed = true;
+      pageFocus.disable();
+    } else {
+      state.focusDismissed = false;
+      pageFocus.enable();
+      pageFocus.reveal();
+    }
+    syncPageFocus();
   });
-  on(el.boardViewBtn, 'click', () => { if (el.game) el.game.hidden = false; showGamePane('board'); });
   on(el.followSelect, 'change', () => {
     const value = el.followSelect.value ? Number(el.followSelect.value) : null;
     gameRenderer?.setFollow(value);
@@ -1871,7 +1917,6 @@ export function mountLobby(root) {
     showGamePane('board');
     if (el.gameStatus) el.gameStatus.textContent = 'Spectating the live Brawl.';
   });
-  on(el.lobbyViewBtn, 'click', () => showGamePane('lobby'));
   on(el.start, 'click', () => {
     roomAction('start').then((out) => {
       if (out && out.ok) flash(out.json.notice || 'Ready to start.', 'info');

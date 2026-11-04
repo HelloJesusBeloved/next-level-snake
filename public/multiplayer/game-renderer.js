@@ -5,8 +5,8 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-16';
-import { RemotePlayback } from './playback.js?v=step11-responsive-16';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-17';
+import { RemotePlayback } from './playback.js?v=step11-responsive-17';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -809,6 +809,83 @@ export class MultiplayerGameRenderer {
     }
   }
 
+  // Draw-only. Same geometry Single Player uses for each theme, tinted with
+  // this player's assigned color. Positions are the cells already chosen.
+  paintSnake(ctx, cells, color, cols, cell, ox, oy, markHead) {
+    if (!cells || !cells.length) return;
+    const themeId = document.documentElement.dataset.theme || 'classic';
+    const blocks = themeId === 'classic' || themeId === 'vintage';
+    const points = [];
+    for (let i = 0; i < cells.length; i += 1) {
+      const index = cells[i];
+      points.push({ x: index % cols, y: Math.floor(index / cols) });
+    }
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.lineCap = 'round';
+    if (blocks) {
+      const gap = themeId === 'vintage' ? Math.max(1, Math.round(cell * 0.12)) : 0;
+      ctx.beginPath();
+      for (let i = 0; i < points.length; i += 1) {
+        const seg = points[i];
+        const inset = Math.round(gap / 2);
+        const left = Math.round(ox + seg.x * cell) + inset;
+        const top = Math.round(oy + seg.y * cell) + inset;
+        const size = Math.max(1, Math.round(cell) - gap);
+        ctx.rect(left, top, size, size);
+      }
+      ctx.fillStyle = color;
+      ctx.fill();
+    } else if (points.length === 1) {
+      ctx.fillStyle = color;
+      ctx.fillRect(ox + points[0].x * cell + cell * 0.08, oy + points[0].y * cell + cell * 0.08, cell * 0.84, cell * 0.84);
+    } else {
+      const trace = () => {
+        ctx.beginPath();
+        let prev = null;
+        for (let i = 0; i < points.length; i += 1) {
+          const seg = points[i];
+          const px = ox + seg.x * cell + cell / 2;
+          const py = oy + seg.y * cell + cell / 2;
+          if (prev && Math.abs(seg.x - prev.x) <= 1 && Math.abs(seg.y - prev.y) <= 1) ctx.lineTo(px, py);
+          else ctx.moveTo(px, py);
+          prev = seg;
+        }
+      };
+      if (themeId !== 'paper') {
+        trace();
+        ctx.strokeStyle = this.withAlpha(color, 0.28);
+        ctx.lineWidth = cell * 1.45;
+        ctx.stroke();
+      }
+      trace();
+      ctx.strokeStyle = color;
+      ctx.lineWidth = Math.max(2, cell * 0.92);
+      ctx.stroke();
+    }
+    if (markHead && points.length) {
+      const head = points[0];
+      ctx.strokeStyle = 'rgba(255,255,255,.85)';
+      ctx.lineWidth = Math.max(1.5, cell * 0.08);
+      ctx.strokeRect(
+        ox + head.x * cell + cell * 0.18,
+        oy + head.y * cell + cell * 0.18,
+        cell * 0.64,
+        cell * 0.64
+      );
+    }
+    ctx.restore();
+  }
+
+  withAlpha(hex, alpha) {
+    const h = String(hex || '').replace('#', '');
+    if (h.length !== 6) return hex;
+    const r = parseInt(h.slice(0, 2), 16);
+    const g = parseInt(h.slice(2, 4), 16);
+    const b = parseInt(h.slice(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
   // Classic and Responsive both draw whole cells. Responsive remote snakes
   // use the confirmed cells of the playback tick; the local snake uses the
   // cells prediction already wrote onto the frame. Nothing is drawn between
@@ -907,41 +984,15 @@ export class MultiplayerGameRenderer {
     // confirmed cells of the playback tick, one square at a time.
     const followAlive = this.followId != null &&
       snapshot.p.some((player) => player.i === this.followId && player.a);
-    const pad = Math.max(1, cell * .09);
     for (let p = 0; p < snapshot.p.length; p++) {
       const player = snapshot.p[p];
       const color = HEX.test(player.c) ? player.c : '#808080';
       ctx.globalAlpha = (player.a ? 1 : 0.3) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
-      ctx.fillStyle = color;
       const body = player.b;
       const remote = smooth && smooth.players ? smooth.players.get(player.i) : null;
       const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && Number(player.i) !== ownId)
         ? remote.cells : body;
-      ctx.beginPath();
-      for (let part = 0; part < drawn.length; part += 1) {
-        const index = drawn[part];
-        const x = index % cols; const y = Math.floor(index / cols);
-        const left = Math.round(ox + x * cell + pad);
-        const top = Math.round(oy + y * cell + pad);
-        const size = Math.max(1, Math.round(cell - pad * 2));
-        ctx.rect(left, top, size, size);
-      }
-      ctx.fill();
-
-      // Head ring reads the same cells that were just drawn.
-      if (drawn.length && (Number(player.i) === ownId || player.i === this.followId)) {
-        const index = drawn[0];
-        const x = index % cols; const y = Math.floor(index / cols);
-        const left = Math.round(ox + x * cell + pad);
-        const top = Math.round(oy + y * cell + pad);
-        const size = Math.max(1, Math.round(cell - pad * 2));
-        ctx.strokeStyle = '#fff';
-        ctx.lineWidth = Math.max(2, cell * .1);
-        ctx.strokeRect(left, top, size, size);
-        ctx.strokeStyle = this.theme.accent;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(left + pad, top + pad, Math.max(1, size - pad * 2), Math.max(1, size - pad * 2));
-      }
+      this.paintSnake(ctx, drawn, color, cols, cell, ox, oy, Number(player.i) === ownId || player.i === this.followId);
     }
     ctx.globalAlpha = 1;
 

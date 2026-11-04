@@ -61,15 +61,11 @@ test('the live scoreboard shows rank, color, name, points, length, survival and 
     // Own row is highlighted on each client.
     await expect(host.locator('#mp-game-scores .mp-game-score.is-you .mp-game-score__name')).toHaveText('Ada');
     await expect(guest.locator('#mp-game-scores .mp-game-score.is-you .mp-game-score__name')).toHaveText('Grace');
-    // Board / Standings / Lobby tabs switch panes without dropping membership.
-    await host.click('[data-game-pane="standings"]');
-    await expect(host.locator('#mp-standings-pane')).toBeVisible();
-    await host.click('[data-game-pane="board"]');
-    await expect(host.locator('#mp-board-pane')).toBeVisible();
-    await host.click('[data-game-pane="lobby"]');
-    await expect(host.locator('#mp-back-to-board-row')).toBeVisible();
-    await host.click('#mp-board-view');
-    await expect(host.locator('#mp-board-pane')).toBeVisible();
+    // Board and standings stay on one layout. There is no tab strip.
+    await expect(host.locator('#mp-game-tabs')).toHaveCount(0);
+    await expect(host.locator('#mp-game')).toBeVisible();
+    await expect(host.locator('#mp-game-scores')).toBeVisible();
+    await expect(host.locator('#mp-room-actions')).toBeVisible();
     const state = await host.request.get('/api/rooms/current').then((r) => r.json());
     expect(state.room.code).toBe(code);
   } finally {

@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-16">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-17">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -140,178 +140,182 @@
 
   <%# ---- inside a room ---------------------------------------------------- %>
   <section class="mp-room" id="mp-room" hidden>
-    <header class="mp-room__head mp-share" aria-label="Share this room">
-      <div class="mp-share__ident">
-        <p class="mp-room__eyebrow">Brawl lobby · <span id="mp-room-state">lobby</span></p>
-        <h2 class="mp-room__code" id="mp-room-code">————————————</h2>
-        <p class="mp-share__url">
-          <span class="mp-share__label">Invitation link</span>
-          <code class="mp-share__link" id="mp-invite-url"></code>
-        </p>
-      </div>
-      <div class="mp-share__panel">
-        <div class="mp-share__buttons">
-          <button class="btn btn--small btn--primary" id="mp-share-room" type="button" hidden>Share Room</button>
-          <button class="btn btn--small" id="mp-copy-link" type="button">Copy Link</button>
-          <button class="btn btn--small" id="mp-copy-code" type="button">Copy code</button>
-          <button class="btn btn--small" id="mp-qr-toggle" type="button" aria-expanded="false" aria-controls="mp-qr">Show QR</button>
-          <button class="btn btn--small" id="mp-scan-open-room" type="button">Scan QR Code</button>
-        </div>
-        <p class="mp-share__feedback" id="mp-share-feedback" role="status" aria-live="polite"></p>
-        <div class="mp-qr" id="mp-qr" hidden>
-          <canvas id="mp-qr-canvas" role="img" aria-label="QR code for this room's invitation link"></canvas>
-          <p class="mp-qr__caption">Scan with a camera to open this invitation on another device.</p>
-        </div>
-      </div>
-    </header>
-
-    <p class="mp-room__meta">
-      <span class="mp-conn" id="mp-conn" data-state="idle" role="status" aria-live="polite">
-        <span class="mp-dot" aria-hidden="true"></span>
-        <span id="mp-conn-text">Connecting…</span>
-      </span>
-      <span id="mp-count">0 players</span>
-      <span aria-hidden="true">·</span>
-      <span id="mp-ready-count">0 ready</span>
-      <span aria-hidden="true">·</span>
-      <span id="mp-start-state">Waiting for players</span>
-    </p>
-
-    <%# Dedicated multiplayer canvas: it paints only authoritative MatchChannel snapshots. %>
-    <section class="mp-game" id="mp-game" hidden aria-label="Live Brawl">
-      <div class="mp-game__heading">
-        <div>
-          <p class="mp-room__eyebrow">Server-authoritative Brawl</p>
-          <p class="mp-game__status" id="mp-game-status" role="status" aria-live="off">Waiting for the simulation…</p>
-        </div>
-        <span class="mp-game__tick" id="mp-game-tick" aria-live="off"></span>
-      </div>
-      <%# Step 10: non-blocking connection state for THIS player's snake. The
-          rest of the board keeps running for everyone else. %>
-      <p class="mp-brawl-conn" id="mp-brawl-conn" data-state="live" role="status" aria-live="polite">
-        <span class="mp-brawl-conn__ring" aria-hidden="true"></span>
-        <span id="mp-brawl-conn-text">Live</span>
-      </p>
-      <nav class="mp-game-tabs" id="mp-game-tabs" aria-label="Brawl views">
-        <button type="button" data-game-pane="board" aria-pressed="true">Board</button>
-        <button type="button" data-game-pane="standings" aria-pressed="false">Standings</button>
-        <button type="button" data-game-pane="lobby" aria-pressed="false">Lobby</button>
-      </nav>
-      <p class="mp-game__follow-row" id="mp-follow-row" hidden>
-        <label for="mp-follow">Spectate</label>
-        <select id="mp-follow" aria-label="Follow a living player"></select>
-      </p>
-      <div id="mp-board-pane">
-        <canvas id="mp-game-canvas" class="mp-game__canvas" tabindex="0" role="application"
-                aria-label="Multiplayer Snake arena. Use arrow keys or WASD, swipe the arena, or use the direction buttons."></canvas>
-        <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
-      </div>
-      <div id="mp-standings-pane" hidden>
-        <div id="mp-standings-table"></div>
-      </div>
-      <section class="mp-results" id="mp-results" hidden aria-label="Final results">
-        <h4 class="mp-results__title">Final results</h4>
-        <div id="mp-results-table"></div>
-        <div class="mp-actions">
-          <button class="btn btn--primary btn--small" id="mp-again-results" type="button" hidden>Play again</button>
-        </div>
-      </section>
-      <div class="mp-eliminated" id="mp-eliminated" hidden role="alertdialog" aria-labelledby="mp-eliminated-title" aria-describedby="mp-eliminated-score">
-        <p class="mp-room__eyebrow">Eliminated</p>
-        <h4 class="mp-eliminated__title" id="mp-eliminated-title"><span id="mp-eliminated-name">Your snake</span> is out</h4>
-        <p class="mp-eliminated__score" id="mp-eliminated-score"></p>
-        <div class="mp-actions">
-          <button class="btn btn--primary btn--small" id="mp-spectate" type="button">Spectate Brawl</button>
-          <button class="btn btn--small" id="mp-lobby-view" type="button">Return to Lobby</button>
-          <button class="btn btn--small" id="mp-duel-entry" type="button" disabled title="Duels arrive in a later step">Duel (soon)</button>
-        </div>
-      </div>
-      <nav class="mp-game-controls" aria-label="Touch steering">
-        <button type="button" data-game-dir="up" aria-label="Steer up">↑</button>
-        <div>
-          <button type="button" data-game-dir="left" aria-label="Steer left">←</button>
-          <button type="button" data-game-dir="down" aria-label="Steer down">↓</button>
-          <button type="button" data-game-dir="right" aria-label="Steer right">→</button>
-        </div>
-      </nav>
-      <p class="mp-game__hint">Keyboard: arrows / WASD. Touch: swipe or use the steering pad. Only your direction is sent; positions, food and scores come from the server.</p>
-      <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite"></p>
-      <details class="mp-movement-diagnostics" id="mp-movement-diagnostics">
-        <summary>Movement diagnostics</summary>
-        <label><input type="checkbox" id="mp-movement-pacing"> Smooth uneven delivery (adds latency)</label>
-        <p>Off by default for the lowest receive-to-paint delay. If the connection is uneven,
-          opt in to hold complete server frames up to 50 ms (or half a tick) plus a display
-          refresh. This trades responsiveness for more even spacing. No snake cells are invented;
-          turns, elimination, freeze and results still bypass the hold.</p>
-        <pre id="mp-movement-metrics" aria-live="off">Open during a match to measure server, network and drawing intervals.</pre>
-      </details>
-    </section>
-
-    <p class="mp-game__follow-row" id="mp-back-to-board-row" hidden>
-      <button class="btn btn--small" id="mp-board-view" type="button">Back to Board</button>
-    </p>
-
-    <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
-
-    <div class="mp-config-grid">
-      <section class="mp-card mp-color-card" aria-labelledby="mp-color-title">
-        <p class="mp-room__eyebrow">Your multiplayer identity</p>
-        <h3 class="mp-card__title" id="mp-color-title">Choose your color</h3>
-        <p class="mp-my-color" id="mp-my-color"></p>
-        <div class="mp-color-options" id="mp-color-options" role="group" aria-label="Player colors"></div>
-        <p class="mp-card__hint" id="mp-color-note"></p>
-        <p class="mp-config-status" id="mp-color-status" role="status" aria-live="polite"></p>
-      </section>
-      <section class="mp-card mp-board-card" aria-labelledby="mp-board-title">
-        <p class="mp-room__eyebrow" id="mp-board-host-label">Host controls · next Brawl</p>
-        <h3 class="mp-card__title" id="mp-board-title">Brawl board <span id="mp-board-current">24 × 18</span></h3>
-        <p class="mp-card__hint" id="mp-board-reason" role="status" aria-live="polite"></p>
-        <p class="mp-card__hint" id="mp-board-recommendation"></p>
-        <form id="mp-board-form" class="mp-board-form">
-          <label for="mp-board-preset">Size preset</label>
-          <select id="mp-board-preset" disabled></select>
-          <div class="mp-board-dimensions">
-            <label for="mp-board-columns">Columns <input id="mp-board-columns" type="number" min="24" max="96" step="1" value="24" required disabled></label>
-            <label for="mp-board-rows">Rows <input id="mp-board-rows" type="number" min="18" max="72" step="1" value="18" required disabled></label>
+    <div class="mp-play">
+      <section class="mp-game" id="mp-game" hidden aria-label="Live Brawl">
+        <div class="mp-game__heading">
+          <div>
+            <p class="mp-room__eyebrow">Brawl</p>
+            <p class="mp-game__status" id="mp-game-status" role="status" aria-live="off">Waiting for the simulation…</p>
           </div>
-          <button id="mp-board-save" type="submit" class="btn btn--small" disabled>Save board</button>
-        </form>
-        <p class="mp-config-status" id="mp-board-status" role="status" aria-live="polite"></p>
-        <p class="mp-card__hint">The server locks this board for each match. Board changes apply to the next Brawl.</p>
+          <span class="mp-game__tick" id="mp-game-tick" aria-live="off"></span>
+        </div>
+        <p class="mp-brawl-conn" id="mp-brawl-conn" data-state="live" role="status" aria-live="polite">
+          <span class="mp-brawl-conn__ring" aria-hidden="true"></span>
+          <span id="mp-brawl-conn-text">Live</span>
+        </p>
+        <p class="mp-game__follow-row" id="mp-follow-row" hidden>
+          <label for="mp-follow">Spectate</label>
+          <select id="mp-follow" aria-label="Follow a living player"></select>
+        </p>
+        <div class="screen mp-screen">
+        <div class="snake-root mp-snake-root">
+          <div class="snake-frame">
+            <div class="snake-field mp-snake-field">
+              <canvas id="mp-game-canvas" class="snake-canvas mp-game__canvas" tabindex="0" role="application"
+                      aria-label="Multiplayer Snake arena. Use arrow keys or WASD, or swipe the page while focused."></canvas>
+            </div>
+            <div class="cabinet mp-cabinet" aria-hidden="true">
+              <div class="cabinet__marquee">
+                <span class="cabinet__bulb"></span>
+                <span class="cabinet__marquee-text">Next Level Snake</span>
+                <span class="cabinet__bulb"></span>
+              </div>
+              <div class="cabinet__deck">
+                <span class="cabinet__stick"><i></i></span>
+                <span class="cabinet__buttons"><i></i><i></i><i></i><i></i></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        </div>
+        <section class="mp-results" id="mp-results" hidden aria-label="Final results">
+          <h4 class="mp-results__title">Final results</h4>
+          <div id="mp-results-table"></div>
+          <div class="mp-actions">
+            <button class="btn btn--primary btn--small" id="mp-again-results" type="button" hidden>Play again</button>
+          </div>
+        </section>
+        <div class="mp-eliminated" id="mp-eliminated" hidden role="alertdialog" aria-labelledby="mp-eliminated-title" aria-describedby="mp-eliminated-score">
+          <p class="mp-room__eyebrow">Eliminated</p>
+          <h4 class="mp-eliminated__title" id="mp-eliminated-title"><span id="mp-eliminated-name">Your snake</span> is out</h4>
+          <p class="mp-eliminated__score" id="mp-eliminated-score"></p>
+          <div class="mp-actions">
+            <button class="btn btn--primary btn--small" id="mp-spectate" type="button">Spectate Brawl</button>
+            <button class="btn btn--small" id="mp-lobby-view" type="button">Return to Lobby</button>
+            <button class="btn btn--small" id="mp-duel-entry" type="button" disabled title="Duels arrive in a later step">Duel (soon)</button>
+          </div>
+        </div>
+        <p class="mp-game__hint">Keyboard: arrows / WASD. Touch: swipe the page while the game is focused. Only your direction is sent.</p>
+        <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite"></p>
+        <details class="mp-movement-diagnostics" id="mp-movement-diagnostics">
+          <summary>Movement diagnostics</summary>
+          <label><input type="checkbox" id="mp-movement-pacing"> Smooth uneven delivery (adds latency)</label>
+          <p>Off by default for the lowest receive-to-paint delay. If the connection is uneven,
+            opt in to hold complete server frames up to 50 ms (or half a tick) plus a display
+            refresh. This trades responsiveness for more even spacing. No snake cells are invented;
+            turns, elimination, freeze and results still bypass the hold.</p>
+          <pre id="mp-movement-metrics" aria-live="off">Open during a match to measure server, network and drawing intervals.</pre>
+        </details>
       </section>
-      <section class="mp-card mp-presentation-card" aria-labelledby="mp-presentation-title">
-        <p class="mp-room__eyebrow" id="mp-presentation-host-label">Host controls · next Brawl</p>
-        <h3 class="mp-card__title" id="mp-presentation-title">Brawl presentation</h3>
-        <p class="mp-card__hint" id="mp-presentation-reason">Choose how this Brawl is presented. The server simulation and rules stay the same.</p>
-        <form id="mp-presentation-form" class="mp-board-form">
-          <label for="mp-presentation-choice">Presentation strategy</label>
-          <select id="mp-presentation-choice" disabled>
-            <%# Short labels on purpose: a <select> is sized by its longest option
-                in several mobile engines, and a 60+ character option is wider
-                than a phone. The descriptions live in the hint paragraph below. %>
-            <option value="classic">Classic Brawl</option>
-            <option value="responsive">Responsive Brawl</option>
-          </select>
-          <button id="mp-presentation-save" type="submit" class="btn btn--small" disabled>Save presentation</button>
-        </form>
-        <p class="mp-config-status" id="mp-presentation-status" role="status" aria-live="polite"></p>
-        <p class="mp-card__hint" id="mp-presentation-availability">Both strategies run the same authoritative Ruby simulation: same rules, same scores, same results. Classic paints each confirmed frame as it arrives. Responsive predicts your own snake locally and plays other players back smoothly from buffered confirmed movement.</p>
+
+      <section class="card mp-standings-card" id="mp-standings-card" aria-labelledby="mp-standings-title">
+        <div class="card__head">
+          <h2 class="card__title" id="mp-standings-title">Standings</h2>
+        </div>
+        <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
+        <p class="mp-card__hint" id="mp-standings-empty">Standings appear when a Brawl starts.</p>
       </section>
-    </div>
 
-    <div class="mp-actions mp-actions--room">
-      <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
-      <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
-      <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
-      <button class="btn btn--small btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
-      <button class="btn btn--small" id="mp-leave" type="button">Leave room</button>
-    </div>
+      <div class="mp-actions mp-actions--room" id="mp-room-actions">
+        <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
+        <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
+        <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
+        <button class="btn btn--small btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
+        <button class="btn btn--small" id="mp-leave" type="button">Leave room</button>
+      </div>
 
-    <p class="mp-note" id="mp-host-note" hidden>
-      Ready votes are advisory — as host, you decide when the Brawl begins.
-    </p>
+      <div class="mp-room-rest" id="mp-room-rest">
+        <header class="mp-room__head mp-share" aria-label="Share this room">
+          <div class="mp-share__ident">
+            <p class="mp-room__eyebrow">Brawl lobby · <span id="mp-room-state">lobby</span></p>
+            <h2 class="mp-room__code" id="mp-room-code">————————————</h2>
+            <p class="mp-share__url">
+              <span class="mp-share__label">Invitation link</span>
+              <code class="mp-share__link" id="mp-invite-url"></code>
+            </p>
+          </div>
+          <div class="mp-share__panel">
+            <div class="mp-share__buttons">
+              <button class="btn btn--small btn--primary" id="mp-share-room" type="button" hidden>Share Room</button>
+              <button class="btn btn--small" id="mp-copy-link" type="button">Copy Link</button>
+              <button class="btn btn--small" id="mp-copy-code" type="button">Copy code</button>
+              <button class="btn btn--small" id="mp-qr-toggle" type="button" aria-expanded="false" aria-controls="mp-qr">Show QR</button>
+              <button class="btn btn--small" id="mp-scan-open-room" type="button">Scan QR Code</button>
+            </div>
+            <p class="mp-share__feedback" id="mp-share-feedback" role="status" aria-live="polite"></p>
+            <div class="mp-qr" id="mp-qr" hidden>
+              <canvas id="mp-qr-canvas" role="img" aria-label="QR code for this room's invitation link"></canvas>
+              <p class="mp-qr__caption">Scan with a camera to open this invitation on another device.</p>
+            </div>
+          </div>
+        </header>
+
+        <p class="mp-room__meta">
+          <span class="mp-conn" id="mp-conn" data-state="idle" role="status" aria-live="polite">
+            <span class="mp-dot" aria-hidden="true"></span>
+            <span id="mp-conn-text">Connecting…</span>
+          </span>
+          <span id="mp-count">0 players</span>
+          <span aria-hidden="true">·</span>
+          <span id="mp-ready-count">0 ready</span>
+          <span aria-hidden="true">·</span>
+          <span id="mp-start-state">Waiting for players</span>
+        </p>
+
+        <p class="mp-note" id="mp-host-note" hidden>
+          Ready votes are advisory — as host, you decide when the Brawl begins.
+        </p>
+
+        <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
+
+        <div class="mp-config-grid">
+          <section class="mp-card mp-color-card" aria-labelledby="mp-color-title">
+            <p class="mp-room__eyebrow">Your multiplayer identity</p>
+            <h3 class="mp-card__title" id="mp-color-title">Choose your color</h3>
+            <p class="mp-my-color" id="mp-my-color"></p>
+            <div class="mp-color-options" id="mp-color-options" role="group" aria-label="Player colors"></div>
+            <p class="mp-card__hint" id="mp-color-note"></p>
+            <p class="mp-config-status" id="mp-color-status" role="status" aria-live="polite"></p>
+          </section>
+          <section class="mp-card mp-board-card" aria-labelledby="mp-board-title">
+            <p class="mp-room__eyebrow" id="mp-board-host-label">Host controls · next Brawl</p>
+            <h3 class="mp-card__title" id="mp-board-title">Brawl board <span id="mp-board-current">24 × 18</span></h3>
+            <p class="mp-card__hint" id="mp-board-reason" role="status" aria-live="polite"></p>
+            <p class="mp-card__hint" id="mp-board-recommendation"></p>
+            <form id="mp-board-form" class="mp-board-form">
+              <label for="mp-board-preset">Size preset</label>
+              <select id="mp-board-preset" disabled></select>
+              <div class="mp-board-dimensions">
+                <label for="mp-board-columns">Columns <input id="mp-board-columns" type="number" min="24" max="96" step="1" value="24" required disabled></label>
+                <label for="mp-board-rows">Rows <input id="mp-board-rows" type="number" min="18" max="72" step="1" value="18" required disabled></label>
+              </div>
+              <button id="mp-board-save" type="submit" class="btn btn--small" disabled>Save board</button>
+            </form>
+            <p class="mp-config-status" id="mp-board-status" role="status" aria-live="polite"></p>
+            <p class="mp-card__hint">The server locks this board for each match. Board changes apply to the next Brawl.</p>
+          </section>
+          <section class="mp-card mp-presentation-card" aria-labelledby="mp-presentation-title">
+            <p class="mp-room__eyebrow" id="mp-presentation-host-label">Host controls · next Brawl</p>
+            <h3 class="mp-card__title" id="mp-presentation-title">Brawl presentation</h3>
+            <p class="mp-card__hint" id="mp-presentation-reason">Choose how this Brawl is presented. The server simulation and rules stay the same.</p>
+            <form id="mp-presentation-form" class="mp-board-form">
+              <label for="mp-presentation-choice">Presentation strategy</label>
+              <select id="mp-presentation-choice" disabled>
+                <option value="classic">Classic Brawl</option>
+                <option value="responsive">Responsive Brawl</option>
+              </select>
+              <button id="mp-presentation-save" type="submit" class="btn btn--small" disabled>Save presentation</button>
+            </form>
+            <p class="mp-config-status" id="mp-presentation-status" role="status" aria-live="polite"></p>
+            <p class="mp-card__hint" id="mp-presentation-availability">Both strategies run the same authoritative Ruby simulation: same rules, same scores, same results. Classic paints each confirmed frame as it arrives. Responsive predicts your own snake locally and plays other players back smoothly from buffered confirmed movement.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+    <button class="mp-page-focus" id="mp-page-focus" type="button" hidden>Focus game</button>
   </section>
 </main>
+
 
 <footer class="footer">
   <span>Next Level Snake — wall-wrap arcade</span>
@@ -366,5 +370,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-16"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-17"></script>
 <% end %>
