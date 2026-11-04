@@ -58,34 +58,33 @@ class DecisiveRelayTest < Minitest::Test
     assert_empty snake.poses
   end
 
-  def test_an_illegal_pose_is_rejected_and_the_body_stays
+  def test_a_non_adjacent_report_is_still_painted
     world, = responsive_world
     snake = world.snakes.first
     place(world, snake, body: [[4, 4], [3, 4], [2, 4]], direction: "right")
+    # A dropped earlier report must not freeze the snake. The cell the browser
+    # is actually on is what everyone else should see.
     outcome = world.enqueue_pose!(player_id: snake.id, cell: [6, 4],
                                   direction: Simulation::Direction.parse("right"),
                                   tick: world.tick, seq: 1)
-    assert_equal :illegal_step, outcome
+    assert_equal :queued, outcome
     assert_equal [4, 4], snake.head
-    assert_empty snake.poses
     world.step!
-    assert_equal [4, 4], snake.head
-    # The rejected sequence cannot be replayed as a different cell.
-    assert_equal :stale_sequence, world.enqueue_pose!(player_id: snake.id, cell: [5, 4],
-                                                      direction: Simulation::Direction.parse("right"),
-                                                      tick: world.tick, seq: 1)
+    assert_equal [6, 4], snake.head
+    assert_equal "right", snake.direction.name
   end
 
-  def test_a_heading_that_does_not_match_the_cell_is_rejected
+  def test_a_heading_that_does_not_match_the_cell_still_paints_the_cell
     world, = responsive_world
     snake = world.snakes.first
     place(world, snake, body: [[4, 4], [3, 4], [2, 4]], direction: "right")
     outcome = world.enqueue_pose!(player_id: snake.id, cell: [5, 4],
                                   direction: Simulation::Direction.parse("down"),
                                   tick: world.tick, seq: 1)
-    assert_equal :heading_mismatch, outcome
-    assert_equal [4, 4], snake.head
-    assert_equal "right", snake.direction.name
+    assert_equal :queued, outcome
+    world.step!
+    assert_equal [5, 4], snake.head
+    assert_equal "down", snake.direction.name
   end
 
   def test_eating_grows_scores_and_respawns

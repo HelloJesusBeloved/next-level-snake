@@ -5,8 +5,8 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-13';
-import { RemotePlayback } from './playback.js?v=step11-responsive-13';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-14';
+import { RemotePlayback } from './playback.js?v=step11-responsive-14';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -486,10 +486,15 @@ export class MultiplayerGameRenderer {
   }
 
   present(frame, at) {
-    // Remotes, pellets and the HUD stay on the confirmed tick playback is
-    // showing (newest minus one). Only this snake's cells come from the local
-    // clock, and only while that clock is armed.
-    const renderFrame = (this.playback?.enabled && this.lastPlaybackSample?.frame) || frame;
+    // Remotes stay on the confirmed tick playback is showing, unless that
+    // buffer has fallen behind the newest snapshot — a stuck playhead must not
+    // freeze every other snake while frames are still arriving. Only this
+    // snake's cells come from the local clock, and only while that clock is armed.
+    const playbackFrame = this.playback?.enabled ? this.lastPlaybackSample?.frame : null;
+    const newest = this.snapshot;
+    const playbackBehind = playbackFrame && newest && Number.isInteger(newest.t) &&
+      Number.isInteger(playbackFrame.t) && newest.t - playbackFrame.t > 2;
+    const renderFrame = (!playbackBehind && playbackFrame) || frame;
     this.paintSnapshot = renderFrame;
     const predicted = this.local?.enabled && this.local.seeded
       ? this.local.displayFrame(renderFrame) : null;
@@ -872,9 +877,13 @@ export class MultiplayerGameRenderer {
       // pellet is the cell on the confirmed tick being painted.
       if (owner === ownId && this.local?.enabled && this.local.seeded) {
         const localFood = this.local.food;
-        if (!Number.isInteger(localFood)) continue;
-        drawPellet(localFood, pelletColor(food.o));
-        continue;
+        if (Number.isInteger(localFood)) {
+          drawPellet(localFood, pelletColor(food.o));
+          continue;
+        }
+        // Local bite hid this cell. Keep it hidden only while the server still
+        // says that same cell. A respawn is a different cell and must be drawn.
+        if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) continue;
       }
       drawPellet(food.c, pelletColor(food.o));
     }

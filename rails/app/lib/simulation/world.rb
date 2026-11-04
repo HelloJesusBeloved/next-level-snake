@@ -177,13 +177,12 @@ module Simulation
 
     # Responsive only. The browser already moved into `cell`; this queues that
     # cell so the next step can paint it for everyone else. It does not choose
-    # a different cell from the direction. `cell` is an [x, y] pair. A pose that
-    # is not exactly one orthogonal step from the tail of this snake's queue
-    # (or its head, if the queue is empty) is rejected and the body is left
-    # where it is. Sequence numbers are consumed on rejection so the same
-    # report cannot be replayed with a different cell, except :pose_queue_full,
-    # which leaves the sequence unused so the owner can retry once a pose has
-    # been painted.
+    # a different cell from the direction. `cell` is an [x, y] pair.
+    #
+    # A cell that is not one orthogonal step is still queued. The client is the
+    # authority for its own snake: dropping a report (or the server being a
+    # cell behind) must not freeze the snake for the rest of the match. A
+    # jump is painted as the cell the browser is actually on.
     def enqueue_pose!(player_id:, cell:, direction:, tick:, seq:)
       snake = snakes.find { |candidate| candidate.id == player_id }
       return :not_a_participant unless snake
@@ -194,17 +193,11 @@ module Simulation
       return :invalid_tick unless tick.is_a?(Integer) && tick >= 0
       return :stale_sequence unless seq.is_a?(Integer) && seq.positive? && seq > snake.last_seq
       return :pose_queue_full if snake.poses.length >= Snake::MAX_POSE_QUEUE
-
-      snake.last_seq = seq
       return :invalid_cell unless cell.is_a?(Array) && cell.length == 2 &&
                                   cell[0].is_a?(Integer) && cell[1].is_a?(Integer) &&
                                   cell[0].between?(0, @columns - 1) && cell[1].between?(0, @rows - 1)
 
-      tip = snake.poses.last&.cell || snake.head
-      delta = step_delta(tip, cell)
-      return :illegal_step unless delta[0].abs + delta[1].abs == 1
-      return :heading_mismatch unless direction.dx == delta[0] && direction.dy == delta[1]
-
+      snake.last_seq = seq
       snake.enqueue_pose(cell, direction, seq: seq, tick: tick)
     end
 
@@ -299,9 +292,10 @@ module Simulation
                      eaten: consumed.map { |snake, _food| snake.id })
     end
 
-    # Responsive movement. Exactly one queued pose per snake, and only when it
-    # is still the single cell in front of the head. Snakes with nothing queued
-    # hold. Classic never calls this.
+    # Responsive movement. One queued pose per snake: the cell the browser
+    # already entered. A missing pose holds. A pose that is more than one cell
+    # away is still adopted — that is a dropped report, not a reason to freeze
+    # the snake for the rest of the match. Classic never calls this.
     def step_relay!
       next_tick = @tick + 1
       @food_events = []
@@ -311,13 +305,6 @@ module Simulation
       movers.each do |snake|
         pose = snake.poses.first
         next unless pose
-
-        delta = step_delta(snake.head, pose.cell)
-        unless delta[0].abs + delta[1].abs == 1 &&
-               pose.direction.dx == delta[0] && pose.direction.dy == delta[1]
-          snake.poses.clear
-          next
-        end
 
         snake.poses.shift
         snake.direction = pose.direction
