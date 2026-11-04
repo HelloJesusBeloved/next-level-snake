@@ -240,7 +240,13 @@ class MatchChannel < ApplicationCable::Channel
       "strategy" => @match.presentation_strategy,
       "grace_seconds" => Match.freeze_grace_seconds,
       "presence_timeout" => Match.presence_stale_seconds
-    ).compact
+    ).compact.tap do |seed|
+      # A finished match must never be re-seeded as running. The last persisted
+      # frame can still say "running" (the completing tick, or an abandon that
+      # did not rewrite it). Stamping the real status keeps the board as a
+      # still picture instead of a solo game.
+      seed["s"] = @match.status unless @match.live?
+    end
   end
 
   def connection_payload

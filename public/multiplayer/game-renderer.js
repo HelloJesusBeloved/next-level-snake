@@ -5,8 +5,8 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-14';
-import { RemotePlayback } from './playback.js?v=step11-responsive-14';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-15';
+import { RemotePlayback } from './playback.js?v=step11-responsive-15';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -255,8 +255,21 @@ export class MultiplayerGameRenderer {
     this.playback.enable(next.source === 'test' ? 'test override' : 'responsive');
     this.playback.configure({ tickMs: this.tickMs, columns: match?.columns, rows: match?.rows });
     this.configureLocal(match);
+    // A finished, abandoned or not-yet-started match must not step. The body
+    // stays on the cells the snapshot already has.
+    if (match && match.status && match.status !== 'running') this.local.hold(match.status);
     this.startPredictionLoop();
     return changed;
+  }
+
+  // Freeze the local snake where it is. Used when a finished board is shown
+  // again, and when Play Again is clicked, so the old round cannot keep walking.
+  holdLocal(reason = 'hold') {
+    if (!this.local) return false;
+    this.local.hold(reason);
+    this.paintOverride = null;
+    if (this.snapshot) this.requestDraw();
+    return true;
   }
 
   configureLocal(match) {

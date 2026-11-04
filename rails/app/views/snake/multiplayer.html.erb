@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-14">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-15">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -212,6 +212,9 @@
       <section class="mp-results" id="mp-results" hidden aria-label="Final results">
         <h4 class="mp-results__title">Final results</h4>
         <div id="mp-results-table"></div>
+        <div class="mp-actions">
+          <button class="btn btn--primary btn--small" id="mp-again-results" type="button" hidden>Play again</button>
+        </div>
       </section>
       <div class="mp-eliminated" id="mp-eliminated" hidden role="alertdialog" aria-labelledby="mp-eliminated-title" aria-describedby="mp-eliminated-score">
         <p class="mp-room__eyebrow">Eliminated</p>
@@ -363,5 +366,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-14"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-15"></script>
 <% end %>

@@ -12,10 +12,10 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-14';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-14';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-15';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-15';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-14';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-15';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -133,6 +133,7 @@ export function mountLobby(root) {
     readyToggle: $('mp-ready-toggle'),
     start: $('mp-start'),
     again: $('mp-again'),
+    againResults: $('mp-again-results'),
     disband: $('mp-disband'),
     leave: $('mp-leave'),
     hostNote: $('mp-host-note'),
@@ -491,6 +492,10 @@ export function mountLobby(root) {
       el.again.disabled = strategyBlocked;
       el.again.title = startTitle;
     }
+    if (el.againResults) {
+      el.againResults.hidden = !amHost || room.state !== 'finished';
+      el.againResults.disabled = strategyBlocked;
+    }
     if (el.disband) el.disband.hidden = !amHost;
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
@@ -502,7 +507,9 @@ export function mountLobby(root) {
 
   function renderGame() {
     const match = state.match;
-    const relevant = match && ['pending', 'running', 'paused', 'completed'].includes(match.status);
+    // Abandoned is a finished board too: leaving and coming back must still
+    // show the last cells, not an empty page.
+    const relevant = match && ['pending', 'running', 'paused', 'completed', 'abandoned'].includes(match.status);
     if (el.game) el.game.hidden = !relevant;
     if (!relevant) {
       gameRenderer?.setOwnParticipant(null);
@@ -528,7 +535,7 @@ export function mountLobby(root) {
       storage: window.sessionStorage
     });
     if (gameRenderer?.setPredictionMode(prediction, match)) {
-      if (prediction.active) {
+      if (prediction.active && match.status === 'running') {
         state.inputSeq = Math.max(state.inputSeq, Number(state.member?.last_input_seq || 0));
         gameRenderer.noteInputSequence(Number(state.member?.last_input_seq || 0));
         flash(prediction.testOnly
@@ -536,6 +543,9 @@ export function mountLobby(root) {
           : 'Responsive Brawl: your snake steps on your clock. Everyone else sees those cells a moment later.', 'info');
       }
     }
+    // A finished board is a still picture. Never step it, even if a stale
+    // snapshot still says running.
+    if (match.status !== 'running') gameRenderer?.holdLocal(match.status);
     if (el.gameTick && state.gameSnapshot) text(el.gameTick, `Tick ${state.gameSnapshot.t}`);
     // Roster/palette/board are lobby-only, and must not schedule any
     // background work on a moving snake. A match's controls already do not
@@ -545,7 +555,7 @@ export function mountLobby(root) {
     }
     renderFollowOptions();
     if (state.gameSnapshot) renderStandingsTable();
-    if (match.status === 'completed' && state.gameSnapshot) renderResults();
+    if ((match.status === 'completed' || match.status === 'abandoned') && state.gameSnapshot) renderResults();
     else if (el.results) el.results.hidden = true;
   }
 
@@ -1211,8 +1221,15 @@ export function mountLobby(root) {
       if (!gameRenderer || !gameRenderer.accept(message)) return;
       const died = newlyEliminated(prior, message);
       state.gameSnapshot = message;
-      state.match = { ...(state.match || {}), id: Number(message.m), status: message.s,
+      // A finished room is a still board. A stale snapshot that still says
+      // running must not reopen the round or start a solo snake.
+      const finishedRoom = state.room?.state === 'finished';
+      const nextStatus = finishedRoom && message.s === 'running'
+        ? (state.match?.status && state.match.status !== 'running' ? state.match.status : 'completed')
+        : message.s;
+      state.match = { ...(state.match || {}), id: Number(message.m), status: nextStatus,
                       tick: message.t, columns: message.b?.c, rows: message.b?.r };
+      if (finishedRoom || state.match.status !== 'running') gameRenderer.holdLocal(state.match.status || 'finished');
       state.liveHudBudget.add('movement-metrics', renderMovementDiagnostics);
       state.liveHudBudget.add('tick', () => {
       text(el.gameTick, `Tick ${state.gameSnapshot?.t}`);
@@ -1262,7 +1279,8 @@ export function mountLobby(root) {
           total: message.q?.length,
         });
       }
-      if (el.gameStatus && message.s === 'completed') {
+      if (el.gameStatus && (state.match.status === 'completed' || state.match.status === 'abandoned' ||
+          message.s === 'completed' || message.s === 'abandoned')) {
         state.liveHudBudget.flush('tick');
         const placement = message.q?.find((entry) => entry.i === ownId)?.p;
         text(el.gameStatus, placement ? `Brawl finished · place ${placement}` : 'Brawl finished');
@@ -1377,6 +1395,10 @@ export function mountLobby(root) {
     const own = state.controls && state.controls.id === ownId
       ? state.controls : snapshot?.p?.find((player) => player.i === ownId);
     if (!matchSubscription || !ownId || !snapshot || snapshot.s !== 'running' || !own?.a) return;
+    // The match record is the authority for "is a game in progress". A stale
+    // snapshot that still says running must not start a solo game on a
+    // finished board — that is what desktop ignored and mobile steered.
+    if (state.match?.status !== 'running') return;
     // Frozen/dead/spectating snakes never send: the server would reject these
     // anyway, and any pre-disconnect command still in flight is discarded on
     // the server when the socket is released.
@@ -1853,14 +1875,18 @@ export function mountLobby(root) {
       if (out && out.ok) flash(out.json.notice || 'Ready to start.', 'info');
     });
   });
-  on(el.again, 'click', () => {
-    // Step 10 fix: ONE server action returns the finished room to lobby
-    // semantics and freezes the next match in the same lock. Every client
-    // switches because the room snapshot's match id changed — no refresh.
+  function startNextBrawl() {
+    // Freeze the finished board immediately, so the click is visible even if
+    // the server is slow, and the old snake cannot keep walking underneath.
+    gameRenderer?.holdLocal('rematch');
+    if (el.gameStatus) el.gameStatus.textContent = 'Starting the next Brawl…';
     roomAction('start').then((out) => {
       if (out && out.ok) flash(out.json.notice || 'Next Brawl started.', 'info');
+      else if (el.gameStatus) el.gameStatus.textContent = 'Could not start the next Brawl.';
     });
-  });
+  }
+  on(el.again, 'click', startNextBrawl);
+  on(el.againResults, 'click', startNextBrawl);
 
   // A tab returning to the foreground proves life immediately (and is also a
   // chance to re-subscribe if the tunnel dropped while hidden).

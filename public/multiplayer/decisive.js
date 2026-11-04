@@ -128,6 +128,17 @@ export class DecisiveSnake {
     return false;
   }
 
+  // Stop the clock without throwing away the body. A finished board, a
+  // paused match, or a rematch click all hold here so the snake stays on the
+  // cell it was already on.
+  hold(reason = 'hold') {
+    this.running = false;
+    this.nextStepAt = null;
+    this.queue = [];
+    this.reason = reason;
+    return true;
+  }
+
   observe(frame) {
     if (!this.enabled || !frame || !Array.isArray(frame.p)) return false;
     const own = frame.p.find((player) => Number(player.i) === Number(this.ownParticipantId));
@@ -161,6 +172,8 @@ export class DecisiveSnake {
     this.serverScore = this.score;
     this.dead = own.a === false;
     this.frozen = !!own.fr;
+    // Only a live running frame starts the clock. A completed or abandoned
+    // board is a picture of the last cells, not a match to keep playing.
     this.running = frame.s === 'running' && !this.dead && !this.frozen;
     this.pellet = null;
     this.ignoredFood = null;
@@ -175,17 +188,20 @@ export class DecisiveSnake {
     if (Number.isInteger(own.sc)) this.serverScore = own.sc;
     if (own.sc > this.score) this.score = own.sc;
     this.adoptFood(frame);
-    if (own.a === false || frame.s === 'completed') {
+    if (own.a === false) {
       this.dead = true;
       this.running = false;
       this.nextStepAt = null;
       return;
     }
+    // Anything other than a running frame holds. Do not mark a living winner
+    // dead just because the match ended — the final body should stay visible.
     if (own.fr || frame.s !== 'running') {
       if (own.fr && !this.frozen) this.frozenPauses += 1;
       this.frozen = !!own.fr;
       this.running = false;
       this.nextStepAt = null;
+      this.queue = [];
       return;
     }
     const resume = !this.running && !this.dead;

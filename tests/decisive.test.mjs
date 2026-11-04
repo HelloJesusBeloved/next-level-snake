@@ -182,3 +182,33 @@ test('reconnect reseeds from the new snapshot instead of keeping the old body', 
   local.advance(now.t);
   assert.equal(local.body[0], 4);
 });
+
+test('a finished board does not start the local snake', () => {
+  for (const status of ['completed', 'abandoned', 'paused']) {
+    const now = { t: 0 };
+    const local = snake(now);
+    local.observe(frame([10, 9, 8], { frame: { s: status } }));
+    assert.equal(local.running, false, status);
+    assert.equal(local.active, false, status);
+    assert.deepEqual(local.body, [10, 9, 8], 'the final cells stay put');
+    now.t = TICK * 5;
+    assert.equal(local.advance(now.t), 0, status);
+    assert.deepEqual(local.body, [10, 9, 8], status);
+    // A living winner is not painted as dead just because the match ended.
+    if (status !== 'paused') assert.equal(local.dead, false, status);
+  }
+});
+
+test('hold freezes a running snake without clearing its body', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  local.observe(frame([10, 9, 8]));
+  now.t = TICK;
+  local.advance(now.t);
+  assert.equal(local.body[0], 11);
+  local.hold('rematch');
+  now.t = TICK * 4;
+  assert.equal(local.advance(now.t), 0);
+  assert.equal(local.body[0], 11);
+  assert.equal(local.active, false);
+});
