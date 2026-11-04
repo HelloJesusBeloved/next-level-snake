@@ -218,17 +218,17 @@ test('responsive paints predicted cells for the own snake and authoritative cell
   assert.equal(h.renderer.local.active, true, 'a running, alive, unfrozen snake may be predicted');
   // The player presses: locally immediate, still unconfirmed.
   assert.equal(h.renderer.predict('down', 1).rejectedReason, null);
-  // Two refreshes: the first establishes the predictor's monotonic phase, the
-  // second crosses one logical tick. That is the fixed-step contract — a tick
-  // boundary is defined by elapsed time, not by how many frames were drawn.
+  assert.equal(h.renderer.local.summary().pending, 1, 'the turn waits for the next cell');
+  // Two refreshes: the first crosses one logical tick, the second the next.
+  // A tick boundary is elapsed time, not how many frames were drawn.
   h.at(105); h.refresh(105);
   h.at(210); h.refresh(210);
   assert.ok(h.renderer.local.summary().predictedTicks >= 1, 'the local view ran a tick');
   const painted = h.renderer.paintOverride;
-  assert.ok(painted, 'a predicted display frame is in use');
-  assert.notEqual(painted.p[0].b[0], h.renderer.paintSnapshot.p[0].b[0],
-    'the own snake moved locally before the server agreed');
-  assert.equal(painted.p[0].pr, 1, 'the substituted cells are marked as predicted');
+  assert.ok(painted, 'a local display frame is in use');
+  assert.equal(painted.p[0].b[0], 3 + 24 * 2, 'two ticks of the queued down, not a slide along the old heading');
+  assert.equal(painted.p[0].d, 'down');
+  assert.equal(painted.p[0].pr, 1, 'the substituted cells are marked as local');
   assert.equal(painted.p[1].b[0], 100, 'remote snakes are painted from the authoritative frame only');
   assert.deepEqual(painted.p[1], remote, 'remote player is the identical object, untouched');
   assert.equal(h.renderer.paintSnapshot.p[0].b[0], 3,
@@ -244,12 +244,13 @@ test('disarming restores the classic paint path exactly, and reset drops unconfi
   h.renderer.setPredictionMode({ active: true, source: 'test', testOnly: true }, { columns: 24, rows: 18 });
   settle(h, first);
   h.renderer.predict('down', 1);
+  assert.equal(h.renderer.local.summary().pending, 1, 'the turn is queued until the next cell');
   h.at(105); h.refresh(105);
-  assert.ok(h.renderer.paintOverride, 'predicted frame while armed');
-  assert.ok(h.renderer.local.summary().pending >= 1);
+  assert.ok(h.renderer.paintOverride, 'local frame while armed');
+  assert.equal(h.renderer.local.summary().pending, 0, 'the boundary consumed the turn into that cell');
   // A reconnect seed: nothing may survive the gap.
   h.renderer.resetPrediction({ reconnect: true });
-  assert.equal(h.renderer.local.summary().pending, 0, 'obsolete predictions are discarded');
+  assert.equal(h.renderer.local.summary().pending, 0, 'obsolete turns are discarded');
   assert.ok(h.renderer.local.summary().resetForReconnect >= 1);
   assert.equal(h.renderer.paintOverride, null, 'no stale substituted frame is left painted');
   // Step 2 stays unreachable for players: disarming must return Classic verbatim.

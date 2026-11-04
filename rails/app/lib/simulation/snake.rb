@@ -12,18 +12,24 @@ module Simulation
     # World#freeze_player!/#resume_player!/#expire_freezes! with server time.
     CONNECTION_STATES = %w[connected disconnected unattended].freeze
 
-    attr_reader :id, :name, :color_hex, :color_slot, :body, :queue
+    attr_reader :id, :name, :color_hex, :color_slot, :body, :queue, :poses
     attr_accessor :direction, :grow, :score, :alive, :eliminated_at_tick,
                   :survived_ticks, :longest_length, :last_seq, :last_applied_seq,
                   :last_applied_tick, :food, :food_eaten_at_tick,
                   :elimination_reason, :frozen, :frozen_until_ms, :frozen_ticks,
                   :connection_state
 
+    # One reported cell waiting to be painted onto everyone else. Responsive
+    # matches move by adopting these, one per server tick. Classic never reads
+    # the queue. `cell` is an [x, y] pair, already wrapped by the sender.
+    Pose = Struct.new(:cell, :direction, :seq, :tick, keyword_init: true)
+    MAX_POSE_QUEUE = 60
+
     def initialize(id:, name:, color_hex:, color_slot:, body:, direction:,
                    grow: 0, score: 0, alive: true, eliminated_at_tick: nil,
                    survived_ticks: 0, longest_length: nil, last_seq: 0,
                    last_applied_seq: 0, last_applied_tick: nil,
-                   food: nil, food_eaten_at_tick: nil, queue: [],
+                   food: nil, food_eaten_at_tick: nil, queue: [], poses: [],
                    elimination_reason: nil, frozen: false, frozen_until_ms: nil,
                    frozen_ticks: 0, connection_state: "connected")
       @id = Integer(id)
@@ -44,6 +50,10 @@ module Simulation
       @food = food
       @food_eaten_at_tick = food_eaten_at_tick
       @queue = queue.dup
+      @poses = poses.map do |pose|
+        Pose.new(cell: [Integer(pose.cell[0]), Integer(pose.cell[1])],
+                 direction: pose.direction, seq: Integer(pose.seq), tick: Integer(pose.tick))
+      end
       @elimination_reason = elimination_reason
       @frozen = frozen ? true : false
       @frozen_until_ms = frozen_until_ms && Integer(frozen_until_ms)
@@ -112,6 +122,18 @@ module Simulation
       :accepted
     end
 
+    # Append one client-reported cell. The world already checked that it is a
+    # single step on from the tail of this queue. Returns :queued or
+    # :pose_queue_full. Does not move the snake; World#step! does, one pose
+    # per tick, so a burst of reports cannot skip cells.
+    def enqueue_pose(cell, direction, seq:, tick:)
+      return :pose_queue_full if poses.length >= MAX_POSE_QUEUE
+
+      poses << Pose.new(cell: [Integer(cell[0]), Integer(cell[1])],
+                        direction: direction, seq: Integer(seq), tick: Integer(tick))
+      :queued
+    end
+
     # Consumes one queued turn at tick time and defends against a reversal that
     # slipped in (neck direction is the final authority).
     def next_direction!
@@ -139,6 +161,7 @@ module Simulation
       self.elimination_reason = reason
       self.food = nil
       self.queue.clear
+      self.poses.clear
       # An eliminated snake can never be frozen: its final body stays visible
       # and its connection becomes a spectator concern, not a simulation one.
       self.frozen = false
@@ -158,6 +181,8 @@ module Simulation
         "survived" => survived_ticks, "longest" => longest_length,
         "last_seq" => last_seq, "last_applied_seq" => last_applied_seq,
         "last_applied_tick" => last_applied_tick,
+        "poses" => poses.map { |pose| { "c" => pose.cell, "d" => pose.direction.name,
+                                         "seq" => pose.seq, "t" => pose.tick } },
         "food" => food&.to_state, "ate_at" => food_eaten_at_tick,
         "frozen" => frozen, "frozen_until" => frozen_until_ms,
         "frozen_ticks" => frozen_ticks, "connection" => connection_state
@@ -171,6 +196,10 @@ module Simulation
         body: state.fetch("body").map { |x, y| [x, y] },
         direction: Direction.parse(state.fetch("dir")),
         queue: Array(state["queue"]).map { |name| Direction.parse(name) },
+        poses: Array(state["poses"]).map { |pose|
+          Pose.new(cell: pose.fetch("c"), direction: Direction.parse(pose.fetch("d")),
+                   seq: pose.fetch("seq"), tick: pose["t"] || 0)
+        },
         grow: state.fetch("grow"), score: state.fetch("score"), alive: state.fetch("alive"),
         eliminated_at_tick: state["eliminated_at"], elimination_reason: state["reason"]&.to_sym,
         survived_ticks: state.fetch("survived"), longest_length: state["longest"],

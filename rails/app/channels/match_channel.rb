@@ -134,8 +134,10 @@ class MatchChannel < ApplicationCable::Channel
     transmit(seed_payload)
   end
 
-  # ActionCable dispatches the untrusted action hash here. There are no actions
-  # for client movement/state changes: only Protocol v1 direction intent.
+  # ActionCable dispatches the untrusted action hash here. Classic sends a
+  # direction. Responsive sends a report (the cell it already stepped into)
+  # and does not also send an input — a direction on a Responsive match is
+  # queued and then ignored by the relay step.
   def input(data)
     touch_presence!(now: Time.current)
     membership = current_membership(@match.room)
@@ -155,6 +157,29 @@ class MatchChannel < ApplicationCable::Channel
     input_ack(input&.seq, false, :stale_sequence)
   rescue ActiveRecord::RecordNotFound
     input_ack(input&.seq, false, :match_unavailable)
+  end
+
+  # The cell a Responsive browser already moved into. Same acknowledgement as
+  # an input. The simulator adopts at most one reported cell per tick.
+  def report(data)
+    touch_presence!(now: Time.current)
+    membership = current_membership(@match.room)
+    return input_ack(nil, false, :not_a_member) unless membership
+    return input_ack(nil, false, :spectator) if membership.spectator?
+    participant = @match.match_participants.find_by(room_membership_id: membership.id)
+    return input_ack(nil, false, :not_a_participant) unless participant
+
+    report = Simulation::Protocol.parse_report(data.to_h.except("action", :action))
+    return input_ack(report.seq, false, :wrong_match) unless report.match_id == @match.id
+
+    outcome = @match.accept_report!(membership: membership, report: report)
+    input_ack(report.seq, outcome == :queued, outcome)
+  rescue Simulation::InvalidInput => error
+    input_ack(nil, false, error.reason, message: error.message)
+  rescue ActiveRecord::RecordNotUnique
+    input_ack(report&.seq, false, :stale_sequence)
+  rescue ActiveRecord::RecordNotFound
+    input_ack(report&.seq, false, :match_unavailable)
   end
 
   private

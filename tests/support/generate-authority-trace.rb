@@ -100,12 +100,17 @@ end
 
 def steer!(world)
   world.snakes.each_with_index do |snake, index|
+    next unless snake.alive?
+
     box = BOXES[index]
     x, y = snake.head
     want = desired_direction(x, y, snake.direction.name, box)
-    next if want == snake.direction.name
-
-    snake.queue_direction(Simulation::Direction.parse(want), capacity: 4)
+    cell = step_cell(x, y, want, world)
+    outcome = world.enqueue_pose!(
+      player_id: snake.id, cell: cell, direction: Simulation::Direction.parse(want),
+      tick: world.tick, seq: snake.last_seq + 1
+    )
+    raise "pose #{outcome} for player #{snake.id} at tick #{world.tick}" unless outcome == :queued
   end
 end
 

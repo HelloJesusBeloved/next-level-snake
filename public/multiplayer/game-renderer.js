@@ -1,12 +1,11 @@
-// Canvas-only multiplayer renderer. It never decides a collision, score or
-// winner. Classic Brawl draws versioned server snapshots exactly as they
-// arrive. Responsive Brawl keeps that authority and changes only the pixels:
-// this player's snake steps on a local clock (prediction.js), and everyone
-// else steps on a buffered clock of confirmed cells (playback.js). Both tick
-// one whole square at a time, the same way single-player does.
+// Canvas-only multiplayer renderer. Classic Brawl draws versioned server
+// snapshots exactly as they arrive. Responsive Brawl steps THIS snake on a
+// local clock (decisive.js) and steps everyone else from confirmed cells
+// one tick behind (playback.js). A packet never relocates the local snake.
+// Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { LocalPredictor } from './prediction.js?v=step11-responsive-13';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-13';
 import { RemotePlayback } from './playback.js?v=step11-responsive-13';
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -238,9 +237,16 @@ export class MultiplayerGameRenderer {
       this.localDisplay = false;
       return changed;
     }
-    this.local = this.local || new LocalPredictor({
+    this.local = this.local || new DecisiveSnake({
       tickMs: this.tickMs, columns: match?.columns, rows: match?.rows,
-      ownParticipantId: this.ownParticipantId, clock: this.clock
+      ownParticipantId: this.ownParticipantId, clock: this.clock,
+      growth: Number.isInteger(match?.growth) ? match.growth : 1,
+      onStep: (report) => {
+        // The test override may arm this snake on a Classic match. Those steps
+        // stay on this screen; only a real Responsive match tells the server.
+        if (this.predictionMode.source !== 'server') return;
+        this.onDecisiveStep?.(report);
+      }
     });
     this.local.enable(next.source === 'test' ? 'test override' : 'responsive');
     this.playback = this.playback || new RemotePlayback({
@@ -264,10 +270,9 @@ export class MultiplayerGameRenderer {
     if (this.snapshot) this.local.observe(this.snapshot, { applied: true });
   }
 
-  // Steers the LOCAL view only. It never sends anything and never claims the
-  // turn happened: the return value is this module's own bounded scheduling
-  // decision, which is exactly why a refused prediction still goes to the
-  // server (the server owns turns; this only owns pixels).
+  // Steers the LOCAL snake only. The report of the cell it actually enters is
+  // sent later, from the tick, not from this key. A refused duplicate or
+  // reversal is not sent at all.
   predict(direction, seq) {
     if (!this.local || !this.local.enabled) return null;
     const record = this.local.submit(direction, seq);
@@ -307,8 +312,10 @@ export class MultiplayerGameRenderer {
     return true;
   }
 
-  // A measured round trip (input ack or match heartbeat) sets how far the local
-  // view should lead the confirmed tick. See LocalPredictor#setLeadTargetMs.
+  setDecisiveStepHandler(handler) {
+    this.onDecisiveStep = typeof handler === 'function' ? handler : null;
+  }
+
   setRoundTripMs(rttMs) { return this.local?.setLeadTargetMs(rttMs) ?? null; }
 
   noteInputQueued(seq) { this.local?.noteQueued(seq); }
@@ -353,8 +360,10 @@ export class MultiplayerGameRenderer {
         const playbackMoved = !!smooth && !!smooth.players &&
           smooth.tick !== this.lastPaintedPlaybackTick;
         if (playbackMoved) this.lastPaintedPlaybackTick = smooth.tick;
-        if (ticks > 0) this.present(this.snapshot, at);
-        else if (playbackMoved) this.presentPlayback(at);
+        if (ticks > 0) {
+          this.paintOwnScore();
+          this.present(this.snapshot, at);
+        } else if (playbackMoved) this.presentPlayback(at);
       }
       if (this.local?.enabled || this.playback?.enabled) this.predictionLoop = this.frameRequest(step);
     };
@@ -477,17 +486,19 @@ export class MultiplayerGameRenderer {
   }
 
   present(frame, at) {
+    // Remotes, pellets and the HUD stay on the confirmed tick playback is
+    // showing (newest minus one). Only this snake's cells come from the local
+    // clock, and only while that clock is armed.
     const renderFrame = (this.playback?.enabled && this.lastPlaybackSample?.frame) || frame;
     this.paintSnapshot = renderFrame;
-    // Own snake may be one unapplied turn ahead of this same frame. Food,
-    // scores, length and every other snake stay on the frame.
-    const predicted = this.local && this.local.active ? this.local.displayFrame(renderFrame) : null;
-    this.paintOverride = predicted && predicted !== frame ? predicted : null;
+    const predicted = this.local?.enabled && this.local.seeded
+      ? this.local.displayFrame(renderFrame) : null;
+    this.paintOverride = predicted && predicted !== renderFrame ? predicted : null;
     this.localDisplay = !!this.paintOverride;
     const start = this.clock();
     this.draw();
     this.dirty = false;
-    this.timings.draw(this.clock() - start, at - (this.receivedAt.get(frame) ?? at));
+    this.timings.draw(this.clock() - start, at - (this.receivedAt.get(renderFrame) ?? this.receivedAt.get(frame) ?? at));
   }
 
   accept(snapshot) {
@@ -699,6 +710,7 @@ export class MultiplayerGameRenderer {
     const signature = hudKey(board, this.ownParticipantId, this.tickMs);
     if (signature === this.scoreSignature) {
       this.paintFrozenLabels();
+      this.paintOwnScore();
       return;
     }
     this.scoreSignature = signature;
@@ -752,6 +764,17 @@ export class MultiplayerGameRenderer {
     if (structureChanged || previousIds.join(',') !== order.join(',')) {
       this.scoreboard.replaceChildren(...Array.from(nextRows.values(), (entry) => entry.row));
     }
+    this.paintOwnScore();
+  }
+
+  // The own row shows the local score and length as soon as this snake eats.
+  // A later server frame can only raise that number, never take the bite back.
+  paintOwnScore() {
+    if (!this.local?.seeded || this.ownParticipantId == null) return;
+    const row = this.scoreRows.get(this.ownParticipantId) || this.scoreRows.get(Number(this.ownParticipantId));
+    if (!row) return;
+    text(row.score, `${this.local.shownScore} pts`);
+    text(row.length, `${this.local.body.length} long`);
   }
 
   paintTag(tag, player) {
@@ -818,9 +841,9 @@ export class MultiplayerGameRenderer {
     const smooth = this.smoothPlayers();
     const ownId = this.ownParticipantId == null ? null : Number(this.ownParticipantId);
 
-    // One confirmed tick for every pellet. The frame is the playback tick when
-    // Responsive is on, and the snapshot itself for Classic. Nothing here holds
-    // an old pellet, invents one, or substitutes a locally guessed cell.
+    // Pellets come from the confirmed tick. This player's own pellet follows the
+    // local bite: the eaten cell stays hidden until the server's cell changes.
+    // Nothing here invents a remote pellet or keeps one the confirmed tick ate.
     const pelletColor = (owner) => {
       for (let p = 0; p < snapshot.p.length; p++) {
         if (snapshot.p[p].i === owner && HEX.test(snapshot.p[p].c)) return snapshot.p[p].c;
@@ -842,6 +865,17 @@ export class MultiplayerGameRenderer {
     for (let f = 0; f < pellets.length; f++) {
       const food = pellets[f];
       if (!food || !Number.isInteger(food.c)) continue;
+      const owner = Number(food.o);
+      // Own pellet follows the local bite. After the head lands on it the cell
+      // stays hidden until the server's cell changes, so the eaten pellet is
+      // not drawn twice and the respawn is not drawn early. Everyone else's
+      // pellet is the cell on the confirmed tick being painted.
+      if (owner === ownId && this.local?.enabled && this.local.seeded) {
+        const localFood = this.local.food;
+        if (!Number.isInteger(localFood)) continue;
+        drawPellet(localFood, pelletColor(food.o));
+        continue;
+      }
       drawPellet(food.c, pelletColor(food.o));
     }
 

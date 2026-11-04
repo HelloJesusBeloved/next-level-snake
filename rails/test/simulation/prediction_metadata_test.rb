@@ -13,12 +13,15 @@ class PredictionMetadataTest < Minitest::Test
     player = Simulation::Protocol.encode(world)["p"].find { |entry| entry["i"] == snake.id }
     assert_equal ["down", "left"], player["dq"]
     assert_equal 2, player["gr"]
+    # A Responsive step does not play the direction queue. The queued turns stay
+    # metadata; the snake holds until a reported cell arrives.
     world.step!
     player = Simulation::Protocol.encode(world)["p"].find { |entry| entry["i"] == snake.id }
-    assert_equal "down", player["d"]
-    assert_equal ["left"], player["dq"]
-    assert_equal 1, player["gr"]
-    assert_equal 2, player["is"], "accepted sequence is not the same as both turns having moved"
+    assert_equal "right", player["d"]
+    assert_equal ["down", "left"], player["dq"]
+    assert_equal 2, player["gr"]
+    assert_equal [5, 5], snake.head
+    assert_equal 2, player["is"], "queueing a direction still records the accepted sequence"
   end
 
   def test_classic_snapshot_has_no_new_presentation_fields

@@ -131,31 +131,27 @@ class MovementBroadcastTest < ActiveSupport::TestCase
     assert payload["p"].all? { |player| player["b"].is_a?(Array) }, "a resync carries whole bodies"
   end
 
-  # Two independent controllers, one match: each member's own command envelope
-  # must move only their own snake, and the authoritative result must apply to
-  # both. (The browser-level version of this needs two real tabs; this is the
-  # server side of it, which is where the authority lives.)
+  # Two independent controllers, one match: each member's reported cell moves
+  # only their own snake. A direction without a cell does not.
   test "two participants steer only their own snakes in a Responsive match" do
     match = started_match("responsive")
     world = world_for(match)
     first, second = match.match_participants.order(:id).to_a
-    started = world.snakes.to_h { |snake| [snake.id, snake.head] }
+    started = world.snakes.to_h { |snake| [snake.id, snake.head.dup] }
+    now = Time.current
+    assert match.claim_lease!(token: "relay", ttl_seconds: 60, now: now)
 
-    queued_first = match.accept_direction!(
-      membership: first.room_membership,
-      input: Simulation::Protocol::Input.new(match_id: match.id, direction: Simulation::Direction.parse("down"),
-                                            tick: world.tick, seq: 1)
-    )
-    queued_second = match.accept_direction!(
-      membership: second.room_membership,
-      input: Simulation::Protocol::Input.new(match_id: match.id, direction: Simulation::Direction.parse("up"),
-                                            tick: world.tick, seq: 1)
-    )
-    assert_equal :queued, queued_first
-    assert_equal :queued, queued_second
+    [[first, "down"], [second, "up"]].each do |participant, direction_name|
+      snake = world.player(participant.id)
+      direction = Simulation::Direction.parse(direction_name)
+      cell = [(snake.head[0] + direction.dx) % world.columns, (snake.head[1] + direction.dy) % world.rows]
+      report = Simulation::Protocol::Report.new(match_id: match.id, direction: direction, tick: world.tick,
+                                                seq: 1, cell: cell[1] * world.columns + cell[0])
+      assert_equal :queued, match.accept_report!(membership: participant.room_membership, report: report, now: now)
+    end
 
-    match.apply_queued_inputs!(world: world, token: match.claim_lease!(token: "t", ttl_seconds: 60, now: Time.current),
-                               now: Time.current)
+    rejected = match.apply_queued_inputs!(world: world, token: "relay", now: now)
+    assert_equal [], rejected
     world.step!
     moved = world.snakes.to_h { |snake| [snake.id, snake.head] }
     refute_equal started[first.id], moved[first.id], "the first participant's snake moved"

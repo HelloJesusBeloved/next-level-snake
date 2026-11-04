@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_14_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_15_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -36,11 +36,13 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_14_000000) do
     t.bigint "input_seq", null: false
     t.bigint "client_tick", null: false
     t.string "direction", null: false
+    t.integer "head_cell"
     t.datetime "received_at", null: false
     t.index ["match_id", "id"], name: "match_inputs_match_order_idx"
     t.index ["match_participant_id", "input_seq"], name: "match_inputs_participant_seq_idx", unique: true
     t.check_constraint "direction::text = ANY (ARRAY['up'::character varying, 'down'::character varying, 'left'::character varying, 'right'::character varying]::text[])", name: "match_inputs_direction_check"
     t.check_constraint "input_seq > 0 AND client_tick >= 0", name: "match_inputs_sequence_check"
+    t.check_constraint "head_cell IS NULL OR head_cell >= 0", name: "match_inputs_head_cell_check"
   end
 
   create_table "match_presences", force: :cascade do |t|

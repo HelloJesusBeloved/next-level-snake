@@ -45,6 +45,11 @@ class ResponsiveFoodIdentityTest < Minitest::Test
     snake.direction = Simulation::Direction.parse("right")
     snake.food = Simulation::Food.new(x: 4, y: 3, owner_id: snake.id, generation: 1)
     before = snake.length
+    # Responsive does not invent the step. The browser reports the cell it entered.
+    assert_equal :queued, world.enqueue_pose!(
+      player_id: snake.id, cell: [4, 3], direction: Simulation::Direction.parse("right"),
+      tick: world.tick, seq: 1
+    )
     world.step!
     frame = Simulation::Protocol.encode(world)
     event = frame["fe"].find { |entry| entry["o"] == snake.id }

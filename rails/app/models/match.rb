@@ -224,6 +224,40 @@ class Match < ApplicationRecord
     :stale_sequence
   end
 
+  # Responsive: the browser already moved. Store the cell it stepped into.
+  # Same sequence reservation as a direction. The tick is informational —
+  # ordering is the sequence — so a stale snapshot tick cannot drop a real step.
+  def accept_report!(membership:, report:, now: Time.current)
+    checkpoint = self.class.where(id: id, status: %w[pending running]).pick(:checkpoint_tick)
+    return :match_not_running if checkpoint.nil?
+
+    participant = match_participants.find_by(room_membership_id: membership.id)
+    return :not_a_participant unless participant
+    return :eliminated unless participant.status == "alive"
+    return :disconnected unless participant.connection_state == "connected"
+    return :frozen if participant.freeze_deadline_at.present? && participant.freeze_deadline_at > now
+    return :stale_sequence unless report.seq.is_a?(Integer) && report.seq > participant.last_input_seq
+    return :invalid_tick unless report.tick.is_a?(Integer) && report.tick >= 0
+    return :invalid_cell unless report.cell.is_a?(Integer) && report.cell >= 0
+    if MatchInput.where(match_participant_id: participant.id).count >= MAX_PENDING_INPUTS_PER_PARTICIPANT
+      return :queue_full
+    end
+
+    reserved = match_participants
+               .where(id: participant.id, status: "alive", connection_state: "connected")
+               .where("last_input_seq < ?", report.seq)
+               .where("freeze_deadline_at IS NULL OR freeze_deadline_at <= ?", now)
+               .update_all(last_input_seq: report.seq, updated_at: now)
+    return :stale_sequence if reserved.zero?
+
+    match_inputs.create!(match_participant: participant, input_seq: report.seq,
+                         client_tick: report.tick, direction: report.direction.name,
+                         head_cell: report.cell, received_at: now)
+    :queued
+  rescue ActiveRecord::RecordNotUnique
+    :stale_sequence
+  end
+
   # The sole owner drains durable commands immediately before a logical step.
   # Applied rows stay until the checkpoint that includes their sequence
   # commits, so a crash replays them from the previous checkpoint.
@@ -239,9 +273,40 @@ class Match < ApplicationRecord
     return nil unless owned_by?(token: token, now: now)
 
     rejected = []
+    waiting = {}
     entries.each do |entry|
+      next if waiting[entry.match_participant_id]
+
       snake = world.player(entry.match_participant_id)
       next if snake && snake.last_seq >= entry.input_seq
+
+      if !entry.head_cell.nil?
+        cell = if entry.head_cell.is_a?(Integer) && entry.head_cell >= 0 &&
+                  entry.head_cell < world.columns * world.rows
+                 [entry.head_cell % world.columns, entry.head_cell / world.columns]
+               end
+        outcome = world.enqueue_pose!(
+          player_id: entry.match_participant_id, cell: cell,
+          direction: Simulation::Direction.parse(entry.direction),
+          tick: entry.client_tick, seq: entry.input_seq
+        )
+        if outcome == :queued
+          on_applied&.call({ participant: entry.match_participant_id, seq: entry.input_seq,
+                             tick: world.tick })
+          next
+        end
+        # The in-memory queue is full. Leave this row AND every later row for
+        # the same snake, so the next tick paints them in order.
+        if outcome == :pose_queue_full
+          waiting[entry.match_participant_id] = true
+          next
+        end
+
+        rejected << { participant: entry.match_participant_id, seq: entry.input_seq,
+                      reason: outcome, tick: world.tick }
+        match_inputs.where(id: entry.id).delete_all
+        next
+      end
 
       outcome = world.apply_input(
         player_id: entry.match_participant_id,

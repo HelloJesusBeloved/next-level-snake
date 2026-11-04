@@ -6,12 +6,18 @@ module Simulation
     SNAPSHOT_VERSION = VERSION
     INPUT_TYPE = "input".freeze
     INPUT_KEYS = %w[v type match tick seq dir].freeze
+    # A Responsive browser reports the cell it already stepped into. This is a
+    # different message from "input": the Classic envelope stays exactly the
+    # five fields above, and unknown fields on an input are still rejected.
+    REPORT_TYPE = "report".freeze
+    REPORT_KEYS = %w[v type match tick seq dir c].freeze
     FORBIDDEN_INPUT_KEYS = %w[
       player player_id membership membership_id position positions body bodies cells
       score scores score_delta winner winners alive length grow food head x y
     ].freeze
 
     Input = Struct.new(:match_id, :direction, :tick, :seq, keyword_init: true)
+    Report = Struct.new(:match_id, :direction, :tick, :seq, :cell, keyword_init: true)
 
     module_function
 
@@ -183,6 +189,37 @@ module Simulation
       raise InvalidInput.new(:invalid_sequence) unless seq.is_a?(Integer) && seq.positive?
 
       Input.new(match_id: match_id.to_i, direction: Direction.parse(data["dir"]), tick: tick, seq: seq)
+    end
+
+    # A cell the browser already moved into. `c` is a board index (y * columns + x),
+    # the same encoding snapshots use for bodies. It is intentionally NOT accepted
+    # on type "input". Identity still comes from the socket, never the payload.
+    def parse_report(payload)
+      raise InvalidInput.new(:invalid_payload, "report must be an object") unless payload.respond_to?(:to_h)
+
+      data = payload.to_h.transform_keys(&:to_s)
+      forbidden = data.keys & FORBIDDEN_INPUT_KEYS
+      raise InvalidInput.new(:forbidden_field, "clients may not send #{forbidden.join(', ')}") if forbidden.any?
+
+      unknown = data.keys - REPORT_KEYS
+      raise InvalidInput.new(:unknown_field, "unknown fields #{unknown.join(', ')}") if unknown.any?
+      raise InvalidInput.new(:invalid_version, "unsupported protocol version") unless data["v"].to_i == SNAPSHOT_VERSION
+      raise InvalidInput.new(:invalid_type, "type must be \"report\"") unless data["type"] == REPORT_TYPE
+
+      match_id = data["match"]
+      raise InvalidInput.new(:invalid_match) unless match_id.is_a?(Integer) || match_id.to_s.match?(/\A\d+\z/)
+
+      tick = data["tick"]
+      raise InvalidInput.new(:invalid_tick) unless tick.is_a?(Integer) && tick >= 0
+
+      seq = data["seq"]
+      raise InvalidInput.new(:invalid_sequence) unless seq.is_a?(Integer) && seq.positive?
+
+      cell = data["c"]
+      raise InvalidInput.new(:invalid_cell, "report cell must be a board index") unless cell.is_a?(Integer) && cell >= 0
+
+      Report.new(match_id: match_id.to_i, direction: Direction.parse(data["dir"]),
+                 tick: tick, seq: seq, cell: cell)
     end
   end
 end

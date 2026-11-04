@@ -53,7 +53,7 @@ class MovementProtocolTest < Minitest::Test
     player = movement["p"].first
     %w[i h d l sc a fr is it].each { |key| assert player.key?(key), "missing #{key}" }
     refute player.key?("b"), "a movement frame carries a head, never a body"
-    assert_operator ActiveSupport::JSON.encode(movement).bytesize, :<, ActiveSupport::JSON.encode(full).bytesize
+    assert_operator JSON.generate(movement).bytesize, :<, JSON.generate(full).bytesize
   end
 
   def test_rebuilding_a_body_chain_reproduces_every_confirmed_body
@@ -66,12 +66,17 @@ class MovementProtocolTest < Minitest::Test
     # is no body to extend, which is exactly why the server sends full snapshots
     # periodically and on every structural change.
     seed_bodies = Simulation::Protocol.encode(world)["p"].to_h { |player| [player["i"], player["b"]] }
+    seq = Hash.new(0)
     40.times do |index|
-      # Steer snake 1 so the chain contains turns, not just straight lines.
-      direction = %w[down left up right][index % 4]
-      world.apply_input(player_id: 1, direction: Simulation::Direction.parse(direction),
-                        tick: world.tick, seq: index + 1,
-                        window: Simulation::World::QUEUED_INPUT_TICK_WINDOW)
+      # Responsive movement is the cell the browser reported. Feed one legal
+      # step per snake so the chain still contains turns, not just a held body.
+      world.snakes.each do |snake|
+        next unless snake.alive?
+
+        direction = snake.id == 1 ? %w[down left up right][index % 4] : snake.direction.name
+        seq[snake.id] += 1
+        relay_pose!(world, snake, direction, seq[snake.id])
+      end
       world.step!
       full = Simulation::Protocol.encode(world)
       authoritative << [world.tick, full["p"].to_h { |player| [player["i"], player["b"]] }]
@@ -119,6 +124,7 @@ class MovementProtocolTest < Minitest::Test
     place(world, snake, body: [[5, 5], [4, 5], [3, 5]], direction: "right", grow: 2)
     place_food(snake, [6, 5])
     before = Simulation::Protocol.encode(world)["p"].first["b"]
+    relay_pose!(world, snake, "right", 1)
     world.step!
     after_frame = Simulation::Protocol.encode(world)["p"].first
     movement = Simulation::Protocol.encode_movement(world)["p"].first
@@ -136,5 +142,13 @@ class MovementProtocolTest < Minitest::Test
     # A movement encoding still exists (the Rails tests and any future client can
     # use it), but the runner never sends it for a Classic match.
     assert_equal "classic", Simulation::Protocol.encode_movement(world)["strategy"]
+  end
+
+  def relay_pose!(world, snake, direction_name, seq)
+    direction = Simulation::Direction.parse(direction_name)
+    cell = [(snake.head[0] + direction.dx) % world.columns, (snake.head[1] + direction.dy) % world.rows]
+    outcome = world.enqueue_pose!(player_id: snake.id, cell: cell, direction: direction,
+                                  tick: world.tick, seq: seq)
+    assert_equal :queued, outcome, "tick #{world.tick} player #{snake.id} #{direction_name}"
   end
 end

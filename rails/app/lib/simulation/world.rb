@@ -175,6 +175,39 @@ module Simulation
       outcome
     end
 
+    # Responsive only. The browser already moved into `cell`; this queues that
+    # cell so the next step can paint it for everyone else. It does not choose
+    # a different cell from the direction. `cell` is an [x, y] pair. A pose that
+    # is not exactly one orthogonal step from the tail of this snake's queue
+    # (or its head, if the queue is empty) is rejected and the body is left
+    # where it is. Sequence numbers are consumed on rejection so the same
+    # report cannot be replayed with a different cell, except :pose_queue_full,
+    # which leaves the sequence unused so the owner can retry once a pose has
+    # been painted.
+    def enqueue_pose!(player_id:, cell:, direction:, tick:, seq:)
+      snake = snakes.find { |candidate| candidate.id == player_id }
+      return :not_a_participant unless snake
+      return :match_not_running unless running?
+      return :eliminated unless snake.alive
+      return :frozen if snake.frozen?
+      return :disconnected unless snake.connection_state == "connected"
+      return :invalid_tick unless tick.is_a?(Integer) && tick >= 0
+      return :stale_sequence unless seq.is_a?(Integer) && seq.positive? && seq > snake.last_seq
+      return :pose_queue_full if snake.poses.length >= Snake::MAX_POSE_QUEUE
+
+      snake.last_seq = seq
+      return :invalid_cell unless cell.is_a?(Array) && cell.length == 2 &&
+                                  cell[0].is_a?(Integer) && cell[1].is_a?(Integer) &&
+                                  cell[0].between?(0, @columns - 1) && cell[1].between?(0, @rows - 1)
+
+      tip = snake.poses.last&.cell || snake.head
+      delta = step_delta(tip, cell)
+      return :illegal_step unless delta[0].abs + delta[1].abs == 1
+      return :heading_mismatch unless direction.dx == delta[0] && direction.dy == delta[1]
+
+      snake.enqueue_pose(cell, direction, seq: seq, tick: tick)
+    end
+
     # Removes a participant from the simulation (left the room / grace expired).
     # Score is frozen as their final points, matching the ranking rule.
     def remove_player!(player_id, reason: :left, at_tick: @tick)
@@ -189,6 +222,21 @@ module Simulation
     # ---- simulation ----------------------------------------------------------
 
     def step!
+      raise StateError, "match is #{status}" unless running?
+
+      # Responsive snakes move only by adopting a cell the browser already
+      # stepped into. A direction queued the Classic way must not invent a
+      # different corner, and an empty pose queue holds the snake: the server
+      # does not keep walking it in a straight line.
+      return step_relay! if presentation_strategy == "responsive"
+
+      step_authored!
+    end
+
+    # Classic movement. One queued direction, one wrapped cell, then the same
+    # collisions and food rules this method has always applied. Responsive
+    # matches do not enter here.
+    def step_authored!
       raise StateError, "match is #{status}" unless running?
 
       next_tick = @tick + 1
@@ -245,6 +293,89 @@ module Simulation
 
       @tick = next_tick
       # Movement progress, not wall-clock passes: frozen-only rounds are idle.
+      @active_ticks += 1 if movers.any?
+      complete_if_over!
+      StepResult.new(tick: @tick, status: status, eliminated: eliminated,
+                     eaten: consumed.map { |snake, _food| snake.id })
+    end
+
+    # Responsive movement. Exactly one queued pose per snake, and only when it
+    # is still the single cell in front of the head. Snakes with nothing queued
+    # hold. Classic never calls this.
+    def step_relay!
+      next_tick = @tick + 1
+      @food_events = []
+      movers = alive_snakes.reject(&:frozen?)
+      frozen_snakes.each { |snake| snake.frozen_ticks += 1 if snake.alive? }
+      targets = {}
+      movers.each do |snake|
+        pose = snake.poses.first
+        next unless pose
+
+        delta = step_delta(snake.head, pose.cell)
+        unless delta[0].abs + delta[1].abs == 1 &&
+               pose.direction.dx == delta[0] && pose.direction.dy == delta[1]
+          snake.poses.clear
+          next
+        end
+
+        snake.poses.shift
+        snake.direction = pose.direction
+        snake.last_applied_seq = pose.seq
+        snake.last_applied_tick = next_tick
+        targets[snake.id] = [pose.cell[0], pose.cell[1]]
+      end
+
+      blocking = {}
+      targets.each_key { |player_id| blocking[player_id] = player!(player_id).surviving_cells }
+      if rules.solid_opponents?
+        alive_snakes.each do |snake|
+          next if targets.key?(snake.id)
+
+          blocking[snake.id] = snake.body.dup
+        end
+      end
+
+      eliminated = {}
+      targets.each do |player_id, cell|
+        eliminated[player_id] = :self_collision if blocking.fetch(player_id).include?(cell)
+      end
+
+      if rules.solid_opponents?
+        targets.each_key do |player_id|
+          next if eliminated.key?(player_id)
+
+          cell = targets.fetch(player_id)
+          blocking.each do |other_id, cells|
+            next if other_id == player_id
+            next unless cells.include?(cell)
+
+            eliminated[player_id] = :body_collision
+            break
+          end
+        end
+
+        movers.select { |snake| targets.key?(snake.id) && !eliminated.key?(snake.id) }
+              .group_by { |snake| targets.fetch(snake.id) }
+              .each_value do |group|
+          next unless group.length > 1
+
+          group.each { |snake| eliminated[snake.id] = :head_on }
+        end
+      end
+
+      survivors = targets.keys.map { |player_id| player!(player_id) }.reject { |snake| eliminated.key?(snake.id) }
+      consumed = consume_food!(survivors, targets, next_tick)
+      survivors.each { |snake| snake.advance!(targets.fetch(snake.id)) }
+      consumed.each { |_snake, food| @shared_food.delete(food) } if rules.shared_food?
+      survivors.each { |snake| snake.survived_ticks += 1 }
+      eliminated.each do |player_id, reason|
+        player!(player_id).eliminate!(at_tick: next_tick, reason: reason)
+      end
+      respawn_food!(consumed) if rules.per_player_food?
+      shrink_food!(next_tick) if rules.shared_food? && rules.shrinking?
+
+      @tick = next_tick
       @active_ticks += 1 if movers.any?
       complete_if_over!
       StepResult.new(tick: @tick, status: status, eliminated: eliminated,
@@ -465,6 +596,17 @@ module Simulation
 
     def wrap(x, y)
       [x % @columns, y % @rows]
+    end
+
+    # Shortest one-cell delta on the torus, each component in -columns/2..columns/2.
+    # [0, 0] is the same cell. Anything whose absolute components sum to 1 is a
+    # legal orthogonal step, including a wrap.
+    def step_delta(from, to)
+      dx = (to[0] - from[0]) % @columns
+      dy = (to[1] - from[1]) % @rows
+      dx -= @columns if dx * 2 > @columns
+      dy -= @rows if dy * 2 > @rows
+      [dx, dy]
     end
 
     # Deterministic, non-overlapping spawns. Bodies extend left from the head

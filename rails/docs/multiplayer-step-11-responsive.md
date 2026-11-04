@@ -1,137 +1,118 @@
-# Responsive Brawl (step 11): one confirmed tick, plus a one-cell input lead
+# Responsive Brawl (step 11): a decisive local snake
 
 Responsive Brawl is a **presentation strategy**, not a game mode and not a rule
-set. A room's `mode` (`brawl`/`duel`) still decides the authoritative rules, and
-both presentation strategies are served by the same `Simulation::World`.
+set. A room's `mode` (`brawl`/`duel`) still decides food and whether snakes are
+solid. Classic is unchanged: the server simulates every step from direction
+inputs, and the browser paints those frames.
 
 | | Classic Brawl (default) | Responsive Brawl |
 | --- | --- | --- |
-| Own snake | the confirmed snapshot | the same confirmed tick, plus at most one not-yet-applied turn |
-| Other snakes | the confirmed snapshot | that same confirmed tick, one tick behind the newest frame |
-| Pellets, score, length | the confirmed snapshot | that same tick. The client does not keep its own pellet |
-| Wire | one complete snapshot per published frame | one complete snapshot per simulated tick, with `tick_ms`, `tm`, food generation `g` and eaten events `fe` |
-| Authority | server | server — unchanged. The input envelope is still `{v,type,match,tick,seq,dir}` |
+| Own snake | painted from the confirmed snapshot | **local and final**. One clock, one cell per `tick_ms`. A key changes the next cell. A packet never relocates this snake |
+| Other snakes | painted from the confirmed snapshot | the cells that snake reported, played one tick behind the newest frame |
+| Pellets, score, length | the confirmed snapshot | the server's pellet and score. A local bite grows and scores immediately, and is not counted twice when the server catches up |
+| Wire | `{v,type,match,tick,seq,dir}` input, classic snapshot bytes | one `report` per step, and one complete snapshot per simulated tick |
+| What the server decides | the whole step | that the reported cell is one orthogonal step, then food, score, and solid collisions. It does not pick a different corner |
 
-A full snapshot of a normal board is about a kilobyte (two length-8 snakes on
-24×18). At 105 ms that is about 10 KB/s. Compact movement frames were smaller
-and could not say which pellet generation was eaten, and a catch-up of several
-`step!` calls used to publish only the last tick. Responsive matches therefore
-send the complete frame for every tick. Classic's snapshot bytes are unchanged.
+The own snake and the server tick are **different clocks on purpose**. The
+browser does not wait for the server tick, and it does not rewind when a frame
+arrives. A report that is not one legal step is dropped and that snake holds.
+There is no broader anti-cheat.
 
 ## Where the code lives
 
 | Concern | File |
 | --- | --- |
 | Strategy as a room/match setting | `rails/app/models/room.rb`, `.../concerns/room_configuration.rb`, `rails/app/models/match.rb` |
+| Local snake | `public/multiplayer/decisive.js` |
+| Report intake | `MatchChannel#report`, `Match#accept_report!`, `match_inputs.head_cell` |
+| Relay step | `Simulation::World#step!` when `presentation_strategy` is `responsive` |
 | Food generation and eaten events | `rails/app/lib/simulation/food.rb`, `world.rb`, `protocol.rb` |
-| One frame per simulated tick | `rails/app/models/match_runner.rb` (`capture_responsive_frame`, `publish_frame`) |
-| One-cell input lead | `public/multiplayer/prediction.js` |
-| Render delay of one tick | `public/multiplayer/playback.js` |
+| One frame per simulated tick | `rails/app/models/match_runner.rb` |
+| Remote playback | `public/multiplayer/playback.js` |
 | Canvas | `public/multiplayer/game-renderer.js` |
 
-## What the client draws
+## What you see
 
-Every snake, pellet, length and score on the canvas comes from one confirmed
-tick: `newest - 1`. The playhead slews toward that tick and keeps leftover
-time, so a burst does not become a permanent offset. It never glides and never
-invents a cell for a hole.
+* Your snake seeds from the first snapshot, then steps every `tick_ms` even if
+  you are not pressing a key. The next key is the next cell (no duplicate, no
+  180, queue of 2), same rules as single player.
+* Each step sends the cell you entered. The server paints that cell for
+  everyone else on its own tick, one cell at a time. Your view is not delayed
+  to match theirs.
+* Pellets are the server's. When your head lands on your pellet you grow and
+  score immediately. The report is how the server counts the point and
+  respawns. Until that respawn arrives, the bitten cell is not drawn again,
+  and a server score that catches up does not add the point a second time.
+* A self-collision stops you locally and is the same cell the server eliminates
+  on. A duel collision is still the server's call, so that death can show up
+  one round trip later. The body you already drew is not teleported onto the
+  server's copy.
+* Disconnect freezes you, same as Classic. When grace expires a Responsive
+  snake **holds** its last cell. It does not keep walking without you. Classic
+  still does.
 
-The only thing predicted locally is a turn the server has not applied yet, drawn
-one cell ahead of that confirmed body. On the frame for that tick the predicted
-head is compared with the server head. If the difference is the pending turn,
-the turn stays. Any other difference snaps to the server body. Food is never
-predicted.
+## What is not this
 
-## Remote playback model
-
-A snapshot is a complete authoritative frame. The browser keeps those frames
-keyed by tick and renders `playhead = newest confirmed tick - 1`.
-
-Interpolation is not used. Segment positions are whole cells from the frame
-being rendered. A missing tick is skipped to the next stored snapshot. The
-render delay is one tick, not an adaptive 90–600 ms cushion.
-
-## Input
-
-Clients still send only `{ v, type, match, tick, seq, dir }`.
-`FORBIDDEN_INPUT_KEYS` is unchanged. The server still applies a queued turn on
-the following `step!`.
-
-
-### Recovery
-
-| Situation | Behaviour |
-| --- | --- |
-| tick gap ≤ `resyncGapTicks` (12) | hold the confirmed body; the next full snapshot heals it |
-| tick gap > 12 | discard and request a full frame (`MatchChannel#resync`) |
-| compact frame with no usable predecessor, or an impossible length | refuse it, request a full frame |
-| reconnect / rematch | prediction **and** playback buffers are reset; the seed snapshot rebuilds both |
+* No interpolation and no glide. Remotes are whole cells.
+* No local clock that tries to land on the server's tick.
+* Classic matches never receive a `report` and never relay poses. Their step
+  and their snapshot bytes are the ones from before this change.
 
 ## Wire format
 
+A Responsive step sends:
+
+```json
+{ "v": 1, "type": "report", "match": 1, "tick": 0, "seq": 1, "dir": "down", "c": 27 }
+```
+
+`c` is the board index just entered (`y * columns + x`). It is not accepted on
+a Classic `input`. Unknown fields on either message are rejected.
+
 Responsive matches broadcast `Protocol.encode` — a complete snapshot — for every
-simulated tick, including each step of a catch-up burst. The additive fields are
+simulated tick, including each step of a catch-up. The additive fields are
 `tick_ms`, `tm` (tick × tick_ms), food generation `g`, and `fe` (eaten events:
-owner, generation, tick, cell). Classic snapshots do not include those keys, and
-Classic food stays `{c, o}`.
+owner, generation, tick, cell). Classic snapshots do not include those keys,
+and Classic food stays `{c, o}`.
 
 `encode_movement` still exists and the Rails reconstruction test still proves a
 contiguous compact chain is lossless. Responsive does not put that chain on the
-wire. A compact frame cannot name which pellet generation was eaten, and a
-catch-up that published only the last tick forced the browser to invent the
-ones in between. A full snapshot of two length-8 snakes on 24×18 is about 1.1 KB,
-about 10 KB/s at 105 ms.
+wire: a compact frame cannot name which pellet generation was eaten.
 
 **Classic matches never receive a movement frame and never receive the
 Responsive fields.** Their byte stream is unchanged.
 
-## Diagnostics
+## Remote playback
 
-`Movement diagnostics` (below the controls) now reports, at 1 Hz and only while
-open:
-
-* the active strategy, from the **locked match** (`presentation_strategy`), and
-  whether the client confirmed it from a frame or only from the match summary;
-* prediction vs confirmed tick, lead, pending sequences, reconciliations,
-  corrections, largest correction;
-* measured RTT (input round trip) with its spread, plus a propagation estimate;
-* remote playback delay (measured) vs target (estimated), arrival jitter
-  (estimated), buffered ticks, playhead, underruns, missing ticks, gaps, resyncs,
-  stale discards, compact-vs-full frame counts, wrap frames, and playback canvas
-  cost;
-* Classic renders `Prediction: off …` / `Remote playback: off …` rather than
-  zeroes that could be mistaken for measurements.
+Other snakes are `RemotePlayback`: confirmed frames, playhead at the newest
+tick minus one, whole cells only. The own snake is not taken from that buffer.
 
 ## Tests
 
-* `rails/test/simulation/responsive_food_identity_test.rb` — generation increments
-  once per eat, a catch-up keeps every tick, Classic snapshots gain no new keys.
+* `rails/test/simulation/decisive_relay_test.rb` — hold without a pose, one
+  pose per tick, illegal and mismatched headings, eat, self-collision, wrap,
+  1000 steps of heading-matched deltas, checkpointed poses, Classic still
+  moves from a direction, `parse_report` vs `parse_input`.
+* `rails/test/simulation/responsive_food_identity_test.rb` — generation
+  increments once per reported eat, a catch-up keeps every tick, Classic
+  snapshots gain no new keys.
 * `rails/test/channels/movement_broadcast_test.rb` — Classic sends snapshots
-  only; Responsive sends one complete snapshot per tick with `tick_ms`, `tm`,
-  `fe` and food `g`.
-* `tests/responsive-authority.test.mjs` — two clients, loss and jitter, one
-  pellet per owner at the server cell, render offset does not grow.
-* `rails/test/controllers/api/brawl_presentation_strategy_test.rb` — a Responsive
-  match starts and the strategy is reported truthfully on the start response, the
-  frozen room configuration, the match row, the world and both frame types.
-* `tests/remote-playback.test.mjs` — ordering, bounded buffer, playhead held
-  at newest tick minus one, surplus time kept, a hole is not filled with an
-  invented body, compact reconstruction refused, freeze/elimination, two
-  independent clients, Classic inert.
-* `tests/grid-renderer.test.mjs` — renderer integration: which snake is painted
-  from which source, refusal + resync, throttling, reconnect/destroy cleanup, and
-  a Classic-vs-Responsive diagnostics comparison.
+  only; Responsive sends one complete snapshot per tick; each report moves
+  only that snake.
+* `tests/decisive.test.mjs` — turns at phases 0 / 0.25 / 0.5 / 0.99, straight
+  steps with no packet, a snapshot that must not yank the head, food once,
+  score not doubled, self-collision, reseed.
+* `tests/grid-renderer.test.mjs` — own snake from the local clock, remotes from
+  the confirmed tick, Classic paints the server frame.
+* The older prediction module (`public/multiplayer/prediction.js`) is no longer
+  what Responsive paints. Its unit tests still describe that module.
 
 ## What is NOT verifiable in a CI sandbox — please check on your server
 
-1. **Real Cloudflare Tunnel latency/jitter.** Tuning targets come from the brief
-   and from arrival-spread measurements in tests, not from a physical profile.
-   Watch `Remote playback: delay … measured (target …)` on a real link.
-2. **Physical mobile devices.** Canvas cost is measured, but scanout, touch
-   latency and thermal throttling need a device.
-3. **The 60 fps feel.** `requestAnimationFrame` cadence in tests is simulated.
-4. **PostgreSQL NOTIFY under real fan-out.** The chunking change is reasoned about
-   and unit-tested, not load-tested across many Puma workers.
-5. **Two real browser tabs fighting for one identity.** The sequence mirror is
-   tested server-side (`last_input_seq`) and in the client buffer, but not with
-   two physical sessions on your tunnel.
+1. Two browsers on a real link: your turn is the next cell, and your friend's
+   view of you is about one tick behind and still one cell at a time.
+2. A duel head-on. The server decides it, so the loser can see it a round
+   trip late.
+3. Physical mobile scanout. The logical step is one cell per `tick_ms`; the
+   display refresh is the device's.
+4. Run the new migration (`match_inputs.head_cell`) before booting the server.

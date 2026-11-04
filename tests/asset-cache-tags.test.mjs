@@ -52,7 +52,7 @@ test('the entry points the page loads are tagged with the current release', () =
   // a step-10 tag: that URL is what every browser and edge cache already holds.
   for (const [file, byImporter] of references) {
     for (const [from, tag] of byImporter) {
-      if (['lobby.js', 'game-renderer.js', 'configuration.js', 'prediction.js', 'playback.js', 'page.js', 'lobby.css'].includes(file)) {
+      if (['lobby.js', 'game-renderer.js', 'configuration.js', 'prediction.js', 'playback.js', 'decisive.js', 'page.js', 'lobby.css'].includes(file)) {
         assert.ok(!/^step10-/.test(tag || ''), `${from} still loads ${file} under the pre-Responsive tag ${tag}`);
       }
     }

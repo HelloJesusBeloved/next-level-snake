@@ -214,7 +214,7 @@ test('cacheable multiplayer entry points and modified dependency imports carry t
   assert.ok(read('public/multiplayer/page.js').includes(`./lobby.js?v=${release}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./game-renderer.js?v=${release}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./configuration.js?v=${release}`));
-  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./prediction.js?v=${release}`));
+  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./decisive.js?v=${release}`));
   assert.ok(read('public/multiplayer/game-renderer.js').includes(`./playback.js?v=${release}`));
   assert.ok(read('public/multiplayer/game-renderer.js').includes(`./grid-cadence.js?v=${unchanged}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./snapshot-chunks.js?v=${unchanged}`));

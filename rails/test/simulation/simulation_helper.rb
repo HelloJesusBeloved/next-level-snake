@@ -31,6 +31,7 @@ module SimulationTestSupport
     snake.body.replace(body.map { |cell| [cell[0], cell[1]] })
     snake.direction = Simulation::Direction.parse(direction)
     snake.queue.clear
+    snake.poses.clear if snake.respond_to?(:poses)
     snake.grow = grow
     snake.score = score
     snake.alive = true

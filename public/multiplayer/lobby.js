@@ -196,6 +196,7 @@ export function mountLobby(root) {
     status: el.gameStatus,
     ownParticipantId: null,
   }) : null;
+  gameRenderer?.setDecisiveStepHandler((report) => sendReport(report));
 
   // ---- helpers --------------------------------------------------------------
 
@@ -257,7 +258,9 @@ export function mountLobby(root) {
       setBrawlConn('lost', `Connection lost — snake frozen, ${seconds}s grace left. Reconnecting…`);
       if (seconds <= 0) {
         stopFreezeCountdown();
-        setBrawlConn('warn', 'Grace expired — your snake keeps moving on its own. Reconnecting…');
+        setBrawlConn('warn', state.match?.presentation_strategy === 'responsive'
+          ? 'Grace expired — your snake holds its last cell. Reconnecting…'
+          : 'Grace expired — your snake keeps moving on its own. Reconnecting…');
       }
     };
     tick();
@@ -286,6 +289,14 @@ export function mountLobby(root) {
     if (!pr) return ['Prediction: unavailable in this build'];
     if (!pr.enabled) {
       return [`Prediction: off (server strategy ${state.match?.presentation_strategy || 'classic'} — Classic Brawl paints server frames only)`];
+    }
+    if (pr.decisive) {
+      return [
+        `Own snake: local and final · painted ${pr.painted ? 'LOCAL' : 'server frame'} · armed by ${pr.mode?.testOnly ? 'TEST OVERRIDE (not a Responsive match)' : 'server strategy'}`,
+        `Local tick ${pr.predictedTick} · last reported seq ${pr.reportedSeq ?? '–'} · pending reports [${pr.pendingSeqs.join(', ') || '–'}]`,
+        `Turns waiting for the next cell: ${pr.pending} · steps ${pr.predictedTicks} · eats ${pr.predictedFood || 0} · corrections ${pr.corrections} (a packet cannot move you)`,
+        `Server tick ${pr.confirmedTick ?? '–'} is the frame other players are painted from. It is not this snake's clock.`,
+      ];
     }
     const pct = (pr.correctionRate * 100).toFixed(1);
     const lines = [
@@ -338,12 +349,17 @@ export function mountLobby(root) {
     const d = gameRenderer?.movementDiagnostics();
     const confirmed = d?.prediction?.confirmedTick ?? null;
     const predicted = d?.prediction?.predictedTick ?? null;
+    const decisive = d?.prediction?.decisive;
     return [
       `Network RTT: ${rtt === null ? 'no sample yet' : `${rtt}ms measured (input round trip)${jitter === null ? '' : ` · spread ${jitter}ms`}`}` +
         ` · propagation to this board ≈ ${rtt === null ? '–' : `${Math.round(rtt / 2)}ms estimated`}`,
-      `Ticks: predicted ${predicted ?? '–'} vs confirmed ${confirmed ?? '–'}` +
-        ` · remote playhead ${d?.playback?.lastSample?.tick ?? '–'}` +
-        ` · strategy ${state.match?.presentation_strategy || 'classic'} (server-locked)`,
+      decisive
+        ? `Ticks: local ${predicted ?? '–'} · server ${confirmed ?? '–'} (different clocks on purpose)` +
+          ` · remote playhead ${d?.playback?.lastSample?.tick ?? '–'}` +
+          ` · strategy ${state.match?.presentation_strategy || 'classic'} (server-locked)`
+        : `Ticks: predicted ${predicted ?? '–'} vs confirmed ${confirmed ?? '–'}` +
+          ` · remote playhead ${d?.playback?.lastSample?.tick ?? '–'}` +
+          ` · strategy ${state.match?.presentation_strategy || 'classic'} (server-locked)`,
     ];
   }
 
@@ -353,7 +369,7 @@ export function mountLobby(root) {
     const stat = (v) => `p50 ${v.p50} · p95 ${v.p95} · max ${v.max} ms`;
     text(el.movementMetrics, [
       `Presentation strategy: ${state.match?.presentation_strategy || state.room?.presentation_strategy || 'classic'}` +
-        `${state.match?.presentation_strategy === 'responsive' ? ' (active: local prediction + buffered remote playback)' : ' (active: every frame painted as it arrives)'}`,
+        `${state.match?.presentation_strategy === 'responsive' ? ' (active: your snake is local; others play confirmed cells)' : ' (active: every frame painted as it arrives)'}`,
       `Client release: ${d.release}`,
       `Received tick ${d.receivedTick ?? '–'} · displayed ${d.displayedTick ?? '–'}`,
       `Last snapshot: ${d.lastSnapshotAgeMs ?? '–'} ms ago`,
@@ -516,8 +532,8 @@ export function mountLobby(root) {
         state.inputSeq = Math.max(state.inputSeq, Number(state.member?.last_input_seq || 0));
         gameRenderer.noteInputSequence(Number(state.member?.last_input_seq || 0));
         flash(prediction.testOnly
-          ? 'TEST MODE: local prediction is armed for measurement while the server still presents this Brawl as classic. Remote snakes and every result stay server-authoritative.'
-          : 'Responsive Brawl: your own snake moves on your key press; the server still owns everything else.', 'info');
+          ? 'TEST MODE: your snake steps locally while the server still presents this Brawl as classic. Other players and every result stay on the server.'
+          : 'Responsive Brawl: your snake steps on your clock. Everyone else sees those cells a moment later.', 'info');
       }
     }
     if (el.gameTick && state.gameSnapshot) text(el.gameTick, `Tick ${state.gameSnapshot.t}`);
@@ -1174,7 +1190,9 @@ export function mountLobby(root) {
         refresh(); // re-read the authoritative sequence mirror
       } else if (message.state === 'unattended') {
         stopFreezeCountdown();
-        setBrawlConn('warn', 'Grace expired — your snake keeps moving on its own. Reconnect to take control.');
+        setBrawlConn('warn', state.match?.presentation_strategy === 'responsive'
+          ? 'Grace expired — your snake holds its last cell. Reconnect to take control.'
+          : 'Grace expired — your snake keeps moving on its own. Reconnect to take control.');
         refresh();
       }
       return;
@@ -1342,6 +1360,17 @@ export function mountLobby(root) {
     return Math.round(sorted[sorted.length - 1] - sorted[0]);
   }
 
+  // One cell, sent when the local snake actually enters it. Not sent for a key
+  // that was only queued, and never sent as a Classic direction as well.
+  function sendReport(report) {
+    if (!matchSubscription || !report || report.type !== 'report') return;
+    if (!state.match || Number(report.match) !== Number(state.match.id)) return;
+    state.inputSeq = Math.max(state.inputSeq, report.seq);
+    state.inputSentAt.set(report.seq, performance.now());
+    while (state.inputSentAt.size > 24) state.inputSentAt.delete(state.inputSentAt.keys().next().value);
+    matchSubscription.perform('report', report);
+  }
+
   function sendDirection(direction) {
     const snapshot = state.gameSnapshot;
     const ownId = state.member?.match_participant_id;
@@ -1352,33 +1381,30 @@ export function mountLobby(root) {
     // anyway, and any pre-disconnect command still in flight is discarded on
     // the server when the socket is released.
     if (own.fr || state.match?.spectator) return;
+    gameRenderer?.expedite();
+    if (state.match?.presentation_strategy === 'responsive') {
+      const prediction = gameRenderer?.predict(direction) || null;
+      if (el.gameInputStatus && prediction && !prediction.rejectedReason) {
+        text(el.gameInputStatus, `Turning ${direction} on the next cell.`);
+        if (el.gameInputStatus.dataset.kind) el.gameInputStatus.dataset.kind = '';
+      }
+      return;
+    }
     // Every intent is sent. The server de-duplicates the direction queue
     // itself and the input path no longer takes a lock, so swallowing a
     // keypress here could only ever lose a real turn.
-    gameRenderer?.expedite(); // display pacing never waits on a local turn
     state.inputSeq = Math.max(state.inputSeq, Number(state.member.last_input_seq || 0)) + 1;
     const seq = state.inputSeq;
-    // 1-3. Capture immediately, assign the unique sequence, and hand it to the
-    //      predictor, which associates it with the tick it intends to move on
-    //      (never a confirmed one) and tells us what it decided.
     const prediction = gameRenderer?.predict(direction, seq) || null;
-    // A real, measured round trip: this is the only place the browser learns how
-    // long the server actually took to answer one of its own packets. It is
-    // reported in diagnostics as measured, never as a guess.
     state.inputSentAt.set(seq, performance.now());
     while (state.inputSentAt.size > 24) state.inputSentAt.delete(state.inputSentAt.keys().next().value);
-    // 4. Send. Sent regardless of the local verdict: a locally refused
-    //    duplicate/reversal is still the server's call, and a horizon refusal is
-    //    a PIXEL policy, not an input policy.
     matchSubscription.perform('input', {
       v: 1, type: 'input', match: state.match.id,
       tick: Number(snapshot.t), seq, dir: direction,
     });
-    // 5-6. The predicted tick is already in the local queue, so the next paint
-    //      shows it — no network wait. Only say "predicted" when it is true.
     if (el.gameInputStatus && prediction && !prediction.rejectedReason) {
       text(el.gameInputStatus,
-        `Predicted ${direction} on tick ${prediction.scheduledTick} (sequence ${seq}) — awaiting the server.`);
+        `Direction ${direction} queued (sequence ${seq}).`);
       if (el.gameInputStatus.dataset.kind) el.gameInputStatus.removeAttribute('data-kind');
     }
   }
