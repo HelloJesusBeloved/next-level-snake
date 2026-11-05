@@ -596,15 +596,49 @@ html.mp-page-focused input,
 html.mp-page-focused select,
 html.mp-page-focused textarea,
 html.mp-page-focused label { touch-action: manipulation; }
+.mp-debug-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
 @media (max-width: 900px) {
-  .mp-play {
-    display: flex;
-    flex-direction: column;
+  #multiplayer-root.band { padding: 16px 16px 32px; }
+  .mp-room { padding: 12px; margin-top: 12px; }
+  .mp-play { display: flex; flex-direction: column; gap: 12px; }
+  /* Same outer inset as Single Player (16px) and the same frame, so the
+     playfield is the same size. The room card's padding is cancelled here. */
+  .mp-game {
+    order: 1;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    margin-left: -12px;
+    margin-right: -12px;
   }
-  .mp-game { order: 1; }
+  .mp-screen { width: 100%; max-width: var(--screen-max); margin-left: auto; margin-right: auto; }
   .mp-standings-card { order: 2; }
   .mp-actions--room { order: 3; }
-  .mp-room-rest { order: 4; }
+  .mp-room-rest { order: 4; gap: 10px; }
+  .mp-share,
+  .mp-room__head {
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .mp-share__ident,
+  .mp-share__panel {
+    flex: 0 0 auto;
+    min-width: 0;
+    width: 100%;
+  }
+  .mp-share__url { margin-top: 6px; }
+  .mp-share__feedback:empty,
+  .mp-share__feedback:not([data-kind]) { display: none; }
+  .mp-room__meta,
+  .mp-roster { margin: 0; }
   .mp-page-focus { display: inline-flex; }
 }
 @media (min-width: 901px) {

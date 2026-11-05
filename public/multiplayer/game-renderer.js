@@ -5,8 +5,8 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-17';
-import { RemotePlayback } from './playback.js?v=step11-responsive-17';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-18';
+import { RemotePlayback } from './playback.js?v=step11-responsive-18';
 
 const HEX = /^#[0-9a-f]{6}$/i;
 
@@ -94,9 +94,13 @@ export class MultiplayerGameRenderer {
       } else {
         this.hudBudget.start();
         this.hudBudget.add('scores', () => this.drawScoreboard());
-        // Do not replay any frames collected while the tab was suspended.
+        this.local?.resumeClock(this.clock());
         this.cadence.reset();
         if (this.snapshot) this.cadence.receive(this.snapshot, this.clock(), true);
+        // A dropped animation frame while the tab was suspended leaves the
+        // loop id set and never paints again. Start a fresh one.
+        this.stopPredictionLoop();
+        this.startPredictionLoop();
         this.requestDraw();
       }
     };
@@ -367,7 +371,8 @@ export class MultiplayerGameRenderer {
       this.predictionLoop = null;
       if (!this.local?.enabled && !this.playback?.enabled) return;
       const at = this.clock();
-      const ticks = this.local?.enabled ? this.local.advance(at) : 0;
+      if (this.hidden) this.local?.resumeClock(at);
+      const ticks = !this.hidden && this.local?.enabled ? this.local.advance(at) : 0;
       const smooth = this.playback?.enabled ? this.playback.sample(at) : null;
       this.lastPlaybackSample = smooth;
       if (!this.hidden && !this.viewPaused && this.snapshot) {

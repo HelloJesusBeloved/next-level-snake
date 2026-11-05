@@ -12,11 +12,11 @@
  */
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
-import { mountConfiguration } from './configuration.js?v=step11-responsive-17';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-17';
+import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-18';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-17';
-import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-17';
+import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
+import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
 import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
@@ -121,6 +121,9 @@ export function mountLobby(root) {
     brawlConnText: $('mp-brawl-conn-text'),
     gameTick: $('mp-game-tick'),
     gameInputStatus: $('mp-game-input-status'),
+    gameHint: $('mp-game-hint'),
+    debugMode: $('mp-debug-mode'),
+    debugLabel: $('mp-debug-label'),
     gameTabs: $('mp-game-tabs'),
     gameBoardPane: $('mp-board-pane'),
     gameStandingsPane: $('mp-standings-pane'),
@@ -492,6 +495,7 @@ export function mountLobby(root) {
       el.start.disabled = strategyBlocked;
       el.start.title = startTitle;
     }
+    if (el.debugLabel) el.debugLabel.hidden = !amHost;
     if (el.again) {
       el.again.hidden = !amHost || room.state !== 'finished';
       el.again.disabled = strategyBlocked;
@@ -1809,6 +1813,22 @@ export function mountLobby(root) {
       renderMovementDiagnostics();
     });
   }
+  const DEBUG_KEY = 'mp-debug';
+  function debugOn() {
+    try { return window.sessionStorage.getItem(DEBUG_KEY) === '1'; } catch (err) { return false; }
+  }
+  function applyDebugChrome() {
+    const on = debugOn();
+    if (el.debugMode) el.debugMode.checked = on;
+    for (const node of [el.gameHint, el.gameInputStatus, el.movementDetails]) {
+      if (node) node.hidden = !on;
+    }
+  }
+  applyDebugChrome();
+  on(el.debugMode, 'change', () => {
+    try { window.sessionStorage.setItem(DEBUG_KEY, el.debugMode.checked ? '1' : '0'); } catch (err) { /* private mode */ }
+    applyDebugChrome();
+  });
   el.movementDetails?.addEventListener('toggle', () => {
     if (movementDiagnosticsTimer) clearInterval(movementDiagnosticsTimer);
     movementDiagnosticsTimer = null;

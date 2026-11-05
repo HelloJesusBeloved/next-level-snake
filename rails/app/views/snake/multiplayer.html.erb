@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-17">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-18">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -195,9 +195,9 @@
             <button class="btn btn--small" id="mp-duel-entry" type="button" disabled title="Duels arrive in a later step">Duel (soon)</button>
           </div>
         </div>
-        <p class="mp-game__hint">Keyboard: arrows / WASD. Touch: swipe the page while the game is focused. Only your direction is sent.</p>
-        <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite"></p>
-        <details class="mp-movement-diagnostics" id="mp-movement-diagnostics">
+        <p class="mp-game__hint" id="mp-game-hint" hidden>Keyboard: arrows / WASD. Touch: swipe the page while the game is focused. Only your direction is sent.</p>
+        <p class="mp-game__input-status" id="mp-game-input-status" role="status" aria-live="polite" hidden></p>
+        <details class="mp-movement-diagnostics" id="mp-movement-diagnostics" hidden>
           <summary>Movement diagnostics</summary>
           <label><input type="checkbox" id="mp-movement-pacing"> Smooth uneven delivery (adds latency)</label>
           <p>Off by default for the lowest receive-to-paint delay. If the connection is uneven,
@@ -219,6 +219,10 @@
       <div class="mp-actions mp-actions--room" id="mp-room-actions">
         <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
         <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
+        <label class="mp-debug-toggle" id="mp-debug-label" hidden>
+          <input type="checkbox" id="mp-debug-mode">
+          Debug mode
+        </label>
         <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
         <button class="btn btn--small btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
         <button class="btn btn--small" id="mp-leave" type="button">Leave room</button>
@@ -370,5 +374,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-17"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-18"></script>
 <% end %>

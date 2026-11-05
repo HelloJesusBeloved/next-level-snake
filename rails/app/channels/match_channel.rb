@@ -115,11 +115,23 @@ class MatchChannel < ApplicationCable::Channel
 
   # Socket heartbeat. Presence goes stale only if EVERY tab stops beating, and
   # the simulator owner's sweeper then starts the authoritative grace window.
+  # A backgrounded tab throttles this timer; the sweeper can reap the row
+  # while the socket is still open. The next beat puts that row back and
+  # clears the freeze, so coming back to the tab does not leave the snake stuck.
   def heartbeat
     now = Time.current
+    restore_presence!(now: now)
     touch_presence!(now: now)
     transmit({ type: "presence", match: @match.id, at: now.iso8601(6), participant: @participant&.id,
                connection: @participant&.connection_state })
+  end
+
+  def restore_presence!(now: Time.current)
+    return unless @match&.live? && @socket_token && @membership
+    return if MatchPresence.exists?(socket_token: @socket_token)
+
+    _presence, reconnected = @match.register_presence!(membership: @membership, socket_token: @socket_token)
+    @participant = reconnected || @participant
   end
 
   # A client that detects a tick gap in its playback history (or has just been

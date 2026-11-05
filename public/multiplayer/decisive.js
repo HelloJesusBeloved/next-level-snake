@@ -249,6 +249,14 @@ export class DecisiveSnake {
     return { rejectedReason: null, direction, scheduledTick: this.tick + 1 };
   }
 
+  // A hidden tab must not walk the cells it missed, and it must not leave
+  // nextStepAt in the past. Either one freezes or kills the snake on return.
+  resumeClock(now = this.clock()) {
+    if (!this.running || this.dead) return false;
+    this.nextStepAt = now + this.tickMs;
+    return true;
+  }
+
   advance(now) {
     if (!this.active || this.nextStepAt === null) return 0;
     let steps = 0;
