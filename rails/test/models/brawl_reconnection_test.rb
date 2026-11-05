@@ -12,6 +12,9 @@ class BrawlReconnectionTest < ActiveSupport::TestCase
     @room = make_room_with_guest_host
     @rival_guest, _token = make_guest
     @rival_member = @room.join!(guest_session: @rival_guest, display_name: "Rival")
+    # These cases assert Classic unattended movement (the snake keeps walking).
+    # A new room defaults to Responsive, which holds a snake that has no pose.
+    @room.update!(presentation_strategy: "classic")
     @room.start_match!
     @match = @room.live_match
     @host_member = @room.host_membership
@@ -359,5 +362,30 @@ class BrawlReconnectionTest < ActiveSupport::TestCase
     @room.touch_member_presence!(@host_member, at: seen + Room.config.host_grace + 20.seconds)
     assert @host_member.reload.active?
     refute @room.reload.closed?
+  end
+
+  def test_leaving_a_live_brawl_forfeits_the_snake_as_left
+    world
+    input = Simulation::Protocol::Input.new(match_id: @match.id, seq: 1, tick: 0,
+                                            direction: Simulation::Direction.parse("up"))
+    @match.accept_direction!(membership: @rival_member, input: input, now: T0)
+    assert rival_snake.alive?
+
+    @rival_member.leave!
+    @rival_participant.reload
+    assert_equal "left", @rival_participant.status
+    assert_equal "unattended", @rival_participant.connection_state
+    assert_equal 0, @match.match_inputs.where(match_participant_id: @rival_participant.id).count
+
+    @match.sync_connection_states!(world, now: T0 + 1.second)
+    refute rival_snake.alive?
+    assert_equal :left, rival_snake.elimination_reason
+    assert world.completed?, "one of two snakes leaving ends the brawl"
+
+    MatchRunner.reset!
+    assert @match.claim_lease!(token: "forfeit-owner", ttl_seconds: 30, now: T0)
+    assert @match.complete_from_world!(world, token: "forfeit-owner", now: T0)
+    assert_equal "left", @rival_participant.reload.status
+    assert_equal "alive", @host_participant.reload.status
   end
 end

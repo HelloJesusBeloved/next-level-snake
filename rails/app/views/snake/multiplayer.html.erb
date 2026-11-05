@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-18">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-20">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -177,6 +177,25 @@
             </div>
           </div>
         </div>
+        <div class="overlay" id="mp-board-overlay">
+          <div class="panel" id="mp-panel-lobby">
+            <p class="panel__eyebrow">Ready</p>
+            <h2 class="panel__title">Waiting for the Brawl</h2>
+            <p class="panel__body">Mark ready when you are. The host starts the match.</p>
+            <div class="panel__actions">
+              <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
+              <button class="btn" id="mp-leave" type="button">Leave room</button>
+            </div>
+          </div>
+          <div class="panel result-panel" id="mp-panel-over">
+            <p class="panel__eyebrow">Brawl complete</p>
+            <h2 class="panel__title">Game over</h2>
+            <div id="mp-over-ranks"></div>
+            <div class="panel__actions">
+              <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
+            </div>
+          </div>
+        </div>
         </div>
         <section class="mp-results" id="mp-results" hidden aria-label="Final results">
           <h4 class="mp-results__title">Final results</h4>
@@ -217,15 +236,9 @@
       </section>
 
       <div class="mp-actions mp-actions--room" id="mp-room-actions">
-        <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
         <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
-        <label class="mp-debug-toggle" id="mp-debug-label" hidden>
-          <input type="checkbox" id="mp-debug-mode">
-          Debug mode
-        </label>
-        <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
+        <button class="btn btn--small" id="mp-leave-live" type="button" hidden>Leave room</button>
         <button class="btn btn--small btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
-        <button class="btn btn--small" id="mp-leave" type="button">Leave room</button>
       </div>
 
       <div class="mp-room-rest" id="mp-room-rest">
@@ -305,13 +318,19 @@
             <form id="mp-presentation-form" class="mp-board-form">
               <label for="mp-presentation-choice">Presentation strategy</label>
               <select id="mp-presentation-choice" disabled>
-                <option value="classic">Classic Brawl</option>
                 <option value="responsive">Responsive Brawl</option>
+                <option value="classic">Classic Brawl</option>
               </select>
               <button id="mp-presentation-save" type="submit" class="btn btn--small" disabled>Save presentation</button>
             </form>
             <p class="mp-config-status" id="mp-presentation-status" role="status" aria-live="polite"></p>
             <p class="mp-card__hint" id="mp-presentation-availability">Both strategies run the same authoritative Ruby simulation: same rules, same scores, same results. Classic paints each confirmed frame as it arrives. Responsive predicts your own snake locally and plays other players back smoothly from buffered confirmed movement.</p>
+          </section>
+          <section class="mp-card mp-debug-card" id="mp-debug-label" hidden>
+            <p class="mp-room__eyebrow">Host only</p>
+            <h3 class="mp-card__title">Debug mode</h3>
+            <p class="mp-card__hint">Shows the keyboard hint, the input-status line, and movement diagnostics on this browser. Off by default. It does not change how snakes move.</p>
+            <button class="btn btn--small" id="mp-debug-mode" type="button" aria-pressed="false">Debug mode off</button>
           </section>
         </div>
       </div>
@@ -374,5 +393,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-18"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-20"></script>
 <% end %>

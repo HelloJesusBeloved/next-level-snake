@@ -15,9 +15,9 @@ class MatchTest < ActiveSupport::TestCase
     assert match, "Room#start_match! creates the durable match"
     assert_equal "pending", match.status
     assert_equal room.mode, match.mode
-    assert_equal "classic", match.presentation_strategy
-    assert_equal "classic", room.match_configuration["presentation_strategy"]
-    assert_equal "classic", match.client_summary[:presentation_strategy]
+    assert_equal "responsive", match.presentation_strategy
+    assert_equal "responsive", room.match_configuration["presentation_strategy"]
+    assert_equal "responsive", match.client_summary[:presentation_strategy]
     assert_equal [room.brawl_columns, room.brawl_rows], [match.columns, match.rows]
     assert_equal room.match_configuration["participants"].length, match.match_participants.count
     assert_equal room.match_configuration["participants"].map { |p| p["color"] }.sort,
@@ -92,12 +92,12 @@ class MatchTest < ActiveSupport::TestCase
     assert_equal match.match_participants.pluck(:color_hex).sort, world.snakes.map(&:color_hex).sort
     assert_equal [match.columns, match.rows], [world.columns, world.rows]
     assert_equal "pending", world.status.to_s
-    assert_equal "classic", world.presentation_strategy
+    assert_equal "responsive", world.presentation_strategy
     snapshot = Simulation::Protocol.encode(world)
     assert_equal match.id, snapshot["m"]
     assert_equal 0, snapshot["t"]
     assert_equal 1, snapshot["v"]
-    assert_equal "classic", snapshot["strategy"]
+    assert_equal "responsive", snapshot["strategy"]
     assert_equal 0, snapshot["p"].first["is"]
     assert_nil snapshot["p"].first["it"]
   end

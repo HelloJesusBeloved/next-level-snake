@@ -80,7 +80,7 @@ class Match < ApplicationRecord
       # (rather than rejecting one of them) keeps the match row honest: the
       # strategy stored here is the strategy the simulator is built with, and it
       # is what every frame reports.
-      strategy = frozen["presentation_strategy"] || room.presentation_strategy || "classic"
+      strategy = frozen["presentation_strategy"] || room.presentation_strategy || "responsive"
       unless Room::PRESENTATION_STRATEGIES.include?(strategy)
         raise Room::InvalidTransition, "That Brawl presentation strategy is not available."
       end
@@ -486,19 +486,28 @@ class Match < ApplicationRecord
   # Server-owned clock pass, called by the leased owner before it steps the
   # world. Applies freezes, unfreezes on reconnection and RELEASES snakes whose
   # 30 s grace expired; released snakes keep moving in their last direction and
-  # are never eliminated here.
+  # are never eliminated here. A seat that already left the room is the
+  # exception: that snake is removed immediately (reason :left).
   def sync_connection_states!(world, now: Time.current)
     world.server_time_ms = (now.to_f * 1000).round
     # One indexed read of every participant instead of a row lock plus a
     # per-participant `reload` on every simulator pass (the step-10 version did
     # both ~20 times per second, which alone cost more than the simulation).
-    states = match_participants.pluck(:id, :connection_state, :freeze_deadline_at)
+    states = match_participants.pluck(:id, :connection_state, :freeze_deadline_at, :status)
     events = []
     expired = []
 
-    states.each do |participant_id, state, deadline|
+    states.each do |participant_id, state, deadline, status|
       snake = world.player(participant_id)
       next unless snake
+
+      if status == "left"
+        if snake.alive?
+          world.remove_player!(participant_id, reason: :left)
+          events << { participant: participant_id, state: "left", reason: "forfeit" }
+        end
+        next
+      end
 
       case state
       when "connected"
@@ -536,6 +545,22 @@ class Match < ApplicationRecord
     end
     events.each { |fields| MatchChannel.broadcast_event(id, { type: "connection", match: id }.merge(fields)) }
     events
+  end
+
+  # HTTP leave marks the seat forfeited. The simulator applies the explosion
+  # on its next sync, so this process never steps a second copy of the world.
+  def forfeit_membership!(membership, now: Time.current)
+    return unless live?
+
+    participant = match_participants.find_by(room_membership_id: membership.id)
+    return unless participant&.status == "alive"
+
+    participant.update_columns(
+      status: "left", connection_state: "unattended",
+      frozen_at: nil, freeze_deadline_at: nil, updated_at: now
+    )
+    match_inputs.where(match_participant_id: participant.id).delete_all
+    participant
   end
 
   # A late reconnection while still alive simply restores control. This is a
@@ -767,9 +792,18 @@ class Match < ApplicationRecord
   end
 
   def persist_standings!(entries, now)
+    current = match_participants.where(id: entries.map(&:id)).pluck(:id, :status).to_h
     entries.each do |entry|
+      reason = entry.respond_to?(:elimination_reason) ? entry.elimination_reason.to_s : ""
+      status = if current[entry.id] == "left" || reason == "left"
+                 "left"
+               elsif entry.alive
+                 "alive"
+               else
+                 "eliminated"
+               end
       match_participants.where(id: entry.id).update_all(
-        status: entry.alive ? "alive" : "eliminated",
+        status: status,
         final_score: entry.score, longest_length: entry.longest_length,
         survived_ticks: entry.survived_ticks, eliminated_at_tick: entry.eliminated_at_tick,
         placement: entry.placement, updated_at: now

@@ -526,3 +526,34 @@ test('a frozen own snake does not stop the loop that ticks everyone else', () =>
   assert.notEqual(r.predictionLoop, null, 'freeze must not kill remote ticks or leave the board dead');
   h.close();
 });
+
+test('a mid-game corpse fades after the burst, and a finishing death stays', () => {
+  const mid = setup();
+  try {
+    mid.renderer.accept(frame(1));
+    mid.at(100);
+    mid.renderer.accept(frame(2, { a: false, er: 'self_collision' }));
+    const dead = mid.renderer.snapshot.p[0];
+    assert.equal(mid.renderer.corpseAlpha(dead, 100), 0.3);
+    assert.ok(mid.renderer.corpseAlpha(dead, 100 + 3400 + 400) < 0.3);
+    assert.equal(mid.renderer.corpseAlpha(dead, 100 + 3400 + 800), 0);
+    assert.match(document.querySelector('ol').textContent, /out/i);
+  } finally { mid.close(); }
+
+  const left = setup();
+  try {
+    left.renderer.accept(frame(1));
+    left.at(100);
+    left.renderer.accept(frame(2, { a: false, er: 'left' }));
+    assert.match(document.querySelector('ol').textContent, /left/i);
+    assert.equal(left.renderer.corpseAlpha(left.renderer.snapshot.p[0], 100), 0.3);
+  } finally { left.close(); }
+
+  const ended = setup();
+  try {
+    ended.renderer.accept(frame(1));
+    ended.at(50);
+    ended.renderer.accept(frame(2, { a: false, er: 'self_collision' }, { s: 'completed' }));
+    assert.equal(ended.renderer.corpseAlpha(ended.renderer.snapshot.p[0], 50 + 20000), 0.3);
+  } finally { ended.close(); }
+});

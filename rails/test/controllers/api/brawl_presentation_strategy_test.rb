@@ -22,11 +22,11 @@ class Api::BrawlPresentationStrategyTest < ActionDispatch::IntegrationTest
               presentation_strategy: strategy)
   end
 
-  test "new rooms default to Classic independently of game mode and expose it in lobby state" do
+  test "new rooms default to Responsive Brawl independently of game mode and expose it in lobby state" do
     assert_equal "brawl", @created.dig(:room, :mode)
-    assert_equal "classic", @created.dig(:room, :presentation_strategy)
-    assert_equal "classic", @room.reload.presentation_strategy
-    assert_equal "classic", @room.start_eligibility[:presentation_strategy]
+    assert_equal "responsive", @created.dig(:room, :presentation_strategy)
+    assert_equal "responsive", @room.reload.presentation_strategy
+    assert_equal "responsive", @room.start_eligibility[:presentation_strategy]
     assert_equal true, @room.start_eligibility[:presentation_strategy_available]
   end
 
@@ -37,27 +37,27 @@ class Api::BrawlPresentationStrategyTest < ActionDispatch::IntegrationTest
     before_board = [@room.brawl_columns, @room.brawl_rows]
     before_mode = @room.mode
     before_broadcasts = ActionCable.server.pubsub.broadcasts(stream).length
-    choose(@guest, "responsive")
+    choose(@guest, "classic")
     assert_equal before_broadcasts, ActionCable.server.pubsub.broadcasts(stream).length
     assert_equal 403, status(@guest)
-    assert_equal "classic", @room.reload.presentation_strategy
+    assert_equal "responsive", @room.reload.presentation_strategy
 
-    choose(@host, "responsive")
+    choose(@host, "classic")
     assert_equal before_broadcasts + 1, ActionCable.server.pubsub.broadcasts(stream).length
     assert_equal 200, status(@host)
-    assert_equal "responsive", body(@host).dig(:room, :presentation_strategy)
-    assert_equal "responsive", @room.reload.presentation_strategy
+    assert_equal "classic", body(@host).dig(:room, :presentation_strategy)
+    assert_equal "classic", @room.reload.presentation_strategy
     assert_equal before_settings, @room.settings, "speed and growth remain unchanged"
     assert_equal before_board, [@room.brawl_columns, @room.brawl_rows]
     assert_equal before_mode, @room.mode, "presentation remains separate from Brawl/Duel mode"
     event = JSON.parse(ActionCable.server.pubsub.broadcasts(stream).last)
     assert_equal "presentation_strategy_changed", event["event"]
-    assert_equal "responsive", event["presentation_strategy"]
+    assert_equal "classic", event["presentation_strategy"]
     assert_equal before_version + 1, event["v"]
 
     choose(@host, "not-a-strategy")
     assert_equal 422, status(@host)
-    assert_equal "responsive", @room.reload.presentation_strategy
+    assert_equal "classic", @room.reload.presentation_strategy
   end
 
   # Step 3 replaces the step-1 "unavailable" contract with the real one: a
@@ -92,27 +92,26 @@ class Api::BrawlPresentationStrategyTest < ActionDispatch::IntegrationTest
     post_json(@host, "/api/rooms/#{@code}/start")
     assert_equal 201, status(@host)
     first_match = @room.reload.live_match
-    assert_equal "classic", first_match.presentation_strategy
+    assert_equal "responsive", first_match.presentation_strategy
     assert_raises(ActiveRecord::RecordInvalid) do
-      first_match.update!(presentation_strategy: "responsive")
+      first_match.update!(presentation_strategy: "classic")
     end
 
-    choose(@host, "responsive")
+    choose(@host, "classic")
     assert_equal 409, status(@host), "strategy is locked during a running match"
-    assert_equal "classic", first_match.reload.presentation_strategy
-    assert_equal "classic", @room.reload.presentation_strategy
+    assert_equal "responsive", first_match.reload.presentation_strategy
+    assert_equal "responsive", @room.reload.presentation_strategy
 
     @room.finish_match!
-    choose(@host, "responsive")
-    assert_equal 200, status(@host)
-    assert_equal "responsive", @room.reload.presentation_strategy
-    assert_equal "classic", first_match.reload.presentation_strategy
-
     choose(@host, "classic")
+    assert_equal 200, status(@host)
+    assert_equal "classic", @room.reload.presentation_strategy
+    assert_equal "responsive", first_match.reload.presentation_strategy
+
     second = post_json(@host, "/api/rooms/#{@code}/start")
     assert_equal 201, status(@host)
     assert_equal "classic", second.dig(:match, :presentation_strategy)
     assert_equal "classic", @room.reload.live_match.presentation_strategy
-    assert_equal "classic", first_match.reload.presentation_strategy
+    assert_equal "responsive", first_match.reload.presentation_strategy
   end
 end

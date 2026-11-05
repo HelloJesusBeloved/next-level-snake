@@ -206,16 +206,18 @@ test('cacheable multiplayer entry points and modified dependency imports carry t
   // have not changed since step 10 deliberately keep their old tag (their cached
   // copies are still correct). tests/asset-cache-tags.test.mjs checks that every
   // reference to one module agrees.
-  const release = 'step11-responsive-18';
+  const release = 'step11-responsive-20';
+  const prior = 'step11-responsive-18';
   const unchanged = 'step10-mobile4';
   const view = read('rails/app/views/snake/multiplayer.html.erb');
   assert.ok(view.includes(`/multiplayer/page.js?v=${release}`));
   assert.ok(view.includes(`/multiplayer/lobby.css?v=${release}`));
   assert.ok(read('public/multiplayer/page.js').includes(`./lobby.js?v=${release}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./game-renderer.js?v=${release}`));
-  assert.ok(read('public/multiplayer/lobby.js').includes(`./configuration.js?v=${release}`));
-  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./decisive.js?v=${release}`));
-  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./playback.js?v=${release}`));
+  assert.ok(read('public/multiplayer/lobby.js').includes(`./game-ui.js?v=${release}`));
+  assert.ok(read('public/multiplayer/lobby.js').includes(`./configuration.js?v=${prior}`));
+  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./decisive.js?v=${prior}`));
+  assert.ok(read('public/multiplayer/game-renderer.js').includes(`./playback.js?v=${prior}`));
   assert.ok(read('public/multiplayer/game-renderer.js').includes(`./grid-cadence.js?v=${unchanged}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./snapshot-chunks.js?v=${unchanged}`));
   assert.ok(read('public/multiplayer/lobby.js').includes(`./swipe-steering.js?v=${unchanged}`));

@@ -9,6 +9,10 @@ import { DecisiveSnake } from './decisive.js?v=step11-responsive-18';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
 
 const HEX = /^#[0-9a-f]{6}$/i;
+// A mid-game corpse stays through the particle burst, then fades. A death that
+// ends the match never starts this timer, so the final snakes stay put.
+const CORPSE_HOLD_MS = 3400;
+const CORPSE_FADE_MS = 800;
 
 export class MultiplayerGameRenderer {
   constructor({ canvas, scoreboard, status, ownParticipantId, budget = null,
@@ -70,6 +74,7 @@ export class MultiplayerGameRenderer {
     // Death dust: spawned LOCALLY from the authoritative body cells of a newly
     // eliminated snake. Coordinates are never transmitted.
     this.dust = [];
+    this.deathAt = new Map();
     this.dustFrame = 0;
     this.followId = null;
     this.tickMs = 105;
@@ -122,17 +127,18 @@ export class MultiplayerGameRenderer {
     this.themeObserver = new MutationObserver(() => {
       this.theme = this.readTheme();
       this.gridCache = null;
-      this.requestDraw();
+      if (this.snapshot) this.requestDraw();
+      else this.paintBackdrop();
     });
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'class'] });
     this.measure();
+    this.paintBackdrop();
   }
 
   readTheme() {
     const css = getComputedStyle(document.documentElement);
     return {
-      background: css.getPropertyValue('--ink').trim() || '#0c0e10',
-      grid: css.getPropertyValue('--line').trim() || 'rgba(255,255,255,.08)',
+      background: css.getPropertyValue('--field').trim() || '#050505',
       accent: css.getPropertyValue('--green').trim() || '#35ff6b',
       red: css.getPropertyValue('--red').trim() || '#ff3b30',
     };
@@ -476,8 +482,9 @@ export class MultiplayerGameRenderer {
       const at = this.clock();
       const frame = this.cadence.take(at);
       if (frame) this.present(frame, at);
-      else if (this.paintSnapshot && this.dirty) {
-        this.draw();
+      else if (this.dirty) {
+        if (this.paintSnapshot) this.draw();
+        else this.paintBackdrop();
         this.dirty = false;
       }
       if (this.cadence.pending) this.requestDraw(false);
@@ -567,6 +574,7 @@ export class MultiplayerGameRenderer {
     }
     // Elimination is an authoritative receipt-time event, even if alive and
     // dead frames arrived in one browser task before a visible refresh.
+    this.noteCorpseFades(snapshot, previous);
     this.spawnDustForNewlyEliminated(snapshot, previous);
     const important = !previous || snapshot.s !== previous.s || snapshot.p.some((player) => {
       const before = previous.p.find((p) => p.i === player.i);
@@ -643,6 +651,67 @@ export class MultiplayerGameRenderer {
     return true;
   }
 
+  noteCorpseFades(snapshot, previous) {
+    if (!previous || !Array.isArray(snapshot?.p) || !Array.isArray(previous.p)) return;
+    if (previous.m != null && snapshot.m != null && previous.m !== snapshot.m) {
+      this.deathAt.clear();
+      return;
+    }
+    const wasAlive = new Map(previous.p.map((player) => [player.i, player.a]));
+    let started = false;
+    for (const player of snapshot.p) {
+      if (wasAlive.get(player.i) !== true || player.a !== false) continue;
+      if (snapshot.s === 'running') {
+        if (!this.deathAt.has(player.i)) {
+          this.deathAt.set(player.i, this.clock());
+          started = true;
+        }
+      } else {
+        this.deathAt.delete(player.i);
+      }
+    }
+    if (started) this.pumpDust();
+  }
+
+  corpseAlpha(player, now) {
+    if (!player || player.a) return 1;
+    const at = this.deathAt.get(player.i);
+    if (at == null) return 0.3;
+    const age = now - at;
+    if (age <= CORPSE_HOLD_MS) return 0.3;
+    const fade = age - CORPSE_HOLD_MS;
+    if (fade >= CORPSE_FADE_MS) return 0;
+    return 0.3 * (1 - fade / CORPSE_FADE_MS);
+  }
+
+  corpsesFading(now = this.clock()) {
+    for (const at of this.deathAt.values()) {
+      if (now - at < CORPSE_HOLD_MS + CORPSE_FADE_MS) return true;
+    }
+    return false;
+  }
+
+  paintBackdrop() {
+    if (this.snapshot || this.hidden || this.viewPaused) return;
+    const canvas = this.canvas;
+    const ctx = this.context;
+    if (!canvas || !ctx) return;
+    if (!this.view.width || !this.view.height) {
+      this.measure();
+      if (!this.view.width || !this.view.height) return;
+    }
+    const { width, height, dpr } = this.view;
+    const pixelWidth = Math.max(1, Math.round(width * dpr));
+    const pixelHeight = Math.max(1, Math.round(height * dpr));
+    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+      canvas.width = pixelWidth;
+      canvas.height = pixelHeight;
+    }
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = this.theme.background;
+    ctx.fillRect(0, 0, width, height);
+  }
+
   spawnDustForNewlyEliminated(snapshot, previous) {
     if (this.reducedMotion || !previous) return;
     const wasAlive = new Map(previous.p.map((player) => [player.i, player.a]));
@@ -680,7 +749,7 @@ export class MultiplayerGameRenderer {
       }
       this.dust = this.dust.filter((particle) => particle.life > 0);
       this.requestDraw();
-      if (this.dust.length) this.dustFrame = requestAnimationFrame(step);
+      if (this.dust.length || this.corpsesFading()) this.dustFrame = requestAnimationFrame(step);
     };
     this.dustFrame = requestAnimationFrame(step);
   }
@@ -808,6 +877,9 @@ export class MultiplayerGameRenderer {
     } else if (player.a) {
       if (tag.className !== 'mp-game-score__tag is-alive') tag.className = 'mp-game-score__tag is-alive';
       text(tag, 'alive');
+    } else if (player.er === 'left') {
+      if (tag.className !== 'mp-game-score__tag is-left') tag.className = 'mp-game-score__tag is-left';
+      text(tag, 'left');
     } else {
       if (tag.className !== 'mp-game-score__tag') tag.className = 'mp-game-score__tag';
       text(tag, 'out');
@@ -922,20 +994,6 @@ export class MultiplayerGameRenderer {
     ctx.fillStyle = this.theme.background;
     ctx.fillRect(0, 0, width, height);
 
-    // Grid lines - single fast batch path (42 line segments, 0.01ms)
-    ctx.strokeStyle = this.theme.grid;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    for (let x = 0; x <= cols; x++) {
-      const px = Math.round(ox + x * cell) + 0.5;
-      ctx.moveTo(px, oy); ctx.lineTo(px, oy + rows * cell);
-    }
-    for (let y = 0; y <= rows; y++) {
-      const py = Math.round(oy + y * cell) + 0.5;
-      ctx.moveTo(ox, py); ctx.lineTo(ox + cols * cell, py);
-    }
-    ctx.stroke();
-
     // Step 3: remote players are drawn from confirmed history a bounded distance
     // behind the newest frame. `smooth` is null for Classic, which keeps the
     // integer-cell path below byte-for-byte the old code.
@@ -987,12 +1045,15 @@ export class MultiplayerGameRenderer {
     // Snakes. The local player's cells are whatever present() put on the frame
     // (predicted, in Responsive). Every other Responsive snake is the whole
     // confirmed cells of the playback tick, one square at a time.
+    const now = this.clock();
     const followAlive = this.followId != null &&
       snapshot.p.some((player) => player.i === this.followId && player.a);
     for (let p = 0; p < snapshot.p.length; p++) {
       const player = snapshot.p[p];
       const color = HEX.test(player.c) ? player.c : '#808080';
-      ctx.globalAlpha = (player.a ? 1 : 0.3) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
+      const alpha = this.corpseAlpha(player, now) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
+      if (alpha <= 0) continue;
+      ctx.globalAlpha = alpha;
       const body = player.b;
       const remote = smooth && smooth.players ? smooth.players.get(player.i) : null;
       const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && Number(player.i) !== ownId)
@@ -1066,6 +1127,7 @@ export class MultiplayerGameRenderer {
     this.dustFrame = 0;
     this.paintFrame = 0;
     this.dust = [];
+    this.deathAt.clear();
     this.gridCache = null;
     this.resizeObserver?.disconnect();
     this.themeObserver?.disconnect();

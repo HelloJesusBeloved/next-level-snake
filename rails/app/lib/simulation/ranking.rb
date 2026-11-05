@@ -10,12 +10,13 @@ module Simulation
   # points outranks the last snake standing. Tests pin that behaviour.
   module Ranking
     Entry = Struct.new(:id, :name, :color_hex, :color_slot, :score, :survived_ticks,
-                       :longest_length, :alive, :eliminated_at_tick, :placement,
-                       keyword_init: true) do
+                       :longest_length, :alive, :eliminated_at_tick, :elimination_reason,
+                       :placement, keyword_init: true) do
       def to_h
         { id: id, name: name, color_hex: color_hex, color_slot: color_slot,
           score: score, survived_ticks: survived_ticks, longest_length: longest_length,
-          alive: alive, eliminated_at_tick: eliminated_at_tick, placement: placement }
+          alive: alive, eliminated_at_tick: eliminated_at_tick,
+          elimination_reason: elimination_reason, placement: placement }
       end
     end
 
@@ -28,7 +29,7 @@ module Simulation
                   color_slot: snake.color_slot, score: snake.score,
                   survived_ticks: snake.survived_ticks, longest_length: snake.longest_length,
                   alive: snake.alive, eliminated_at_tick: snake.eliminated_at_tick,
-                  placement: index + 1)
+                  elimination_reason: snake.elimination_reason&.to_s, placement: index + 1)
       end
     end
 

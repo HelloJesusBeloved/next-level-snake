@@ -336,7 +336,7 @@
   background: var(--player-color, #808080); border: 2px solid #111;
   border-radius: 5px; box-shadow: 0 0 0 1px #fff;
 }
-.mp-config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
+.mp-config-grid { display: grid; grid-template-columns: 1fr; gap: 16px; margin-top: 20px; }
 .mp-config-grid .mp-card { min-width: 0; }
 .mp-color-options { display: flex; flex-wrap: wrap; gap: 9px; margin: 8px 0; }
 .mp-color-option {
@@ -368,7 +368,6 @@
 .mp-board-dimensions label { display: grid; gap: 6px; }
 .mp-config-status { min-height: 1em; color: var(--green); font-size: 13px; line-height: 1.45; }
 .mp-config-status[data-kind='error'] { color: var(--red); }
-@media (max-width: 760px) { .mp-config-grid { grid-template-columns: 1fr; } }
 
 /* Dedicated multiplayer renderer: this surface only reflects the latest
    versioned server snapshot. It never advances or predicts the snake. */
@@ -413,6 +412,7 @@
 }
 .mp-game-score__meta { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; white-space: nowrap; }
 .mp-game-score__tag.is-alive { color: var(--green); }
+.mp-game-score__tag.is-left { color: var(--muted); }
 .mp-results { margin-top: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--line)); border-radius: 12px; }
 .mp-results__title { margin: 0 0 8px; font-size: 14px; }
 .mp-results-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -542,16 +542,16 @@
 .mp-movement-diagnostics pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; }
 .mp-movement-diagnostics label { display: flex; gap: 7px; align-items: center; padding-top: 8px; }
 
-/* Room composition: left rail (standings first), central stage. Mobile stacks
-   game, standings, actions, then the rest of the room. */
+/* Desktop: options stay in row 1 so a growing standings list (row 2) cannot
+   push them. The stage stays beside that stack. Mobile uses flex order. */
 .mp-play {
   display: grid;
   grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   gap: 18px 28px;
   align-items: start;
 }
-.mp-standings-card { grid-column: 1; grid-row: 1; }
-.mp-room-rest { grid-column: 1; grid-row: 2; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mp-room-rest { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.mp-standings-card { grid-column: 1; grid-row: 2; }
 .mp-game { grid-column: 2; grid-row: 1; margin: 0; }
 .mp-actions--room { grid-column: 2; grid-row: 2; margin-top: 0; }
 .mp-standings-card .mp-game-scores {
@@ -596,13 +596,19 @@ html.mp-page-focused input,
 html.mp-page-focused select,
 html.mp-page-focused textarea,
 html.mp-page-focused label { touch-action: manipulation; }
-.mp-debug-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--muted);
+.mp-debug-card .mp-card__hint { max-width: 42ch; }
+#mp-debug-mode[aria-pressed='true'] {
+  border-color: var(--green);
+  color: var(--green);
 }
+.mp-board-overlay:not(.is-visible) { pointer-events: none; }
+#mp-panel-over {
+  width: min(520px, calc(100% - 12px));
+  max-height: calc(100% - 12px);
+  overflow: auto;
+}
+#mp-over-ranks { margin: 10px 0 14px; text-align: left; }
+#mp-over-ranks .mp-results-table { font-size: 12px; }
 @media (max-width: 900px) {
   #multiplayer-root.band { padding: 16px 16px 32px; }
   .mp-room { padding: 12px; margin-top: 12px; }

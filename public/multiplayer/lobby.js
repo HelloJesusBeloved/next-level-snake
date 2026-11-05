@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-18';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-20';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
 import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step10-mobile4';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-20';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -131,6 +131,10 @@ export function mountLobby(root) {
     followRow: $('mp-follow-row'),
     results: $('mp-results'),
     resultsTable: $('mp-results-table'),
+    boardOverlay: $('mp-board-overlay'),
+    panelLobby: $('mp-panel-lobby'),
+    panelOver: $('mp-panel-over'),
+    overRanks: $('mp-over-ranks'),
     eliminated: $('mp-eliminated'),
     spectateBtn: $('mp-spectate'),
     lobbyViewBtn: $('mp-lobby-view'),
@@ -142,6 +146,7 @@ export function mountLobby(root) {
     againResults: $('mp-again-results'),
     disband: $('mp-disband'),
     leave: $('mp-leave'),
+    leaveLive: $('mp-leave-live'),
     hostNote: $('mp-host-note'),
     confirm: $('mp-confirm'),
     confirmBody: $('mp-confirm-body'),
@@ -226,7 +231,7 @@ export function mountLobby(root) {
   }
 
   function busy(on) {
-    [el.create, el.join, el.readyToggle, el.start, el.disband, el.leave].forEach((button) => {
+    [el.create, el.join, el.readyToggle, el.start, el.disband, el.leave, el.leaveLive].forEach((button) => {
       if (button) button.disabled = !!on;
     });
   }
@@ -516,16 +521,27 @@ export function mountLobby(root) {
 
   function renderGame() {
     const match = state.match;
+    const inRoom = !!state.room;
     // Abandoned is a finished board too: leaving and coming back must still
     // show the last cells, not an empty page.
     const relevant = match && ['pending', 'running', 'paused', 'completed', 'abandoned'].includes(match.status);
-    if (el.game) el.game.hidden = !relevant;
+    if (el.game) el.game.hidden = !inRoom;
+    const field = document.querySelector('.mp-snake-field');
+    if (field && inRoom) {
+      const size = boardSize();
+      field.style.aspectRatio = `${size.columns} / ${size.rows}`;
+    }
     if (!relevant) {
       gameRenderer?.setOwnParticipant(null);
       hideEliminationOverlay(document);
       if (el.results) el.results.hidden = true;
       if (el.gameInputStatus) el.gameInputStatus.textContent = '';
       pageFocus?.disable();
+      if (el.gameStatus && inRoom) text(el.gameStatus, 'Waiting to start');
+      if (el.gameTick) text(el.gameTick, '');
+      if (el.standingsEmpty) el.standingsEmpty.hidden = false;
+      syncBoardOverlay();
+      gameRenderer?.paintBackdrop();
       return;
     }
     const participantId = state.member?.match_participant_id;
@@ -565,12 +581,38 @@ export function mountLobby(root) {
     }
     renderFollowOptions();
     if (state.gameSnapshot) renderStandingsTable();
-    if ((match.status === 'completed' || match.status === 'abandoned') && state.gameSnapshot) renderResults();
+    if ((match.status === 'completed' || match.status === 'abandoned') && state.gameSnapshot && state.room?.state !== 'lobby') renderResults();
     else if (el.results) el.results.hidden = true;
-    const field = document.querySelector('.mp-snake-field');
-    if (field && match.columns && match.rows) field.style.aspectRatio = `${match.columns} / ${match.rows}`;
     if (el.standingsEmpty) el.standingsEmpty.hidden = !!state.gameSnapshot;
+    syncBoardOverlay();
     syncPageFocus();
+  }
+
+  function boardSize() {
+    const requested = state.room?.board?.requested;
+    return {
+      columns: state.match?.columns || requested?.columns || 24,
+      rows: state.match?.rows || requested?.rows || 18,
+    };
+  }
+
+  // Lobby overlay before a round, game-over ranks after one. A finished match
+  // that the host already sent back to the lobby is a new ready screen, not
+  // another results popup.
+  function syncBoardOverlay() {
+    const overlay = el.boardOverlay;
+    if (!overlay) return;
+    const inRoom = !!state.room;
+    const roomState = state.room?.state;
+    const status = state.match?.status;
+    const live = inRoom && roomState === 'in_match' && ['pending', 'running', 'paused'].includes(status);
+    const finished = inRoom && roomState !== 'lobby' && ['completed', 'abandoned'].includes(status);
+    const showLobby = inRoom && !live && !finished;
+    overlay.classList.toggle('is-visible', showLobby || finished);
+    if (el.panelLobby) el.panelLobby.classList.toggle('is-visible', showLobby);
+    if (el.panelOver) el.panelOver.classList.toggle('is-visible', finished);
+    if (el.leaveLive) el.leaveLive.hidden = !inRoom || showLobby;
+    if (finished && state.gameSnapshot) renderResults();
   }
 
   function canSteer() {
@@ -667,18 +709,14 @@ export function mountLobby(root) {
   }
 
   function renderResults() {
-    const container = el.resultsTable;
+    const container = el.overRanks || el.resultsTable;
     if (!container || !state.gameSnapshot) return;
     const signature = `results:${standingsSignature()}`;
-    if (signature === state.resultsSignature) {
-      if (el.results) el.results.hidden = false;
-      return;
-    }
+    if (signature === state.resultsSignature) return;
     state.resultsSignature = signature;
     container.replaceChildren();
     container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
       state.member?.match_participant_id));
-    if (el.results) el.results.hidden = false;
   }
 
   // ---- server conversation ---------------------------------------------------
@@ -1274,6 +1312,7 @@ export function mountLobby(root) {
       // the state is authoritative; only connection changes need speech.
     });
       if (el.game) el.game.hidden = false;
+      syncBoardOverlay();
       // Authoritative own-state mirror: useful when debugging a live client
       // (and in tests). Never used to steer or to compute game state.
       const own = message.p?.find((player) => player.i === state.member?.match_participant_id);
@@ -1819,14 +1858,18 @@ export function mountLobby(root) {
   }
   function applyDebugChrome() {
     const on = debugOn();
-    if (el.debugMode) el.debugMode.checked = on;
+    if (el.debugMode) {
+      el.debugMode.setAttribute('aria-pressed', on ? 'true' : 'false');
+      el.debugMode.textContent = on ? 'Debug mode on' : 'Debug mode off';
+    }
     for (const node of [el.gameHint, el.gameInputStatus, el.movementDetails]) {
       if (node) node.hidden = !on;
     }
   }
   applyDebugChrome();
-  on(el.debugMode, 'change', () => {
-    try { window.sessionStorage.setItem(DEBUG_KEY, el.debugMode.checked ? '1' : '0'); } catch (err) { /* private mode */ }
+  on(el.debugMode, 'click', () => {
+    const next = !debugOn();
+    try { window.sessionStorage.setItem(DEBUG_KEY, next ? '1' : '0'); } catch (err) { /* private mode */ }
     applyDebugChrome();
   });
   el.movementDetails?.addEventListener('toggle', () => {
@@ -1899,12 +1942,14 @@ export function mountLobby(root) {
   on(el.create, 'click', () => createRoom(false));
   on(el.join, 'click', () => joinRoom(false));
   on(el.readyToggle, 'click', () => roomAction('ready', { ready: !(state.member && state.member.ready) }));
-  on(el.leave, 'click', () => {
+  on(el.leave, 'click', leaveRoom);
+  on(el.leaveLive, 'click', leaveRoom);
+  function leaveRoom() {
     roomAction('leave').then(() => {
       flash('You left the room. Your seat is kept for a while if you come back.', 'info');
       history.replaceState({}, '', '/multiplayer');
     });
-  });
+  }
   on(el.disband, 'click', () => {
     if (!window.confirm('Disband this room for everyone?')) return;
     roomAction('disband').then(() => {

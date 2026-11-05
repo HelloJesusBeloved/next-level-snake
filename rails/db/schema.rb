@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_15_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_16_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -120,7 +120,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_15_000000) do
     t.datetime "updated_at", null: false
     t.jsonb "live_snapshot"
     t.bigint "snapshot_tick", default: 0, null: false
-    t.string "presentation_strategy", default: "classic", null: false
+    t.string "presentation_strategy", default: "responsive", null: false
     t.index ["room_id", "created_at"], name: "matches_room_created_idx"
     t.index ["room_id"], name: "matches_one_live_per_room_idx", unique: true, where: "((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('running'::character varying)::text, ('paused'::character varying)::text]))"
     t.index ["status", "lease_expires_at"], name: "matches_claimable_idx"
@@ -186,7 +186,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_15_000000) do
     t.integer "brawl_columns", default: 24, null: false
     t.integer "brawl_rows", default: 18, null: false
     t.jsonb "match_configuration"
-    t.string "presentation_strategy", default: "classic", null: false
+    t.string "presentation_strategy", default: "responsive", null: false
     t.index ["invitation_code"], name: "rooms_invitation_code_idx", unique: true
     t.index ["state", "created_at"], name: "rooms_state_created_idx"
     t.check_constraint "brawl_columns >= 24 AND brawl_columns <= 96 AND brawl_rows >= 18 AND brawl_rows <= 72", name: "rooms_board_bounds_check"
