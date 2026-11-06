@@ -657,24 +657,36 @@ export class MultiplayerGameRenderer {
       this.deathAt.clear();
       return;
     }
+    // A death that ends the Brawl stays painted. That includes a still-running
+    // frame where this death leaves one snake or none — the completed status
+    // often arrives a frame later, and fading in between looks like the snake
+    // vanished. Drop a fade that started on the previous frame.
+    if (!this.matchStillLive(snapshot)) {
+      this.deathAt.clear();
+      return;
+    }
     const wasAlive = new Map(previous.p.map((player) => [player.i, player.a]));
     let started = false;
     for (const player of snapshot.p) {
       if (wasAlive.get(player.i) !== true || player.a !== false) continue;
-      if (snapshot.s === 'running') {
-        if (!this.deathAt.has(player.i)) {
-          this.deathAt.set(player.i, this.clock());
-          started = true;
-        }
-      } else {
-        this.deathAt.delete(player.i);
+      if (!this.deathAt.has(player.i)) {
+        this.deathAt.set(player.i, this.clock());
+        started = true;
       }
     }
     if (started) this.pumpDust();
   }
 
-  corpseAlpha(player, now) {
+  matchStillLive(snapshot = this.snapshot) {
+    if (!snapshot || snapshot.s !== 'running' || !Array.isArray(snapshot.p)) return false;
+    let alive = 0;
+    for (let i = 0; i < snapshot.p.length; i++) if (snapshot.p[i] && snapshot.p[i].a) alive += 1;
+    return alive > 1;
+  }
+
+  corpseAlpha(player, now, snapshot = this.snapshot) {
     if (!player || player.a) return 1;
+    if (!this.matchStillLive(snapshot)) return 1;
     const at = this.deathAt.get(player.i);
     if (at == null) return 0.3;
     const age = now - at;
@@ -1048,17 +1060,28 @@ export class MultiplayerGameRenderer {
     const now = this.clock();
     const followAlive = this.followId != null &&
       snapshot.p.some((player) => player.i === this.followId && player.a);
-    for (let p = 0; p < snapshot.p.length; p++) {
-      const player = snapshot.p[p];
+    const paintPlayer = (player) => {
       const color = HEX.test(player.c) ? player.c : '#808080';
-      const alpha = this.corpseAlpha(player, now) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
-      if (alpha <= 0) continue;
+      const alpha = this.corpseAlpha(player, now, snapshot) * ((followAlive && player.i !== this.followId) ? 0.35 : 1);
+      if (alpha <= 0) return;
       ctx.globalAlpha = alpha;
       const body = player.b;
       const remote = smooth && smooth.players ? smooth.players.get(player.i) : null;
       const drawn = (remote && Array.isArray(remote.cells) && remote.cells.length && Number(player.i) !== ownId)
         ? remote.cells : body;
       this.paintSnake(ctx, drawn, color, cols, cell, ox, oy, Number(player.i) === ownId || player.i === this.followId);
+    };
+    // Other snakes first, then yours, so your body is never covered.
+    for (let p = 0; p < snapshot.p.length; p++) {
+      const player = snapshot.p[p];
+      if (ownId != null && Number(player.i) === ownId) continue;
+      paintPlayer(player);
+    }
+    if (ownId != null) {
+      for (let p = 0; p < snapshot.p.length; p++) {
+        const player = snapshot.p[p];
+        if (Number(player.i) === ownId) paintPlayer(player);
+      }
     }
     ctx.globalAlpha = 1;
 

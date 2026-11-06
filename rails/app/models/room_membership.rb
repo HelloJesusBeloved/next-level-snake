@@ -248,9 +248,11 @@ class RoomMembership < ApplicationRecord
     room.with_lock do
       was_host = role == "host"
       update!(state: to_state, left_at: Time.current)
-      # A live snake must not stay on the board after the player leaves.
-      # Kicks (removed) are a different transition and do not forfeit here.
-      room.matches.live.find_each { |match| match.forfeit_membership!(self) } if to_state == "left"
+      # Leave and ban both forfeit a live snake. Kick is leave! (can rejoin);
+      # ban is remove! (state removed, Room#join! refuses them).
+      if %w[left removed].include?(to_state)
+        room.matches.live.find_each { |match| match.forfeit_membership!(self) }
+      end
       next unless was_host
 
       successor = room.room_memberships.active.seated_first.first

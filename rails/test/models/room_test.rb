@@ -128,6 +128,10 @@ class RoomTest < ActiveSupport::TestCase
     assert_equal({ "speed_level" => 4 }, room.settings)
     assert_equal({}, Room.sanitize_settings("nonsense"))
     assert_equal({ "growth" => 2 }, Room.sanitize_settings({ growth: 2 }))
+    assert_equal({ "spectate_while_playing" => true },
+                 Room.sanitize_settings({ "spectate_while_playing" => true, "admin" => true }))
+    assert_equal({ "spectate_while_playing" => false },
+                 Room.sanitize_settings({ "spectate_while_playing" => "false" }))
   end
 
   test "full lifecycle: lobby, match, results, rematch, archive" do

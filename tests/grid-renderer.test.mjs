@@ -528,11 +528,19 @@ test('a frozen own snake does not stop the loop that ticks everyone else', () =>
 });
 
 test('a mid-game corpse fades after the burst, and a finishing death stays', () => {
+  const addLiving = (snapshot, id, color) => {
+    snapshot.p.push({ i: id, n: `P${id}`, c: color, b: [40 + id, 41 + id], l: 2, a: true,
+      d: 'left', sc: 0, sv: snapshot.t, lg: 2, fr: false, cy: 'connected' });
+    snapshot.q.push({ i: id, p: id, sc: 0 });
+    return snapshot;
+  };
+
   const mid = setup();
   try {
-    mid.renderer.accept(frame(1));
+    mid.renderer.accept(addLiving(addLiving(frame(1), 2, '#FF8800'), 3, '#4488FF'));
     mid.at(100);
-    mid.renderer.accept(frame(2, { a: false, er: 'self_collision' }));
+    const deadFrame = addLiving(addLiving(frame(2, { a: false, er: 'self_collision' }), 2, '#FF8800'), 3, '#4488FF');
+    mid.renderer.accept(deadFrame);
     const dead = mid.renderer.snapshot.p[0];
     assert.equal(mid.renderer.corpseAlpha(dead, 100), 0.3);
     assert.ok(mid.renderer.corpseAlpha(dead, 100 + 3400 + 400) < 0.3);
@@ -542,18 +550,29 @@ test('a mid-game corpse fades after the burst, and a finishing death stays', () 
 
   const left = setup();
   try {
-    left.renderer.accept(frame(1));
+    left.renderer.accept(addLiving(addLiving(frame(1), 2, '#FF8800'), 3, '#4488FF'));
     left.at(100);
-    left.renderer.accept(frame(2, { a: false, er: 'left' }));
+    left.renderer.accept(addLiving(addLiving(frame(2, { a: false, er: 'left' }), 2, '#FF8800'), 3, '#4488FF'));
     assert.match(document.querySelector('ol').textContent, /left/i);
     assert.equal(left.renderer.corpseAlpha(left.renderer.snapshot.p[0], 100), 0.3);
   } finally { left.close(); }
 
   const ended = setup();
   try {
-    ended.renderer.accept(frame(1));
+    ended.renderer.accept(addLiving(frame(1), 2, '#FF8800'));
     ended.at(50);
-    ended.renderer.accept(frame(2, { a: false, er: 'self_collision' }, { s: 'completed' }));
-    assert.equal(ended.renderer.corpseAlpha(ended.renderer.snapshot.p[0], 50 + 20000), 0.3);
+    ended.renderer.accept(addLiving(frame(2, { a: false, er: 'self_collision' }), 2, '#FF8800'));
+    assert.equal(ended.renderer.corpseAlpha(ended.renderer.snapshot.p[0], 50), 1, 'one survivor means the brawl is over');
+    ended.at(80);
+    ended.renderer.accept(addLiving(frame(3, { a: false, er: 'self_collision' }, { s: 'completed' }), 2, '#FF8800'));
+    assert.equal(ended.renderer.corpseAlpha(ended.renderer.snapshot.p[0], 80 + 20000), 1);
   } finally { ended.close(); }
+
+  const direct = setup();
+  try {
+    direct.renderer.accept(frame(1));
+    direct.at(50);
+    direct.renderer.accept(frame(2, { a: false, er: 'self_collision' }, { s: 'completed' }));
+    assert.equal(direct.renderer.corpseAlpha(direct.renderer.snapshot.p[0], 50 + 20000), 1);
+  } finally { direct.close(); }
 });

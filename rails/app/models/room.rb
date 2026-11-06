@@ -133,6 +133,12 @@ class Room < ApplicationRecord
                                                   Score::SPEED_PRESET_RANGE.cover?(raw["speed_level"])
     clean["growth"] = raw["growth"] if raw["growth"].is_a?(Integer) &&
                                        Score::GROWTH_PRESET_RANGE.cover?(raw["growth"])
+    # Host switch, broadcast with the room. Missing means off: living players
+    # do not see Spectate. Eliminated players and spectators still do.
+    if raw.key?("spectate_while_playing")
+      clean["spectate_while_playing"] =
+        ActiveModel::Type::Boolean.new.cast(raw["spectate_while_playing"]) == true
+    end
     clean
   end
 
@@ -338,6 +344,69 @@ class Room < ApplicationRecord
       Match.open_for_room!(self, now: now)
       configuration_changed!("room_state", state: state)
     end
+    self
+  end
+
+  # Host ends the live Brawl with no ranked result, then starts a fresh one.
+  # interrupt-style status (not abandon!) so a checkpoint is never written up
+  # as a winner. The room passes through the lobby only inside this call;
+  # start_match! takes its own lock and must not be nested in this one.
+  def restart_match!(actor: nil)
+    interrupted = []
+    with_lock do
+      raise InvalidTransition, "only a live Brawl can be restarted" unless in_match?
+      host_id = room_memberships.active.where(role: "host").pick(:id)
+      raise InvalidTransition, "Only the current host can restart a Brawl." if actor.nil? || actor.id != host_id
+
+      now = Time.current
+      matches.live.find_each do |match|
+        changed = Match.where(id: match.id, status: Match::LIVE_STATUSES).update_all(
+          status: "interrupted", ended_at: now, end_reason: "host_restart",
+          owner_token: nil, lease_expires_at: nil, winner_membership_id: nil, updated_at: now
+        )
+        next unless changed == 1
+
+        match.match_presences.delete_all
+        match.match_participants.update_all(
+          connection_state: "unattended", frozen_at: nil, freeze_deadline_at: nil, updated_at: now
+        )
+        interrupted << match.id
+      end
+      matches.reset
+      raise InvalidTransition, "The live Brawl could not be interrupted." if matches.live.exists?
+
+      room_memberships.where(state: "playing").update_all(state: "joined", updated_at: now)
+      room_memberships.active.update_all(spectator: false, updated_at: now)
+      update!(state: "lobby", finished_at: nil)
+    end
+    begin
+      start_match!(actor: actor)
+    rescue InvalidTransition
+      notify_events!([[:room_state, { state: "lobby", reason: "host_restart" }]])
+      raise
+    end
+    interrupted.each do |match_id|
+      MatchChannel.broadcast_event(match_id, { type: "interrupted", match: match_id, reason: "host_restart" })
+    rescue StandardError
+      next
+    end
+    self
+  end
+
+  # Room-wide. Living non-spectators hide the follow list unless this is on.
+  def update_spectate_while_playing!(actor, enabled:)
+    flag = ActiveModel::Type::Boolean.new.cast(enabled) == true
+    changed = false
+    with_lock do
+      raise InvalidTransition, "This room is closed." if closed?
+      host_id = room_memberships.active.where(role: "host").pick(:id)
+      raise InvalidTransition, "Only the host can change spectate options." if actor.nil? || actor.id != host_id
+      next if settings["spectate_while_playing"] == flag
+
+      update!(settings: settings.merge("spectate_while_playing" => flag))
+      changed = true
+    end
+    notify_events!([[:room_state, { state: state, spectate_while_playing: flag }]]) if changed
     self
   end
 

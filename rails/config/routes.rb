@@ -37,6 +37,10 @@ Rails.application.routes.draw do
     post "rooms/:code/lobby", to: "rooms#lobby", constraints: { code: ROOM_CODE }
     post "rooms/:code/disband", to: "rooms#disband", constraints: { code: ROOM_CODE }
     post "rooms/:code/host", to: "rooms#transfer_host", constraints: { code: ROOM_CODE }
+    post "rooms/:code/kick", to: "rooms#kick", constraints: { code: ROOM_CODE }
+    post "rooms/:code/ban", to: "rooms#ban", constraints: { code: ROOM_CODE }
+    post "rooms/:code/restart", to: "rooms#restart", constraints: { code: ROOM_CODE }
+    post "rooms/:code/spectate_while_playing", to: "rooms#spectate_while_playing", constraints: { code: ROOM_CODE }
 
     post "auth/signup", to: "auth#signup"
     post "auth/login", to: "auth#login"

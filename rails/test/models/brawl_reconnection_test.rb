@@ -388,4 +388,28 @@ class BrawlReconnectionTest < ActiveSupport::TestCase
     assert_equal "left", @rival_participant.reload.status
     assert_equal "alive", @host_participant.reload.status
   end
+
+  def test_banning_a_live_player_forfeits_and_cannot_rejoin
+    world
+    @rival_member.remove!
+    assert_equal "removed", @rival_member.reload.state
+    assert_equal "left", @rival_participant.reload.status
+
+    assert_raises(Room::NotJoinable) do
+      @room.join!(guest_session: @rival_guest, display_name: "Rival")
+    end
+  end
+
+  def test_host_restart_drops_the_live_brawl_without_a_result
+    first = @match
+    @room.restart_match!(actor: @host_member)
+    assert_equal "interrupted", first.reload.status
+    assert_equal "host_restart", first.end_reason
+    assert_nil first.winner_membership_id
+    assert @room.reload.in_match?
+    second = @room.live_match
+    assert second
+    refute_equal first.id, second.id
+    assert_raises(Room::InvalidTransition) { @room.restart_match!(actor: @rival_member.reload) }
+  end
 end

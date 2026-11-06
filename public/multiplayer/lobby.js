@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-20';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-22';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
 import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-20';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-22';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -141,14 +141,19 @@ export function mountLobby(root) {
     duelBtn: $('mp-duel-entry'),
     boardViewBtn: $('mp-board-view'),
     readyToggle: $('mp-ready-toggle'),
+    readyOver: $('mp-ready-over'),
+    peek: $('mp-peek'),
     start: $('mp-start'),
     again: $('mp-again'),
     againResults: $('mp-again-results'),
     disband: $('mp-disband'),
+    restart: $('mp-restart'),
     leave: $('mp-leave'),
-    leaveLive: $('mp-leave-live'),
     hostNote: $('mp-host-note'),
+    spectateWhilePlaying: $('mp-spectate-while-playing'),
+    spectateLabel: $('mp-spectate-label'),
     confirm: $('mp-confirm'),
+    confirmTitle: $('mp-confirm-title'),
     confirmBody: $('mp-confirm-body'),
     confirmOk: $('mp-confirm-ok'),
     confirmCancel: $('mp-confirm-cancel'),
@@ -186,6 +191,7 @@ export function mountLobby(root) {
     liveHudBudget: createPlayBudget(),
     revealedMatchId: null,
     focusDismissed: false,
+    peeking: false,
     frozenDeadline: '',
     controls: null,
   };
@@ -231,7 +237,7 @@ export function mountLobby(root) {
   }
 
   function busy(on) {
-    [el.create, el.join, el.readyToggle, el.start, el.disband, el.leave, el.leaveLive].forEach((button) => {
+    [el.create, el.join, el.readyToggle, el.readyOver, el.start, el.disband, el.restart, el.leave].forEach((button) => {
       if (button) button.disabled = !!on;
     });
   }
@@ -452,7 +458,7 @@ export function mountLobby(root) {
       // PERFORMANCE: the roster used to be rebuilt with innerHTML on every
       // poll and every room event (including 1 Hz heartbeats on 8-player
       // lobbies). It now repaints only when something visible changed.
-      const rosterSignature = JSON.stringify((room.members || []).map((member) => [
+      const rosterSignature = `${amHost ? 1 : 0}:` + JSON.stringify((room.members || []).map((member) => [
         member.id, member.display_name, member.online, member.host, member.ready,
         member.spectator, member.you, member.color?.hex,
       ]));
@@ -463,16 +469,22 @@ export function mountLobby(root) {
         if (member.you) tags.push('<span class="mp-player__tag">you</span>');
         if (!member.online) tags.push('<span class="mp-player__tag">away</span>');
         if (member.spectator) tags.push('<span class="mp-player__tag">spectating</span>');
+        const crown = member.host
+          ? '<span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span>'
+          : '';
+        const mod = amHost && !member.you
+          ? `<span class="mp-player__mod"><button type="button" class="btn btn--small" data-kick="${member.id}">Kick</button><button type="button" class="btn btn--small btn--danger" data-ban="${member.id}">Ban</button></span>`
+          : '';
         return [
           `<li class="mp-player${member.you ? ' is-you' : ''}" data-member-id="${member.id}">`,
+          '<span class="mp-player__main">',
           `<span class="mp-identity-color" style="--player-color:${/^#[0-9A-F]{6}$/i.test(member.color?.hex) ? member.color.hex : '#808080'}" role="img" aria-label="${esc(member.color?.label || 'Player color')}"></span>`,
           `<span class="mp-dot${member.online ? ' is-online' : ''}" aria-hidden="true"></span>`,
-          member.host
-            ? '<span class="mp-crown" role="img" aria-label="Host">👑</span>'
-            : '',
+          crown,
           `<span class="mp-player__name">${esc(member.display_name)}</span>`,
           tags.join(''),
-          '<span class="mp-player__spacer"></span>',
+          '</span>',
+          mod,
           `<span class="mp-badge${member.ready ? ' is-ready' : ''}">${member.ready ? 'Ready' : 'Not ready'}</span>`,
           '</li>',
         ].join('');
@@ -480,10 +492,7 @@ export function mountLobby(root) {
       }
     }
 
-    if (el.readyToggle) {
-      el.readyToggle.textContent = me.spectator ? 'Spectating this match' : me.ready ? 'Not ready' : "I'm ready";
-      el.readyToggle.disabled = !!me.spectator || room.state === 'in_match';
-    }
+    syncReadyButtons();
     // Both presentation strategies are playable since step 3, so the choice never
     // disables Start or Play again. Availability is the SERVER's call
     // (start.presentation_strategy_available, enforced again inside
@@ -501,6 +510,9 @@ export function mountLobby(root) {
       el.start.title = startTitle;
     }
     if (el.debugLabel) el.debugLabel.hidden = !amHost;
+    if (el.spectateLabel) el.spectateLabel.hidden = !amHost;
+    const spectateOn = room.settings?.spectate_while_playing === true;
+    if (el.spectateWhilePlaying) el.spectateWhilePlaying.checked = spectateOn;
     if (el.again) {
       el.again.hidden = !amHost || room.state !== 'finished';
       el.again.disabled = strategyBlocked;
@@ -511,6 +523,7 @@ export function mountLobby(root) {
       el.againResults.disabled = strategyBlocked;
     }
     if (el.disband) el.disband.hidden = !amHost;
+    if (el.restart) el.restart.hidden = !amHost || room.state !== 'in_match';
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
     if (el.inviteUrl) el.inviteUrl.textContent = state.invite;
@@ -611,8 +624,45 @@ export function mountLobby(root) {
     overlay.classList.toggle('is-visible', showLobby || finished);
     if (el.panelLobby) el.panelLobby.classList.toggle('is-visible', showLobby);
     if (el.panelOver) el.panelOver.classList.toggle('is-visible', finished);
-    if (el.leaveLive) el.leaveLive.hidden = !inRoom || showLobby;
+    if (el.peek) el.peek.hidden = !finished;
+    if (!finished && state.peeking) setPeeking(false);
     if (finished && state.gameSnapshot) renderResults();
+  }
+
+  function setPeeking(on) {
+    state.peeking = !!on;
+    if (el.peek) el.peek.setAttribute('aria-pressed', String(state.peeking));
+    const overlay = el.boardOverlay;
+    if (!overlay) return;
+    overlay.classList.toggle('is-peeking', state.peeking);
+    if (state.peeking) {
+      overlay.style.background = 'transparent';
+      overlay.style.backdropFilter = 'none';
+      overlay.style.webkitBackdropFilter = 'none';
+    } else {
+      overlay.style.removeProperty('background');
+      overlay.style.removeProperty('backdrop-filter');
+      overlay.style.removeProperty('-webkit-backdrop-filter');
+    }
+  }
+
+  function syncReadyButtons() {
+    const me = state.member || {};
+    const label = me.spectator ? 'Spectating this match' : me.ready ? 'Not ready' : "I'm ready";
+    const disabled = !!me.spectator || state.room?.state === 'in_match';
+    for (const button of [el.readyToggle, el.readyOver]) {
+      if (!button) continue;
+      button.textContent = label;
+      button.disabled = disabled;
+    }
+  }
+
+  function livingNonSpectator() {
+    const me = state.member;
+    if (!me || me.spectator || me.match_participant_id == null) return false;
+    const ownId = Number(me.match_participant_id);
+    const own = (state.gameSnapshot?.p || []).find((player) => Number(player.i) === ownId);
+    return !!(own && own.a);
   }
 
   function canSteer() {
@@ -679,7 +729,13 @@ export function mountLobby(root) {
         select.append(option);
       }
     }
-    if (el.followRow) el.followRow.hidden = living.length === 0;
+    const allow = state.room?.settings?.spectate_while_playing === true;
+    const hide = living.length === 0 || (livingNonSpectator() && !allow);
+    if (hide && select.value) {
+      select.value = '';
+      gameRenderer?.setFollow(null);
+    }
+    if (el.followRow) el.followRow.hidden = hide;
   }
 
   // PERFORMANCE: both tables are diffed by signature and skipped while their
@@ -811,13 +867,16 @@ export function mountLobby(root) {
   }
 
   // Requirement 12: never silently abandon a room. Ask, then retry.
-  function confirmSwitch(message, retry, onCancel) {
+  function confirmSwitch(message, retry, onCancel, options = {}) {
     if (!el.confirm || !el.confirm.showModal) {
       if (window.confirm(message)) retry();
       else if (onCancel) onCancel();
       return;
     }
+    if (el.confirmTitle) el.confirmTitle.textContent = options.title || 'Leave your current room?';
     if (el.confirmBody) el.confirmBody.textContent = message;
+    if (el.confirmOk) el.confirmOk.textContent = options.ok || 'Leave and join';
+    if (el.confirmCancel) el.confirmCancel.textContent = options.cancel || 'Stay here';
     state.pending = retry;
     state.cancelled = onCancel || null;
     el.confirm.showModal();
@@ -1281,7 +1340,9 @@ export function mountLobby(root) {
     }
     if (message.type === 'interrupted') {
       stopFreezeCountdown();
-      setBrawlConn('warn', 'This Brawl was interrupted — no result was recorded. The room is back in the lobby.');
+      setBrawlConn('warn', message.reason === 'host_restart'
+        ? 'The host restarted the Brawl. That round has no result.'
+        : 'This Brawl was interrupted — no result was recorded. The room is back in the lobby.');
       refresh();
       return;
     }
@@ -1942,8 +2003,9 @@ export function mountLobby(root) {
   on(el.create, 'click', () => createRoom(false));
   on(el.join, 'click', () => joinRoom(false));
   on(el.readyToggle, 'click', () => roomAction('ready', { ready: !(state.member && state.member.ready) }));
+  on(el.readyOver, 'click', () => roomAction('ready', { ready: !(state.member && state.member.ready) }));
+  on(el.peek, 'click', () => setPeeking(!state.peeking));
   on(el.leave, 'click', leaveRoom);
-  on(el.leaveLive, 'click', leaveRoom);
   function leaveRoom() {
     roomAction('leave').then(() => {
       flash('You left the room. Your seat is kept for a while if you come back.', 'info');
@@ -1951,11 +2013,43 @@ export function mountLobby(root) {
     });
   }
   on(el.disband, 'click', () => {
-    if (!window.confirm('Disband this room for everyone?')) return;
-    roomAction('disband').then(() => {
-      flash('Room disbanded.', 'info');
-      history.replaceState({}, '', '/multiplayer');
-    });
+    confirmSwitch('Disband this room for everyone?', () => {
+      roomAction('disband').then(() => {
+        flash('Room disbanded.', 'info');
+        history.replaceState({}, '', '/multiplayer');
+      });
+    }, null, { title: 'Disband this room?', ok: 'Disband', cancel: 'Keep the room' });
+  });
+  on(el.restart, 'click', () => {
+    confirmSwitch('The live Brawl stops with no result, and a new one starts for everyone still here.', () => {
+      gameRenderer?.holdLocal('rematch');
+      if (el.gameStatus) el.gameStatus.textContent = 'Restarting the Brawl…';
+      roomAction('restart').then((out) => {
+        if (out && out.ok) flash(out.json.notice || 'Brawl restarted.', 'info');
+        else if (el.gameStatus) el.gameStatus.textContent = 'Could not restart the Brawl.';
+      });
+    }, null, { title: 'Restart this Brawl?', ok: 'Restart', cancel: 'Keep playing' });
+  });
+  on(el.spectateWhilePlaying, 'change', () => {
+    roomAction('spectate_while_playing', { enabled: !!el.spectateWhilePlaying.checked });
+  });
+  on(el.roster, 'click', (event) => {
+    const kick = event.target.closest?.('[data-kick]');
+    const ban = event.target.closest?.('[data-ban]');
+    const button = kick || ban;
+    if (!button || !state.room) return;
+    const id = Number(button.dataset.kick || button.dataset.ban);
+    const member = (state.room.members || []).find((entry) => entry.id === id);
+    const name = member?.display_name || 'this player';
+    if (kick) {
+      confirmSwitch(`${name} leaves the room and their snake forfeits. They can join again with the same code.`, () => {
+        roomAction('kick', { member_id: id });
+      }, null, { title: 'Kick this player?', ok: 'Kick', cancel: 'Cancel' });
+    } else {
+      confirmSwitch(`${name} is removed and their snake forfeits. They cannot rejoin this room.`, () => {
+        roomAction('ban', { member_id: id });
+      }, null, { title: 'Ban this player?', ok: 'Ban', cancel: 'Cancel' });
+    }
   });
   on(el.lobbyViewBtn, 'click', () => showGamePane('lobby'));
   on(el.pageFocusBtn, 'click', () => {

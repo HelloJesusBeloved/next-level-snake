@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board presentation_strategy]
+    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board presentation_strategy kick ban restart spectate_while_playing]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -257,6 +257,47 @@ module Api
       render_error("invalid_transition", e.message, :conflict)
     end
 
+    # POST /api/rooms/:code/kick — host force-leave. The player forfeits and
+    # may rejoin. POST ban is the same departure with state "removed".
+    def kick
+      moderate_member!(:leave!)
+    end
+
+    def ban
+      moderate_member!(:remove!)
+    end
+
+    # POST /api/rooms/:code/restart — host throws away the live Brawl (no
+    # standings) and starts another. The client resets when the match id changes.
+    def restart
+      membership = require_host!
+      return unless membership
+
+      @room.restart_match!(actor: membership)
+      @room.reload
+      match = @room.live_match
+      participant = match&.match_participants&.find_by(room_membership_id: membership.id)
+      render json: state_payload(@room, membership.reload).merge(
+        started: true,
+        rematch: true,
+        match: match&.client_summary(participant_id: participant&.id),
+        notice: "Brawl restarted — the interrupted round has no result."
+      ), status: :created
+    rescue Room::InvalidTransition => error
+      render_error("invalid_transition", error.message, :conflict)
+    end
+
+    # POST /api/rooms/:code/spectate_while_playing — host room setting.
+    def spectate_while_playing
+      membership = require_host!
+      return unless membership
+
+      @room.update_spectate_while_playing!(membership, enabled: params[:enabled])
+      render json: state_payload(@room.reload, membership.reload)
+    rescue Room::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
+    end
+
     # POST /api/rooms/claim — attach the guest seat this browser is holding to
     # the account that just signed in (step 2's one-way claim).
     def claim
@@ -328,6 +369,24 @@ module Api
 
       render_error("forbidden", "Only the host can do that.", :forbidden)
       nil
+    end
+
+    def moderate_member!(action)
+      host = require_host!
+      return unless host
+
+      target = @room.room_memberships.active.find_by(id: params[:member_id])
+      unless target
+        return render_error("member_not_found", "That player is not in this room.", :not_found)
+      end
+      if target.id == host.id
+        return render_error("forbidden", "You cannot do that to yourself.", :forbidden)
+      end
+
+      target.public_send(action)
+      render json: state_payload(@room.reload, host.reload)
+    rescue RoomMembership::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
     end
 
     def host_identity_for_create

@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-20">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-22">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -23,10 +23,6 @@
         <span class="wordmark">Snake</span>
       </span>
     </a>
-    <div class="masthead__auth" id="mp-header-auth" aria-label="Account">
-      <button class="btn btn--small" id="mp-signin-top" type="button">Sign in</button>
-      <button class="btn btn--small" id="mp-create-top" type="button">Create account</button>
-    </div>
     <span class="brand__credit">Made almost entirely with <a href="https://arena.ai" target="_blank" rel="noreferrer">arena.ai</a> ❤️</span>
   </div>
   <nav class="masthead__meta" aria-label="Main navigation">
@@ -50,6 +46,10 @@
       <svg class="nav-icon" viewBox="0 0 24 24" width="15" height="15" fill="currentColor" aria-hidden="true"><path d="M12 0C5.37 0 0 5.37 0 12c0 5.3 3.44 9.8 8.21 11.39.6.11.82-.26.82-.58 0-.28-.01-1.04-.02-2.04-3.34.73-4.04-1.61-4.04-1.61-.55-1.39-1.33-1.76-1.33-1.76-1.09-.74.08-.73.08-.73 1.2.08 1.84 1.24 1.84 1.24 1.07 1.83 2.81 1.3 3.49.99.11-.78.42-1.3.76-1.6-2.67-.3-5.47-1.33-5.47-5.93 0-1.31.47-2.38 1.24-3.22-.13-.3-.54-1.52.12-3.18 0 0 1.01-.32 3.3 1.23a11.5 11.5 0 0 1 6 0c2.29-1.55 3.3-1.23 3.3-1.23.66 1.66.24 2.88.12 3.18.77.84 1.23 1.91 1.23 3.22 0 4.61-2.81 5.62-5.48 5.92.43.37.81 1.1.81 2.22 0 1.6-.01 2.9-.01 3.29 0 .32.22.69.83.57A12.01 12.01 0 0 0 24 12c0-6.63-5.37-12-12-12Z" /></svg>
       Open Source
     </a>
+    <div class="masthead__auth auth-area" id="mp-header-auth" aria-label="Account">
+      <button class="btn btn--small" id="mp-signin-top" type="button">Sign in</button>
+      <button class="btn btn--small" id="mp-create-top" type="button">Create account</button>
+    </div>
   </nav>
 </header>
 
@@ -113,7 +113,7 @@
 
     <article class="mp-card">
       <h2 class="mp-card__title">Start a room</h2>
-      <p class="mp-card__hint">You become the host <span class="mp-crown" aria-hidden="true">👑</span> and get an invitation code to share. No size to pick — rooms expand as friends pile in.</p>
+      <p class="mp-card__hint">You become the host <span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span> and get an invitation code to share. No size to pick — rooms expand as friends pile in.</p>
       <div class="mp-actions">
         <button class="btn btn--primary" id="mp-create" type="button">Create room</button>
       </div>
@@ -141,6 +141,13 @@
   <%# ---- inside a room ---------------------------------------------------- %>
   <section class="mp-room" id="mp-room" hidden>
     <div class="mp-play">
+      <section class="card mp-standings-card" id="mp-standings-card" aria-labelledby="mp-standings-title">
+        <div class="card__head">
+          <h2 class="card__title" id="mp-standings-title">Standings</h2>
+        </div>
+        <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
+        <p class="mp-card__hint" id="mp-standings-empty">Standings appear when a Brawl starts.</p>
+      </section>
       <section class="mp-game" id="mp-game" hidden aria-label="Live Brawl">
         <div class="mp-game__heading">
           <div>
@@ -163,6 +170,31 @@
             <div class="snake-field mp-snake-field">
               <canvas id="mp-game-canvas" class="snake-canvas mp-game__canvas" tabindex="0" role="application"
                       aria-label="Multiplayer Snake arena. Use arrow keys or WASD, or swipe the page while focused."></canvas>
+              <div class="overlay mp-board-overlay" id="mp-board-overlay">
+                <div class="panel" id="mp-panel-lobby">
+                  <p class="panel__eyebrow">Ready</p>
+                  <h2 class="panel__title">Waiting for the Brawl</h2>
+                  <p class="panel__body">Mark ready when you are. The host starts the match.</p>
+                  <div class="panel__actions">
+                    <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
+                  </div>
+                </div>
+                <div class="panel result-panel" id="mp-panel-over">
+                  <p class="panel__eyebrow">Brawl complete</p>
+                  <h2 class="panel__title">Game over</h2>
+                  <div class="panel__actions">
+                    <button class="btn" id="mp-ready-over" type="button">I'm ready</button>
+                    <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
+                  </div>
+                  <div id="mp-over-ranks"></div>
+                </div>
+              </div>
+              <button class="btn-peek" id="mp-peek" type="button" aria-pressed="false" aria-label="Show where the snakes ended" title="Show or hide the game-over screen" hidden>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              </button>
             </div>
             <div class="cabinet mp-cabinet" aria-hidden="true">
               <div class="cabinet__marquee">
@@ -177,25 +209,12 @@
             </div>
           </div>
         </div>
-        <div class="overlay" id="mp-board-overlay">
-          <div class="panel" id="mp-panel-lobby">
-            <p class="panel__eyebrow">Ready</p>
-            <h2 class="panel__title">Waiting for the Brawl</h2>
-            <p class="panel__body">Mark ready when you are. The host starts the match.</p>
-            <div class="panel__actions">
-              <button class="btn btn--primary" id="mp-ready-toggle" type="button">I'm ready</button>
-              <button class="btn" id="mp-leave" type="button">Leave room</button>
-            </div>
-          </div>
-          <div class="panel result-panel" id="mp-panel-over">
-            <p class="panel__eyebrow">Brawl complete</p>
-            <h2 class="panel__title">Game over</h2>
-            <div id="mp-over-ranks"></div>
-            <div class="panel__actions">
-              <button class="btn btn--primary" id="mp-again" type="button" hidden>Play again</button>
-            </div>
-          </div>
         </div>
+        <div class="mp-under-board" id="mp-under-board">
+          <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
+          <button class="btn" id="mp-leave" type="button">Leave room</button>
+          <button class="btn btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
+          <button class="btn" id="mp-restart" type="button" hidden>Restart Brawl</button>
         </div>
         <section class="mp-results" id="mp-results" hidden aria-label="Final results">
           <h4 class="mp-results__title">Final results</h4>
@@ -226,20 +245,6 @@
           <pre id="mp-movement-metrics" aria-live="off">Open during a match to measure server, network and drawing intervals.</pre>
         </details>
       </section>
-
-      <section class="card mp-standings-card" id="mp-standings-card" aria-labelledby="mp-standings-title">
-        <div class="card__head">
-          <h2 class="card__title" id="mp-standings-title">Standings</h2>
-        </div>
-        <ol class="mp-game-scores" id="mp-game-scores" aria-label="Brawl standings"></ol>
-        <p class="mp-card__hint" id="mp-standings-empty">Standings appear when a Brawl starts.</p>
-      </section>
-
-      <div class="mp-actions mp-actions--room" id="mp-room-actions">
-        <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
-        <button class="btn btn--small" id="mp-leave-live" type="button" hidden>Leave room</button>
-        <button class="btn btn--small btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
-      </div>
 
       <div class="mp-room-rest" id="mp-room-rest">
         <header class="mp-room__head mp-share" aria-label="Share this room">
@@ -282,6 +287,16 @@
         <p class="mp-note" id="mp-host-note" hidden>
           Ready votes are advisory — as host, you decide when the Brawl begins.
         </p>
+
+        <section class="mp-card mp-spectate-card" id="mp-spectate-label" hidden>
+          <p class="mp-room__eyebrow">Host only</p>
+          <h3 class="mp-card__title">Spectate while playing</h3>
+          <p class="mp-card__hint">Off by default. A living player does not see the spectate list until you turn this on. Eliminated players and spectators always can. Everyone in the room follows this switch.</p>
+          <label class="switch" for="mp-spectate-while-playing">
+            <input id="mp-spectate-while-playing" type="checkbox">
+            <span>Show spectate options to players still in the Brawl</span>
+          </label>
+        </section>
 
         <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
 
@@ -393,5 +408,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-20"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-22"></script>
 <% end %>
