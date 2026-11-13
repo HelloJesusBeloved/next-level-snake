@@ -492,11 +492,12 @@ test('a remote pellet stays with the snake you can see, and leaves when that sna
   assert.deepEqual(before.food, [pellet], 'the pellet is still there because that snake has not eaten it');
   const cols = 24, rows = 18;
   const cell = Math.min(316 / cols, 237 / rows);
-  const wantX = (101 % cols + 0.5) * cell;
-  const wantY = (Math.floor(101 / cols) + 0.5) * cell;
-  const arcs = h.calls.filter((call) => call.name === 'arc');
-  assert.ok(arcs.some((call) => Math.abs(call.args[0] - wantX) < 0.01 &&
-    Math.abs(call.args[1] - wantY) < 0.01), 'the pellet is drawn on its cell');
+  const pad = Math.max(1, cell * 0.1);
+  const foodX = (101 % cols) * cell + pad;
+  const foodY = (Math.floor(101 / cols)) * cell + pad;
+  const pelletRects = (calls) => calls.filter((call) => call.name === 'rect' &&
+    Math.abs(call.args[0] - foodX) < 0.01 && Math.abs(call.args[1] - foodY) < 0.01);
+  assert.ok(pelletRects(h.calls).length > 0, 'the pellet is drawn on its cell');
   h.calls.length = 0;
   r.accept(boardFrame(3, { remote: [102, 101, 100], extra: { f: [] } }));
   r.accept(boardFrame(4, { remote: [103, 102, 101], extra: { f: [] } }));
@@ -505,9 +506,7 @@ test('a remote pellet stays with the snake you can see, and leaves when that sna
   assert.deepEqual(r.lastPlaybackSample.food, [], 'once the visible snake eats, the pellet is gone');
   h.calls.length = 0;
   r.present(r.paintSnapshot, 420);
-  const after = h.calls.filter((call) => call.name === 'arc');
-  assert.ok(!after.some((call) => Math.abs(call.args[0] - wantX) < 0.01 &&
-    Math.abs(call.args[1] - wantY) < 0.01), 'the eaten pellet is not left on the board');
+  assert.equal(pelletRects(h.calls).length, 0, 'the eaten pellet is not left on the board');
   h.close();
 });
 

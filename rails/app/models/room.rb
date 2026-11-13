@@ -63,6 +63,15 @@ class Room < ApplicationRecord
            -> { where(state: RoomMembership::ACTIVE_STATES).order(:joined_at, :id) },
            class_name: "RoomMembership", inverse_of: :room
 
+  # Seated players, plus anyone kicked or banned who has not rejoined.
+  # A voluntary leave stays off this list. The next Brawl clears the marks.
+  def roster_memberships
+    active = RoomMembership::ACTIVE_STATES.map { |state| "'#{state}'" }.join(", ")
+    room_memberships
+      .where("state IN (?) OR departure IN (?)", RoomMembership::ACTIVE_STATES, %w[kicked banned])
+      .order(Arel.sql("CASE WHEN state IN (#{active}) THEN 0 ELSE 1 END"), :joined_at, :id)
+  end
+
   validates :invitation_code, presence: true, uniqueness: true,
             format: { with: /\A[A-Z0-9]+\z/, message: "is not a valid invitation code" }
   validates :name, length: { maximum: NAME_MAX_LENGTH }, allow_blank: true
@@ -138,6 +147,12 @@ class Room < ApplicationRecord
     if raw.key?("spectate_while_playing")
       clean["spectate_while_playing"] =
         ActiveModel::Type::Boolean.new.cast(raw["spectate_while_playing"]) == true
+    end
+    # Host switch. Missing means on: other snakes paint over food and hide it
+    # until they move past. Stored false only when the host turns it off.
+    if raw.key?("snakes_cover_food")
+      clean["snakes_cover_food"] =
+        ActiveModel::Type::Boolean.new.cast(raw["snakes_cover_food"]) == true
     end
     clean
   end
@@ -327,6 +342,9 @@ class Room < ApplicationRecord
       raise InvalidTransition, "a Brawl needs at least #{MIN_PLAYERS_TO_START} eligible players" if players.size < MIN_PLAYERS_TO_START
       board = board_payload
       now = Time.current
+      room_memberships.where(departure: %w[kicked banned])
+                      .where.not(state: RoomMembership::ACTIVE_STATES)
+                      .update_all(departure: nil, updated_at: now)
       frozen_config = {
         "columns" => board[:columns], "rows" => board[:rows],
         "presentation_strategy" => presentation_strategy,
@@ -393,6 +411,45 @@ class Room < ApplicationRecord
     self
   end
 
+  # Host ends the live Brawl with no ranked result and does not start another.
+  # Same interrupt as restart_match! (no winner, no standings) then the lobby.
+  def stop_match!(actor: nil)
+    interrupted = []
+    with_lock do
+      raise InvalidTransition, "only a live Brawl can be stopped" unless in_match?
+      host_id = room_memberships.active.where(role: "host").pick(:id)
+      raise InvalidTransition, "Only the current host can stop a Brawl." if actor.nil? || actor.id != host_id
+
+      now = Time.current
+      matches.live.find_each do |match|
+        changed = Match.where(id: match.id, status: Match::LIVE_STATUSES).update_all(
+          status: "interrupted", ended_at: now, end_reason: "host_stop",
+          owner_token: nil, lease_expires_at: nil, winner_membership_id: nil, updated_at: now
+        )
+        next unless changed == 1
+
+        match.match_presences.delete_all
+        match.match_participants.update_all(
+          connection_state: "unattended", frozen_at: nil, freeze_deadline_at: nil, updated_at: now
+        )
+        interrupted << match.id
+      end
+      matches.reset
+      raise InvalidTransition, "The live Brawl could not be stopped." if matches.live.exists?
+
+      room_memberships.where(state: "playing").update_all(state: "joined", updated_at: now)
+      room_memberships.active.update_all(spectator: false, updated_at: now)
+      update!(state: "lobby", finished_at: nil)
+    end
+    notify_events!([[:room_state, { state: "lobby", reason: "host_stop" }]])
+    interrupted.each do |match_id|
+      MatchChannel.broadcast_event(match_id, { type: "interrupted", match: match_id, reason: "host_stop" })
+    rescue StandardError
+      next
+    end
+    self
+  end
+
   # Room-wide. Living non-spectators hide the follow list unless this is on.
   def update_spectate_while_playing!(actor, enabled:)
     flag = ActiveModel::Type::Boolean.new.cast(enabled) == true
@@ -407,6 +464,24 @@ class Room < ApplicationRecord
       changed = true
     end
     notify_events!([[:room_state, { state: state, spectate_while_playing: flag }]]) if changed
+    self
+  end
+
+  # Room-wide. Missing or true: snakes paint over food and hide it. False:
+  # other snakes paint under the pellets. Collision is unchanged.
+  def update_snakes_cover_food!(actor, enabled:)
+    flag = ActiveModel::Type::Boolean.new.cast(enabled) == true
+    changed = false
+    with_lock do
+      raise InvalidTransition, "This room is closed." if closed?
+      host_id = room_memberships.active.where(role: "host").pick(:id)
+      raise InvalidTransition, "Only the host can change food cover." if actor.nil? || actor.id != host_id
+      next if settings["snakes_cover_food"] == flag
+
+      update!(settings: settings.merge("snakes_cover_food" => flag))
+      changed = true
+    end
+    notify_events!([[:room_state, { state: state, snakes_cover_food: flag }]]) if changed
     self
   end
 

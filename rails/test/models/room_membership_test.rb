@@ -127,6 +127,7 @@ class RoomMembershipTest < ActiveSupport::TestCase
     kicked = room.join!(guest_session: make_guest.first, display_name: "Trouble")
     kicked.remove!
     assert_equal "removed", kicked.reload.state
+    assert_equal "banned", kicked.departure
     assert kicked.left_at.present?
 
     assert_raises(Room::NotJoinable) do

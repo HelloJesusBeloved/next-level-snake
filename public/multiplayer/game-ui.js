@@ -41,6 +41,8 @@ export function newlyEliminated(previous, next) {
 
 function eliminationLabel(reason) {
   if (reason === 'left') return 'Left';
+  if (reason === 'kicked') return 'Kicked';
+  if (reason === 'banned') return 'Banned';
   if (reason === 'self_collision') return 'Crashed';
   if (reason === 'body_collision') return 'Hit snake';
   if (reason === 'head_on') return 'Head-on';

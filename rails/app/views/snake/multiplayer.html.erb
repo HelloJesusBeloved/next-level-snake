@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-22">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-24">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -149,6 +149,7 @@
         <p class="mp-card__hint" id="mp-standings-empty">Standings appear when a Brawl starts.</p>
       </section>
       <section class="mp-game" id="mp-game" hidden aria-label="Live Brawl">
+        <div class="mp-stage">
         <div class="mp-game__heading">
           <div>
             <p class="mp-room__eyebrow">Brawl</p>
@@ -211,11 +212,15 @@
           </div>
         </div>
         </div>
+        </div>
         <div class="mp-under-board" id="mp-under-board">
-          <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
           <button class="btn" id="mp-leave" type="button">Leave room</button>
-          <button class="btn btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
-          <button class="btn" id="mp-restart" type="button" hidden>Restart Brawl</button>
+          <div class="mp-host-actions">
+            <button class="btn btn--primary" id="mp-start" type="button" hidden>Start Brawl</button>
+            <button class="btn btn--danger" id="mp-disband" type="button" hidden>Disband room</button>
+            <button class="btn" id="mp-stop" type="button" hidden>Stop Brawl</button>
+            <button class="btn" id="mp-restart" type="button" hidden>Restart Brawl</button>
+          </div>
         </div>
         <section class="mp-results" id="mp-results" hidden aria-label="Final results">
           <h4 class="mp-results__title">Final results</h4>
@@ -289,16 +294,6 @@
           Ready votes are advisory — as host, you decide when the Brawl begins.
         </p>
 
-        <section class="mp-card mp-spectate-card" id="mp-spectate-label" hidden>
-          <p class="mp-room__eyebrow">Host only</p>
-          <h3 class="mp-card__title">Spectate while playing</h3>
-          <p class="mp-card__hint">Off by default. A living player does not see the spectate list until you turn this on. Eliminated players and spectators always can. Everyone in the room follows this switch.</p>
-          <label class="switch" for="mp-spectate-while-playing">
-            <input id="mp-spectate-while-playing" type="checkbox">
-            <span>Show spectate options to players still in the Brawl</span>
-          </label>
-        </section>
-
         <ul class="mp-roster" id="mp-roster" aria-label="Players in this room"></ul>
 
         <div class="mp-config-grid">
@@ -309,6 +304,15 @@
             <div class="mp-color-options" id="mp-color-options" role="group" aria-label="Player colors"></div>
             <p class="mp-card__hint" id="mp-color-note"></p>
             <p class="mp-config-status" id="mp-color-status" role="status" aria-live="polite"></p>
+          </section>
+          <section class="mp-card mp-food-cover-card" id="mp-food-cover-label" hidden>
+            <p class="mp-room__eyebrow">Host only</p>
+            <h3 class="mp-card__title">Snakes cover food</h3>
+            <p class="mp-card__hint">On by default. Another snake can pass over food and hide it until they move on. Turn this off and other snakes are drawn under the food, so pellets stay visible. Your own snake still covers food on your screen. Everyone in the room follows this switch.</p>
+            <label class="switch" for="mp-food-cover">
+              <input id="mp-food-cover" type="checkbox" checked>
+              <span>Let snakes hide food they pass over</span>
+            </label>
           </section>
           <section class="mp-card mp-board-card" aria-labelledby="mp-board-title">
             <p class="mp-room__eyebrow" id="mp-board-host-label">Host controls · next Brawl</p>
@@ -341,6 +345,15 @@
             </form>
             <p class="mp-config-status" id="mp-presentation-status" role="status" aria-live="polite"></p>
             <p class="mp-card__hint" id="mp-presentation-availability">Both strategies run the same authoritative Ruby simulation: same rules, same scores, same results. Classic paints each confirmed frame as it arrives. Responsive predicts your own snake locally and plays other players back smoothly from buffered confirmed movement.</p>
+          </section>
+          <section class="mp-card mp-spectate-card" id="mp-spectate-label" hidden>
+            <p class="mp-room__eyebrow">Host only</p>
+            <h3 class="mp-card__title">Spectate while playing</h3>
+            <p class="mp-card__hint">Off by default. A living player does not see the spectate list until you turn this on. Eliminated players and spectators always can. Everyone in the room follows this switch.</p>
+            <label class="switch" for="mp-spectate-while-playing">
+              <input id="mp-spectate-while-playing" type="checkbox">
+              <span>Show spectate options to players still in the Brawl</span>
+            </label>
           </section>
           <section class="mp-card mp-debug-card" id="mp-debug-label" hidden>
             <p class="mp-room__eyebrow">Host only</p>
@@ -409,5 +422,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-23"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-24"></script>
 <% end %>

@@ -88,7 +88,7 @@
 .mp-roster { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
 .mp-player {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 8px 10px;
   padding: 10px 12px;
@@ -97,8 +97,15 @@
   background: color-mix(in srgb, var(--ink) 35%, transparent);
 }
 .mp-player.is-you { border-color: color-mix(in srgb, var(--accent-2) 55%, transparent); }
-.mp-player__main { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 140px; }
-.mp-player__name { font-weight: 600; font-size: 14px; }
+.mp-player__main { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.mp-player__name {
+  font-weight: 600;
+  font-size: 14px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .mp-player__tag {
   font-size: 11px;
   letter-spacing: 0.1em;
@@ -108,6 +115,7 @@
 .mp-player__spacer { flex: 1 1 auto; }
 .mp-player__mod { display: inline-flex; gap: 6px; flex: 0 0 auto; margin-left: auto; }
 .mp-player__mod .btn { min-height: 32px; padding: 4px 10px; }
+.mp-player__main + .mp-badge { margin-left: auto; }
 
 .mp-crown {
   display: inline-flex;
@@ -133,6 +141,7 @@
 }
 
 .mp-badge {
+  flex: 0 0 auto;
   padding: 3px 9px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -144,6 +153,11 @@
 .mp-badge.is-ready {
   border-color: color-mix(in srgb, var(--green) 55%, transparent);
   color: var(--green);
+}
+.mp-badge.is-kicked,
+.mp-badge.is-banned {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  color: var(--red);
 }
 
 .mp-note {
@@ -426,6 +440,8 @@
 .mp-game-score__meta { color: var(--muted); font: 10px 'IBM Plex Mono', monospace; white-space: nowrap; }
 .mp-game-score__tag.is-alive { color: var(--green); }
 .mp-game-score__tag.is-left { color: var(--muted); }
+.mp-game-score__tag.is-kicked,
+.mp-game-score__tag.is-banned { color: var(--red); }
 .mp-results { margin-top: 12px; padding: 12px; border: 1px solid color-mix(in srgb, var(--accent-2) 40%, var(--line)); border-radius: 12px; }
 .mp-results__title { margin: 0 0 8px; font-size: 14px; }
 .mp-results-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
@@ -587,6 +603,14 @@
   width: min(100%, 520px);
   margin: 14px auto 0;
 }
+/* Desktop: the wrapper is not a box, so Start / Leave / Disband / Stop / Restart
+   share one centered row. Mobile turns it back into a row of host buttons. */
+.mp-host-actions { display: contents; }
+#mp-start { order: 1; }
+#mp-leave { order: 2; }
+#mp-disband { order: 3; }
+#mp-stop { order: 4; }
+#mp-restart { order: 5; }
 .mp-snake-field > .btn-peek { top: 8px; right: 8px; z-index: 6; }
 /* Scanlines on .snake-field::after read as a grid, including on a phone.
    Multiplayer is a solid theme field. Single player keeps the lines. */
@@ -654,7 +678,8 @@ html.mp-page-focused select,
 html.mp-page-focused textarea,
 html.mp-page-focused label { touch-action: manipulation; }
 .mp-debug-card .mp-card__hint,
-.mp-spectate-card .mp-card__hint { max-width: 42ch; }
+.mp-spectate-card .mp-card__hint,
+.mp-food-cover-card .mp-card__hint { max-width: 42ch; }
 #mp-debug-mode[aria-pressed='true'],
 #mp-spectate-while-playing[aria-pressed='true'] {
   border-color: var(--green);
@@ -667,20 +692,35 @@ html.mp-page-focused label { touch-action: manipulation; }
 @media (max-width: 900px) {
   #multiplayer-root.band { padding: 16px 16px 32px; }
   .mp-room { padding: 12px; margin-top: 12px; }
-  .mp-play { display: flex; flex-direction: column; gap: 12px; }
-  /* Same outer inset as Single Player (16px) and the same frame, so the
-     playfield is the same size. The room card's padding is cancelled here. */
-  .mp-game {
+  .mp-play { display: flex; flex-direction: column; gap: 8px; }
+  /* The board chrome is one unit so standings can sit directly under it.
+     Leave is a separate flex item below standings; host buttons follow. */
+  .mp-game { display: contents; }
+  .mp-stage {
     order: 1;
-    padding: 0;
-    border: 0;
-    background: transparent;
     margin-left: -12px;
     margin-right: -12px;
   }
   .mp-screen { width: 100%; max-width: var(--screen-max); margin-left: auto; margin-right: auto; }
   .mp-standings-card { order: 2; }
-  .mp-room-rest { order: 3; gap: 10px; }
+  .mp-under-board { display: contents; }
+  .mp-host-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    order: 4;
+    width: min(100%, 520px);
+    margin: 4px auto 0;
+  }
+  #mp-leave { align-self: center; }
+  .mp-results,
+  .mp-eliminated,
+  .mp-game__hint,
+  .mp-game__input-status,
+  .mp-movement-diagnostics { order: 5; }
+  .mp-room-rest { order: 6; gap: 10px; }
   .mp-share,
   .mp-room__head {
     flex-direction: column;

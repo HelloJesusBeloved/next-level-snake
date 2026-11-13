@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board presentation_strategy kick ban restart spectate_while_playing]
+    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board presentation_strategy kick ban restart stop spectate_while_playing snakes_cover_food]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -257,10 +257,10 @@ module Api
       render_error("invalid_transition", e.message, :conflict)
     end
 
-    # POST /api/rooms/:code/kick — host force-leave. The player forfeits and
-    # may rejoin. POST ban is the same departure with state "removed".
+    # POST /api/rooms/:code/kick — host force-leave. State stays "left" so they
+    # can rejoin; departure is "kicked". POST ban is state "removed".
     def kick
-      moderate_member!(:leave!)
+      moderate_member!(:kick!)
     end
 
     def ban
@@ -287,12 +287,40 @@ module Api
       render_error("invalid_transition", error.message, :conflict)
     end
 
+    # POST /api/rooms/:code/stop — host ends the live Brawl with no result
+    # and does not start another. The room returns to the lobby.
+    def stop
+      membership = require_host!
+      return unless membership
+
+      @room.stop_match!(actor: membership)
+      render json: state_payload(@room.reload, membership.reload).merge(
+        stopped: true,
+        notice: "Brawl stopped. The room is back in the lobby."
+      )
+    rescue Room::InvalidTransition => error
+      render_error("invalid_transition", error.message, :conflict)
+    end
+
     # POST /api/rooms/:code/spectate_while_playing — host room setting.
     def spectate_while_playing
       membership = require_host!
       return unless membership
 
       @room.update_spectate_while_playing!(membership, enabled: params[:enabled])
+      render json: state_payload(@room.reload, membership.reload)
+    rescue Room::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
+    end
+
+    # POST /api/rooms/:code/snakes_cover_food — host room setting.
+    # Missing or true hides food under other snakes. False paints food on top
+    # of everyone except your own snake. It does not change collisions.
+    def snakes_cover_food
+      membership = require_host!
+      return unless membership
+
+      @room.update_snakes_cover_food!(membership, enabled: params[:enabled])
       render json: state_payload(@room.reload, membership.reload)
     rescue Room::InvalidTransition => e
       render_error("invalid_transition", e.message, :conflict)
@@ -462,7 +490,8 @@ module Api
     end
 
     def room_payload(room, viewer_membership = nil, at: Time.current)
-      members = room.active_memberships.to_a
+      active = room.active_memberships.to_a
+      members = room.roster_memberships.to_a
       match = room.matches.order(id: :desc).first
       participants_by_membership = match ? match.match_participants.index_by(&:room_membership_id) : {}
       {
@@ -490,9 +519,9 @@ module Api
                          connection: participant&.connection_payload)
         end,
         counts: {
-          members: members.size,
-          online: members.count { |member| member.online?(at: at) },
-          ready: members.count { |member| member.ready? && !member.spectator? },
+          members: active.size,
+          online: active.count { |member| member.online?(at: at) },
+          ready: active.count { |member| member.ready? && !member.spectator? },
           capacity: room.max_members
         },
         start: room.start_eligibility(at: at),
@@ -519,6 +548,7 @@ module Api
         host: member.host?,
         ready: member.ready?,
         state: member.state,
+        departure: member.departure,
         online: member.online?(at: at),
         guest: member.guest?,
         joined_at: member.joined_at,

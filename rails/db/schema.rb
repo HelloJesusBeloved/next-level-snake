@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_16_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -141,6 +141,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_16_000000) do
     t.string "display_name", null: false
     t.string "role", default: "player", null: false
     t.string "state", default: "joined", null: false
+    t.string "departure"
     t.datetime "joined_at", null: false
     t.datetime "left_at"
     t.datetime "last_seen_at"
@@ -166,6 +167,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_16_000000) do
     t.check_constraint "jsonb_typeof(device_reports) = 'object'::text", name: "memberships_device_reports_check"
     t.check_constraint "role::text = ANY (ARRAY['host'::character varying::text, 'player'::character varying::text])", name: "room_memberships_role_check"
     t.check_constraint "state::text = ANY (ARRAY['joined'::character varying::text, 'ready'::character varying::text, 'playing'::character varying::text, 'left'::character varying::text, 'removed'::character varying::text])", name: "room_memberships_state_check"
+    t.check_constraint "departure IS NULL OR (departure::text = ANY (ARRAY['left'::character varying::text, 'kicked'::character varying::text, 'banned'::character varying::text]))", name: "room_memberships_departure_check"
   end
 
   create_table "rooms", force: :cascade do |t|

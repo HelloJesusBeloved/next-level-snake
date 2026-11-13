@@ -132,6 +132,11 @@ class RoomTest < ActiveSupport::TestCase
                  Room.sanitize_settings({ "spectate_while_playing" => true, "admin" => true }))
     assert_equal({ "spectate_while_playing" => false },
                  Room.sanitize_settings({ "spectate_while_playing" => "false" }))
+    assert_equal({ "snakes_cover_food" => true },
+                 Room.sanitize_settings({ "snakes_cover_food" => true, "admin" => true }))
+    assert_equal({ "snakes_cover_food" => false },
+                 Room.sanitize_settings({ "snakes_cover_food" => "false" }))
+    assert_equal({}, Room.sanitize_settings({}))
   end
 
   test "full lifecycle: lobby, match, results, rematch, archive" do

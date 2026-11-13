@@ -14,8 +14,9 @@
 # Lifecycle:
 #
 #     joined ⇄ ready ──room starts──▶ playing ──room finishes──▶ joined
-#     joined / ready / playing ──leave!──▶ left ──rejoin!──▶ joined
-#     joined / ready / playing ──remove!─▶ removed  (terminal for this room)
+#     joined / ready / playing ──leave!──▶ left     (departure "left", can rejoin)
+#     joined / ready / playing ──kick!───▶ left     (departure "kicked", can rejoin)
+#     joined / ready / playing ──remove!─▶ removed  (departure "banned", cannot rejoin)
 #
 # `joined`, `ready` and `playing` are the ACTIVE states. A partial unique
 # index allows each identity at most one active seat across *all* rooms,
@@ -36,6 +37,7 @@ class RoomMembership < ApplicationRecord
   STATES = %w[joined ready playing left removed].freeze
   ACTIVE_STATES = %w[joined ready playing].freeze
   INACTIVE_STATES = %w[left removed].freeze
+  DEPARTURES = %w[left kicked banned].freeze
 
   # Same bounds as account usernames (User::USERNAME_*): familiar to type,
   # short enough for a lobby roster.
@@ -53,6 +55,7 @@ class RoomMembership < ApplicationRecord
             length: { minimum: DISPLAY_NAME_MIN_LENGTH, maximum: DISPLAY_NAME_MAX_LENGTH }
   validates :role, inclusion: { in: ROLES }
   validates :state, inclusion: { in: STATES }
+  validates :departure, inclusion: { in: DEPARTURES }, allow_nil: true
   validates :joined_at, presence: true
   validates :color_slot, inclusion: { in: 0...RoomPalette::CAPACITY }
   validate :validate_color_reservation!
@@ -172,14 +175,18 @@ class RoomMembership < ApplicationRecord
   end
 
   def leave!
-    depart!("left")
+    depart!("left", departure: "left")
   end
 
-  # Host-initiated kick. Authorisation ("may this caller kick?") belongs
-  # to the future controller; this only performs the guarded transition.
-  # Removed members cannot rejoin the same room (Room#join! enforces it).
+  # Host kick. State stays "left" so the same row can rejoin; departure is
+  # what the roster and the forfeited snake show instead of a voluntary leave.
+  def kick!
+    depart!("left", departure: "kicked")
+  end
+
+  # Host ban. Removed members cannot rejoin the same room (Room#join! enforces it).
   def remove!
-    depart!("removed")
+    depart!("removed", departure: "banned")
   end
 
   # Reactivates a seat kept from an earlier visit to the same room. A
@@ -191,7 +198,8 @@ class RoomMembership < ApplicationRecord
 
     update!(state: "joined", display_name: display_name, role: "player",
             spectator: room.in_match?, device_reports: {},
-            joined_at: Time.current, left_at: nil, last_seen_at: Time.current)
+            joined_at: Time.current, left_at: nil, last_seen_at: Time.current,
+            departure: nil)
     self
   end
 
@@ -233,7 +241,7 @@ class RoomMembership < ApplicationRecord
 
   private
 
-  # Shared leave/remove path. Locks the room so host succession is atomic: if
+  # Shared leave/kick/ban path. Locks the room so host succession is atomic: if
   # the host departs, the longest-seated remaining member inherits at once.
   #
   # An emptied room is deliberately NOT disbanded here. The invitation link
@@ -241,15 +249,15 @@ class RoomMembership < ApplicationRecord
   # lobby can reload at once — so the room simply sits there host-less until
   # somebody rejoins (Room#join! hands them the crown) or the inactivity
   # sweeper expires it (Room#sweep!, step 3 requirement 11).
-  def depart!(to_state)
+  def depart!(to_state, departure: nil)
     return self unless active?
 
-    events = [[:member_left, { member: id, name: display_name }]]
+    events = [[:member_left, { member: id, name: display_name, departure: departure }]]
     room.with_lock do
       was_host = role == "host"
-      update!(state: to_state, left_at: Time.current)
-      # Leave and ban both forfeit a live snake. Kick is leave! (can rejoin);
-      # ban is remove! (state removed, Room#join! refuses them).
+      update!(state: to_state, left_at: Time.current, departure: departure)
+      # Leave, kick and ban all forfeit a live snake. Kick stays "left" so
+      # rejoin still works; ban is "removed" and Room#join! refuses them.
       if %w[left removed].include?(to_state)
         room.matches.live.find_each { |match| match.forfeit_membership!(self) }
       end

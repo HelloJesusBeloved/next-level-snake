@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-23';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-24';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
 import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-23';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-24';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -149,10 +149,13 @@ export function mountLobby(root) {
     againResults: $('mp-again-results'),
     disband: $('mp-disband'),
     restart: $('mp-restart'),
+    stop: $('mp-stop'),
     leave: $('mp-leave'),
     hostNote: $('mp-host-note'),
     spectateWhilePlaying: $('mp-spectate-while-playing'),
     spectateLabel: $('mp-spectate-label'),
+    foodCover: $('mp-food-cover'),
+    foodCoverLabel: $('mp-food-cover-label'),
     confirm: $('mp-confirm'),
     confirmTitle: $('mp-confirm-title'),
     confirmBody: $('mp-confirm-body'),
@@ -240,7 +243,7 @@ export function mountLobby(root) {
   }
 
   function busy(on) {
-    [el.create, el.join, el.readyToggle, el.readyOver, el.start, el.disband, el.restart, el.leave].forEach((button) => {
+    [el.create, el.join, el.readyToggle, el.readyOver, el.start, el.disband, el.restart, el.stop, el.leave].forEach((button) => {
       if (button) button.disabled = !!on;
     });
   }
@@ -467,23 +470,27 @@ export function mountLobby(root) {
       // lobbies). It now repaints only when something visible changed.
       const rosterSignature = `${amHost ? 1 : 0}:` + JSON.stringify((room.members || []).map((member) => [
         member.id, member.display_name, member.online, member.host, member.ready,
-        member.spectator, member.you, member.color?.hex,
+        member.spectator, member.you, member.color?.hex, member.departure, member.state,
       ]));
       if (rosterSignature !== state.rosterSignature) {
         state.rosterSignature = rosterSignature;
         el.roster.innerHTML = (room.members || []).map((member) => {
+        const departed = member.departure === 'kicked' || member.departure === 'banned';
         const tags = [];
         if (member.you) tags.push('<span class="mp-player__tag">you</span>');
-        if (!member.online) tags.push('<span class="mp-player__tag">away</span>');
-        if (member.spectator) tags.push('<span class="mp-player__tag">spectating</span>');
+        if (!departed && !member.online) tags.push('<span class="mp-player__tag">away</span>');
+        if (!departed && member.spectator) tags.push('<span class="mp-player__tag">spectating</span>');
         const crown = member.host
           ? '<span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span>'
           : '';
-        const mod = amHost && !member.you
+        const mod = amHost && !member.you && !departed
           ? `<span class="mp-player__mod"><button type="button" class="btn btn--small" data-kick="${member.id}">Kick</button><button type="button" class="btn btn--small btn--danger" data-ban="${member.id}">Ban</button></span>`
           : '';
+        const badge = departed
+          ? `<span class="mp-badge is-${member.departure}">${member.departure === 'kicked' ? 'Kicked' : 'Banned'}</span>`
+          : `<span class="mp-badge${member.ready ? ' is-ready' : ''}">${member.ready ? 'Ready' : 'Not ready'}</span>`;
         return [
-          `<li class="mp-player${member.you ? ' is-you' : ''}" data-member-id="${member.id}">`,
+          `<li class="mp-player${member.you ? ' is-you' : ''}${departed ? ` is-${member.departure}` : ''}" data-member-id="${member.id}">`,
           '<span class="mp-player__main">',
           `<span class="mp-identity-color" style="--player-color:${/^#[0-9A-F]{6}$/i.test(member.color?.hex) ? member.color.hex : '#808080'}" role="img" aria-label="${esc(member.color?.label || 'Player color')}"></span>`,
           `<span class="mp-dot${member.online ? ' is-online' : ''}" aria-hidden="true"></span>`,
@@ -492,7 +499,7 @@ export function mountLobby(root) {
           tags.join(''),
           '</span>',
           mod,
-          `<span class="mp-badge${member.ready ? ' is-ready' : ''}">${member.ready ? 'Ready' : 'Not ready'}</span>`,
+          badge,
           '</li>',
         ].join('');
         }).join('');
@@ -520,6 +527,10 @@ export function mountLobby(root) {
     if (el.spectateLabel) el.spectateLabel.hidden = !amHost;
     const spectateOn = room.settings?.spectate_while_playing === true;
     if (el.spectateWhilePlaying) el.spectateWhilePlaying.checked = spectateOn;
+    if (el.foodCoverLabel) el.foodCoverLabel.hidden = !amHost;
+    const coverOn = room.settings?.snakes_cover_food !== false;
+    if (el.foodCover) el.foodCover.checked = coverOn;
+    gameRenderer?.setSnakesCoverFood(coverOn);
     if (el.again) {
       el.again.hidden = !amHost || room.state !== 'finished';
       el.again.disabled = strategyBlocked;
@@ -531,6 +542,7 @@ export function mountLobby(root) {
     }
     if (el.disband) el.disband.hidden = !amHost;
     if (el.restart) el.restart.hidden = !amHost || room.state !== 'in_match';
+    if (el.stop) el.stop.hidden = !amHost || room.state !== 'in_match';
     if (el.hostNote) el.hostNote.hidden = !amHost;
     state.invite = room.invite_url || '';
     if (el.inviteUrl) el.inviteUrl.textContent = state.invite;
@@ -1364,9 +1376,12 @@ export function mountLobby(root) {
     }
     if (message.type === 'interrupted') {
       stopFreezeCountdown();
+      gameRenderer?.holdLocal(message.reason || 'interrupted');
       setBrawlConn('warn', message.reason === 'host_restart'
         ? 'The host restarted the Brawl. That round has no result.'
-        : 'This Brawl was interrupted — no result was recorded. The room is back in the lobby.');
+        : message.reason === 'host_stop'
+          ? 'The host stopped the Brawl. That round has no result.'
+          : 'This Brawl was interrupted — no result was recorded. The room is back in the lobby.');
       refresh();
       return;
     }
@@ -2054,8 +2069,23 @@ export function mountLobby(root) {
       });
     }, null, { title: 'Restart this Brawl?', ok: 'Restart', cancel: 'Keep playing' });
   });
+  on(el.stop, 'click', () => {
+    confirmSwitch('The live Brawl stops with no result. A new one does not start.', () => {
+      gameRenderer?.holdLocal('host_stop');
+      if (el.gameStatus) el.gameStatus.textContent = 'Stopping the Brawl…';
+      roomAction('stop').then((out) => {
+        if (out && out.ok) flash(out.json.notice || 'Brawl stopped.', 'info');
+        else if (el.gameStatus) el.gameStatus.textContent = 'Could not stop the Brawl.';
+      });
+    }, null, { title: 'Stop this Brawl?', ok: 'Stop', cancel: 'Keep playing' });
+  });
   on(el.spectateWhilePlaying, 'change', () => {
     roomAction('spectate_while_playing', { enabled: !!el.spectateWhilePlaying.checked });
+  });
+  on(el.foodCover, 'change', () => {
+    const enabled = !!el.foodCover.checked;
+    gameRenderer?.setSnakesCoverFood(enabled);
+    roomAction('snakes_cover_food', { enabled });
   });
   on(el.roster, 'click', (event) => {
     const kick = event.target.closest?.('[data-kick]');
@@ -2066,11 +2096,11 @@ export function mountLobby(root) {
     const member = (state.room.members || []).find((entry) => entry.id === id);
     const name = member?.display_name || 'this player';
     if (kick) {
-      confirmSwitch(`${name} leaves the room and their snake forfeits. They can join again with the same code.`, () => {
+      confirmSwitch(`${name} is kicked and their snake forfeits. They can join again with the same code.`, () => {
         roomAction('kick', { member_id: id });
       }, null, { title: 'Kick this player?', ok: 'Kick', cancel: 'Cancel' });
     } else {
-      confirmSwitch(`${name} is removed and their snake forfeits. They cannot rejoin this room.`, () => {
+      confirmSwitch(`${name} is banned and their snake forfeits. They cannot rejoin this room.`, () => {
         roomAction('ban', { member_id: id });
       }, null, { title: 'Ban this player?', ok: 'Ban', cancel: 'Cancel' });
     }

@@ -393,6 +393,7 @@ class BrawlReconnectionTest < ActiveSupport::TestCase
     world
     @rival_member.remove!
     assert_equal "removed", @rival_member.reload.state
+    assert_equal "banned", @rival_member.departure
     assert_equal "left", @rival_participant.reload.status
 
     assert_raises(Room::NotJoinable) do
@@ -411,5 +412,32 @@ class BrawlReconnectionTest < ActiveSupport::TestCase
     assert second
     refute_equal first.id, second.id
     assert_raises(Room::InvalidTransition) { @room.restart_match!(actor: @rival_member.reload) }
+  end
+
+  def test_kicking_a_live_player_forfeits_as_kicked_and_they_can_rejoin
+    world
+    @rival_member.kick!
+    assert_equal "left", @rival_member.reload.state
+    assert_equal "kicked", @rival_member.departure
+    assert_includes @room.roster_memberships.map(&:id), @rival_member.id
+
+    @match.sync_connection_states!(world, now: T0 + 1.second)
+    refute rival_snake.alive?
+    assert_equal :kicked, rival_snake.elimination_reason
+
+    rejoined = @room.join!(guest_session: @rival_guest, display_name: "Rival")
+    assert_equal @rival_member.id, rejoined.id
+    assert_nil rejoined.departure
+  end
+
+  def test_host_stop_ends_the_live_brawl_without_starting_another
+    first = @match
+    @room.stop_match!(actor: @host_member)
+    assert_equal "interrupted", first.reload.status
+    assert_equal "host_stop", first.end_reason
+    assert_nil first.winner_membership_id
+    assert @room.reload.lobby?
+    assert_nil @room.live_match
+    assert_raises(Room::InvalidTransition) { @room.stop_match!(actor: @rival_member.reload) }
   end
 end

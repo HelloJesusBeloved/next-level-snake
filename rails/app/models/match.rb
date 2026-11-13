@@ -499,17 +499,28 @@ class Match < ApplicationRecord
     # One indexed read of every participant instead of a row lock plus a
     # per-participant `reload` on every simulator pass (the step-10 version did
     # both ~20 times per second, which alone cost more than the simulation).
-    states = match_participants.pluck(:id, :connection_state, :freeze_deadline_at, :status)
+    states = match_participants.left_joins(:room_membership).pluck(
+      "match_participants.id",
+      "match_participants.connection_state",
+      "match_participants.freeze_deadline_at",
+      "match_participants.status",
+      "room_memberships.departure"
+    )
     events = []
     expired = []
 
-    states.each do |participant_id, state, deadline, status|
+    states.each do |participant_id, state, deadline, status, departure|
       snake = world.player(participant_id)
       next unless snake
 
       if status == "left"
         if snake.alive?
-          world.remove_player!(participant_id, reason: :left)
+          reason = case departure
+                   when "kicked" then :kicked
+                   when "banned" then :banned
+                   else :left
+                   end
+          world.remove_player!(participant_id, reason: reason)
           events << { participant: participant_id, state: "left", reason: "forfeit" }
         end
         next

@@ -40,7 +40,9 @@ Rails.application.routes.draw do
     post "rooms/:code/kick", to: "rooms#kick", constraints: { code: ROOM_CODE }
     post "rooms/:code/ban", to: "rooms#ban", constraints: { code: ROOM_CODE }
     post "rooms/:code/restart", to: "rooms#restart", constraints: { code: ROOM_CODE }
+    post "rooms/:code/stop", to: "rooms#stop", constraints: { code: ROOM_CODE }
     post "rooms/:code/spectate_while_playing", to: "rooms#spectate_while_playing", constraints: { code: ROOM_CODE }
+    post "rooms/:code/snakes_cover_food", to: "rooms#snakes_cover_food", constraints: { code: ROOM_CODE }
 
     post "auth/signup", to: "auth#signup"
     post "auth/login", to: "auth#login"

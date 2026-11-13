@@ -13,6 +13,17 @@ const HEX = /^#[0-9a-f]{6}$/i;
 // ends the match never starts this timer, so the final snakes stay put.
 const CORPSE_HOLD_MS = 3400;
 const CORPSE_FADE_MS = 800;
+// Same food silhouette as single player (public/app.js THEMES). The fill is
+// the pellet owner's color so a brawl pellet stays identifiable.
+const FOOD_LOOK = {
+  arcade: { blocks: false, roundFood: true, foodGlow: 0.55, blink: false },
+  classic: { blocks: true, roundFood: false, foodGlow: 0.3, blink: false },
+  vintage: { blocks: true, roundFood: false, foodGlow: 0, blink: false },
+  terminal: { blocks: false, roundFood: true, foodGlow: 0.6, blink: false },
+  paper: { blocks: false, roundFood: true, foodGlow: 0, blink: false },
+  violet: { blocks: false, roundFood: true, foodGlow: 0.6, blink: false },
+  sunsetfire: { blocks: false, roundFood: true, foodGlow: 0.6, blink: false },
+};
 
 export class MultiplayerGameRenderer {
   constructor({ canvas, scoreboard, status, ownParticipantId, budget = null,
@@ -132,6 +143,7 @@ export class MultiplayerGameRenderer {
     window.addEventListener('pointerdown', this.onPointerWake, true);
     this.view = { width: 0, height: 0, dpr: 1 };
     this.theme = this.readTheme();
+    this.snakesCoverFood = true;
     this.gridCache = null;
     this.reducedMotion = typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -428,9 +440,19 @@ export class MultiplayerGameRenderer {
     this.expedite();
   }
 
+  // Host room setting. On (default): other snakes paint over food. Off: food
+  // paints over other snakes. Your own snake is always last, so it still covers
+  // pellets on this screen. This never changes who can eat the cell.
+  setSnakesCoverFood(enabled) {
+    const next = enabled !== false;
+    if (this.snakesCoverFood === next) return;
+    this.snakesCoverFood = next;
+    if (this.snapshot) this.requestDraw();
+  }
+
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-23', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-24', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -912,6 +934,12 @@ export class MultiplayerGameRenderer {
     } else if (player.er === 'left') {
       if (tag.className !== 'mp-game-score__tag is-left') tag.className = 'mp-game-score__tag is-left';
       text(tag, 'left');
+    } else if (player.er === 'kicked') {
+      if (tag.className !== 'mp-game-score__tag is-kicked') tag.className = 'mp-game-score__tag is-kicked';
+      text(tag, 'kicked');
+    } else if (player.er === 'banned') {
+      if (tag.className !== 'mp-game-score__tag is-banned') tag.className = 'mp-game-score__tag is-banned';
+      text(tag, 'banned');
     } else {
       if (tag.className !== 'mp-game-score__tag') tag.className = 'mp-game-score__tag';
       text(tag, 'out');
@@ -995,6 +1023,21 @@ export class MultiplayerGameRenderer {
     return `rgba(${r}, ${g}, ${b}, ${alpha})`;
   }
 
+  // Rounded food for themes that are not blocky. Matches single player's path.
+  traceRoundFood(ctx, x, y, size, radius) {
+    const r = Math.max(0, Math.min(radius, size / 2));
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + size - r, y);
+    ctx.quadraticCurveTo(x + size, y, x + size, y + r);
+    ctx.lineTo(x + size, y + size - r);
+    ctx.quadraticCurveTo(x + size, y + size, x + size - r, y + size);
+    ctx.lineTo(x + r, y + size);
+    ctx.quadraticCurveTo(x, y + size, x, y + size - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
   // Classic and Responsive both draw whole cells. Responsive remote snakes
   // use the confirmed cells of the playback tick; the local snake uses the
   // cells prediction already wrote onto the frame. Nothing is drawn between
@@ -1042,37 +1085,52 @@ export class MultiplayerGameRenderer {
       return this.theme.red;
     };
     const drawPellet = (index, color) => {
-      const x = index % cols; const y = Math.floor(index / cols);
-      ctx.fillStyle = color;
+      const themeId = document.documentElement.dataset.theme || 'classic';
+      const look = FOOD_LOOK[themeId] || FOOD_LOOK.classic;
+      if (look.blink && Math.floor(this.clock() / 420) % 2 !== 0) return;
+      const x = index % cols;
+      const y = Math.floor(index / cols);
+      const pad = Math.max(1, cell * 0.1);
+      const fx = ox + x * cell + pad;
+      const fy = oy + y * cell + pad;
+      const size = Math.max(1, cell - pad * 2);
       ctx.beginPath();
-      ctx.arc(ox + (x + 0.5) * cell, oy + (y + 0.5) * cell, Math.max(2, cell * 0.31), 0, Math.PI * 2);
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255,255,255,.9)';
-      ctx.lineWidth = Math.max(1, cell * .06);
-      ctx.stroke();
-    };
-    const foodFrame = this.paintSnapshot || snapshot;
-    const pellets = Array.isArray(foodFrame.f) ? foodFrame.f : [];
-    for (let f = 0; f < pellets.length; f++) {
-      const food = pellets[f];
-      if (!food || !Number.isInteger(food.c)) continue;
-      const owner = Number(food.o);
-      // Own pellet follows the local bite. After the head lands on it the cell
-      // stays hidden until the server's cell changes, so the eaten pellet is
-      // not drawn twice and the respawn is not drawn early. Everyone else's
-      // pellet is the cell on the confirmed tick being painted.
-      if (owner === ownId && this.local?.enabled && this.local.seeded) {
-        const localFood = this.local.food;
-        if (Number.isInteger(localFood)) {
-          drawPellet(localFood, pelletColor(food.o));
-          continue;
-        }
-        // Local bite hid this cell. Keep it hidden only while the server still
-        // says that same cell. A respawn is a different cell and must be drawn.
-        if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) continue;
+      if (look.blocks || !look.roundFood) ctx.rect(fx, fy, size, size);
+      else this.traceRoundFood(ctx, fx, fy, size, Math.max(1.5, cell * 0.14));
+      if (look.foodGlow) {
+        ctx.strokeStyle = this.withAlpha(color, Math.min(0.55, look.foodGlow * 0.55));
+        ctx.lineWidth = cell * 0.5;
+        ctx.lineJoin = 'round';
+        ctx.stroke();
       }
-      drawPellet(food.c, pelletColor(food.o));
-    }
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+    const paintPellets = () => {
+      ctx.globalAlpha = 1;
+      const foodFrame = this.paintSnapshot || snapshot;
+      const pellets = Array.isArray(foodFrame.f) ? foodFrame.f : [];
+      for (let f = 0; f < pellets.length; f++) {
+        const food = pellets[f];
+        if (!food || !Number.isInteger(food.c)) continue;
+        const owner = Number(food.o);
+        // Own pellet follows the local bite. After the head lands on it the cell
+        // stays hidden until the server's cell changes, so the eaten pellet is
+        // not drawn twice and the respawn is not drawn early. Everyone else's
+        // pellet is the cell on the confirmed tick being painted.
+        if (owner === ownId && this.local?.enabled && this.local.seeded) {
+          const localFood = this.local.food;
+          if (Number.isInteger(localFood)) {
+            drawPellet(localFood, pelletColor(food.o));
+            continue;
+          }
+          // Local bite hid this cell. Keep it hidden only while the server still
+          // says that same cell. A respawn is a different cell and must be drawn.
+          if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) continue;
+        }
+        drawPellet(food.c, pelletColor(food.o));
+      }
+    };
 
     // Snakes. The local player's cells are whatever present() put on the frame
     // (predicted, in Responsive). Every other Responsive snake is the whole
@@ -1091,18 +1149,30 @@ export class MultiplayerGameRenderer {
         ? remote.cells : body;
       this.paintSnake(ctx, drawn, color, cols, cell, ox, oy, Number(player.i) === ownId || player.i === this.followId);
     };
-    // Other snakes first, then yours, so your body is never covered.
-    for (let p = 0; p < snapshot.p.length; p++) {
-      const player = snapshot.p[p];
-      if (ownId != null && Number(player.i) === ownId) continue;
-      paintPlayer(player);
-    }
-    if (ownId != null) {
+    const paintOthers = () => {
+      for (let p = 0; p < snapshot.p.length; p++) {
+        const player = snapshot.p[p];
+        if (ownId != null && Number(player.i) === ownId) continue;
+        paintPlayer(player);
+      }
+    };
+    const paintOwn = () => {
+      if (ownId == null) return;
       for (let p = 0; p < snapshot.p.length; p++) {
         const player = snapshot.p[p];
         if (Number(player.i) === ownId) paintPlayer(player);
       }
+    };
+    // Default: food, then other snakes, then you — a snake hides food it sits on.
+    // Off: other snakes, then food, then you. Your body still covers pellets.
+    if (this.snakesCoverFood !== false) {
+      paintPellets();
+      paintOthers();
+    } else {
+      paintOthers();
+      paintPellets();
     }
+    paintOwn();
     ctx.globalAlpha = 1;
 
     // Disconnected snakes stay exactly where the server left them, with a
