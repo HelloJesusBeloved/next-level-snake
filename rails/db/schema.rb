@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_18_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_18_010000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -85,6 +85,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_18_000000) do
     t.bigint "freeze_ticks", default: 0, null: false
     t.datetime "last_seen_at"
     t.boolean "held", default: false, null: false
+    t.boolean "self_held", default: false, null: false
     t.datetime "hold_release_at"
     t.index ["match_id", "placement"], name: "match_participants_placement_idx"
     t.index ["match_id", "connection_state"], name: "match_participants_connection_idx"

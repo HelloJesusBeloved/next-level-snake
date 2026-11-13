@@ -239,6 +239,52 @@ class RoomTest < ActiveSupport::TestCase
     assert_equal 2, room.room_memberships.active.where(role: "host").count
   end
 
+  test "the original host can demote a host they promoted" do
+    room = make_room_with_user_host
+    seat = room.join!(guest_session: make_guest.first, display_name: "Usurper")
+    founder = room.founder_membership
+
+    room.share_host_with!(founder, seat)
+    assert seat.reload.host?
+    assert room.founder?(founder)
+
+    room.demote_host!(founder, seat)
+
+    assert_equal "player", seat.reload.role
+    assert founder.reload.host?
+    assert_raises(Room::InvalidTransition) { room.demote_host!(seat.reload, founder) }
+  end
+
+  test "unpausing everyone leaves a host who paused themselves held" do
+    room = make_room_with_user_host
+    other = room.join!(guest_session: make_guest.first, display_name: "CoHost")
+    regular = room.join!(guest_session: make_guest.first, display_name: "Regular")
+    founder = room.founder_membership
+    room.share_host_with!(founder, other)
+    room.start_match!
+
+    room.set_god_pause!(founder, scope: "self")
+    match = room.matches.order(id: :desc).first
+    mine = match.match_participants.find_by!(room_membership_id: founder.id)
+    assert mine.reload.self_held?
+    assert mine.held?
+
+    room.set_god_pause!(other.reload, scope: "others")
+    assert_equal "paused", match.reload.host_pause
+    room.set_god_pause!(other, scope: "others")
+    assert_equal "countdown", match.reload.host_pause
+
+    mine.reload
+    assert mine.self_held?, "a self-paused host stays paused"
+    assert mine.held?
+    assert_nil mine.hold_release_at
+
+    theirs = match.match_participants.find_by!(room_membership_id: regular.id)
+    refute theirs.self_held?
+    assert theirs.held?
+    assert theirs.hold_release_at.present?
+  end
+
   test "room creation does not disturb existing accounts or scores" do
     veteran = make_user(username: "Veteran")
     score = Score.create!(user: veteran, score: 120, speed_level: 3, growth: 1)

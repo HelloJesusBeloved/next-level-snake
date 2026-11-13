@@ -337,7 +337,12 @@ module Simulation
 
       eliminated = {}
       targets.each do |player_id, cell|
-        eliminated[player_id] = :self_collision if blocking.fetch(player_id).include?(cell)
+        snake = player!(player_id)
+        # One missed report is two cells along a straight line. The tail
+        # would have vacated both by the time the head arrived. Judging the
+        # final cell against today's body kills a snake that is exactly as
+        # tall as the board: the cell in front of its head is still its body.
+        eliminated[player_id] = :self_collision if cells_blocking_reported_arrival(snake, cell).include?(cell)
       end
 
       if rules.solid_opponents?
@@ -618,6 +623,19 @@ module Simulation
         snake.grow += growth_added
       end
       snake.advance!(cell)
+    end
+
+    # Cells that still block the cell a browser reported, after every tail
+    # pop a straight run of that length would have taken. A one-cell step
+    # matches Snake#surviving_cells. A skipped straight step frees one more
+    # tail cell, so following your own head around a full column lives.
+    def cells_blocking_reported_arrival(snake, cell)
+      gap = straight_intermediates(snake.head, cell)
+      steps = gap.nil? ? 1 : gap.length + 1
+      pops = [steps - snake.grow, 0].max
+      return snake.body.dup if pops <= 0
+
+      snake.body[0...-pops]
     end
 
     # Cells strictly between two points on one row or one column, along the

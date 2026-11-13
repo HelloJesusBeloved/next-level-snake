@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-26';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-28';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
+import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-28';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
-import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-26';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-26';
+import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-28';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-28';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -532,6 +532,7 @@ export function mountLobby(root) {
     const counts = room.counts || {};
     const start = room.start || {};
     const amHost = !!me.host;
+    const meFounder = !!me.founder;
 
     if (el.roomCode) el.roomCode.textContent = room.code;
     if (el.roomState) el.roomState.textContent = room.state;
@@ -551,8 +552,8 @@ export function mountLobby(root) {
       // PERFORMANCE: the roster used to be rebuilt with innerHTML on every
       // poll and every room event (including 1 Hz heartbeats on 8-player
       // lobbies). It now repaints only when something visible changed.
-      const rosterSignature = `${amHost ? 1 : 0}:` + JSON.stringify((room.members || []).map((member) => [
-        member.id, member.display_name, member.online, member.host, member.ready,
+      const rosterSignature = `${amHost ? 1 : 0}${meFounder ? 1 : 0}:` + JSON.stringify((room.members || []).map((member) => [
+        member.id, member.display_name, member.online, member.host, member.founder, member.ready,
         member.spectator, member.permanent_spectator, member.you, member.color?.hex, member.departure, member.state,
       ]));
       if (rosterSignature !== state.rosterSignature) {
@@ -566,7 +567,11 @@ export function mountLobby(root) {
         const crown = member.host
           ? '<span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span>'
           : '';
-        const hostBits = member.host ? '' : `<button type="button" role="menuitem" data-share-host="${member.id}">Share host</button><button type="button" role="menuitem" data-give-host="${member.id}">Give host</button>`;
+        const hostBits = member.host
+          ? (meFounder && !member.you
+            ? `<button type="button" role="menuitem" data-demote-host="${member.id}">Remove host</button>`
+            : '')
+          : `<button type="button" role="menuitem" data-share-host="${member.id}">Share host</button><button type="button" role="menuitem" data-give-host="${member.id}">Give host</button>`;
         const permBit = member.permanent_spectator
           ? `<button type="button" role="menuitem" data-perm="${member.id}" data-perm-on="0">Player again</button>`
           : `<button type="button" role="menuitem" data-perm="${member.id}" data-perm-on="1">Permanent spectator</button>`;
@@ -801,6 +806,47 @@ export function mountLobby(root) {
     return typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches;
   }
 
+  // Phone: put the room's top border just under the viewport, by half the
+  // gap between the Live pill and the Score pill, so "Brawl / Live · your
+  // snake is controlled by the server" sits at the top. Desktop: focus the
+  // board so the keys work the moment a countdown ends.
+  function jumpToMatchStart() {
+    const room = document.getElementById('mp-room');
+    if (!room) return;
+    const status = document.getElementById('mp-brawl-conn');
+    const score = document.getElementById('mp-score-pill');
+    let inset = matchViewInset(null, null);
+    if (status && score && !score.hidden) {
+      const live = status.getBoundingClientRect();
+      const points = score.getBoundingClientRect();
+      inset = matchViewInset(live.right, points.left);
+    }
+    const top = room.getBoundingClientRect().top + window.scrollY - inset;
+    window.scrollTo({ top: Math.max(0, top), behavior: 'auto' });
+  }
+
+  function focusMatchBoard() {
+    const canvas = el.gameCanvas;
+    if (!canvas || typeof canvas.focus !== 'function') return;
+    try { canvas.focus({ preventScroll: true }); } catch (err) { canvas.focus(); }
+  }
+
+  function settleMatchView() {
+    if (coarsePointer()) jumpToMatchStart();
+    else focusMatchBoard();
+  }
+
+  // True on the frame a pause (self or everyone) actually lets go.
+  function notePlayReleased(snapshot) {
+    const heldNow = !!(snapshot && (
+      snapshot.pause?.s === 'paused' || snapshot.pause?.s === 'countdown' ||
+      (snapshot.p || []).some((player) => player.hd)
+    ));
+    const released = state.playHeld === true && !heldNow;
+    state.playHeld = heldNow;
+    return released;
+  }
+
   // Scroll to the board once per match. Mobile players who can steer also
   // get page-wide touch focus. Spectators are scrolled, not locked.
   function syncPageFocus() {
@@ -809,7 +855,7 @@ export function mountLobby(root) {
     if (pageFocus && shouldRevealBoard(state.revealedMatchId, match)) {
       state.revealedMatchId = match.id;
       state.focusDismissed = false;
-      pageFocus.reveal();
+      settleMatchView();
     }
     if (!pageFocus || !running || !canSteer()) {
       pageFocus?.disable();
@@ -1511,6 +1557,7 @@ export function mountLobby(root) {
         gameRenderer.holdLocal(state.match.status || 'finished');
       }
       syncPageFocus();
+      if (notePlayReleased(message)) settleMatchView();
       state.liveHudBudget.add('movement-metrics', renderMovementDiagnostics);
       state.liveHudBudget.add('tick', () => {
       text(el.gameTick, `Tick ${state.gameSnapshot?.t}`);
@@ -2225,15 +2272,18 @@ export function mountLobby(root) {
     const ban = event.target.closest?.('[data-ban]');
     const share = event.target.closest?.('[data-share-host]');
     const give = event.target.closest?.('[data-give-host]');
+    const demote = event.target.closest?.('[data-demote-host]');
     const perm = event.target.closest?.('[data-perm]');
-    const button = kick || ban || share || give || perm;
+    const button = kick || ban || share || give || demote || perm;
     if (!button || !state.room) return;
     closeModMenus();
-    const id = Number(button.dataset.kick || button.dataset.ban || button.dataset.shareHost || button.dataset.giveHost || button.dataset.perm);
+    const id = Number(button.dataset.kick || button.dataset.ban || button.dataset.shareHost || button.dataset.giveHost || button.dataset.demoteHost || button.dataset.perm);
     const member = (state.room.members || []).find((entry) => entry.id === id);
     const name = member?.display_name || 'this player';
     if (share) {
       roomAction('share_host', { member_id: id });
+    } else if (demote) {
+      roomAction('demote_host', { member_id: id });
     } else if (give) {
       confirmSwitch(`Give host to ${name} and step down? You can still be a host again if someone shares it.`, () => {
         roomAction('give_host', { member_id: id });
@@ -2293,7 +2343,7 @@ export function mountLobby(root) {
     } else {
       state.focusDismissed = false;
       pageFocus.enable();
-      pageFocus.reveal();
+      jumpToMatchStart();
     }
     syncPageFocus();
   });

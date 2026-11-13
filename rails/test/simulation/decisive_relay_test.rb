@@ -115,6 +115,39 @@ class DecisiveRelayTest < Minitest::Test
     assert_equal "running", world.status.to_s
   end
 
+  def test_a_full_height_column_survives_following_its_head_across_a_skipped_step
+    world, = responsive_world
+    snake = world.snakes.first
+    # Score 15 on the default board is length 18, exactly the height. One
+    # dropped report is two steps up, into the cell that will be the tail.
+    body = (0...world.rows).map { |y| [5, y] }
+    place(world, snake, body: body, direction: "up", score: 15)
+    snake.food = nil
+    world.enqueue_pose!(player_id: snake.id, cell: [5, world.rows - 2],
+                        direction: Simulation::Direction.parse("up"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal [5, world.rows - 2], snake.head
+    assert_equal world.rows, snake.length
+    assert_equal [5, world.rows - 3], snake.body.last
+  end
+
+  def test_a_full_height_column_still_dies_when_it_turns_back_into_itself
+    world, = responsive_world
+    snake = world.snakes.first
+    body = (0...world.rows).map { |y| [5, y] }
+    place(world, snake, body: body, direction: "up", score: 15)
+    snake.food = nil
+    world.enqueue_pose!(player_id: snake.id, cell: [5, 2],
+                        direction: Simulation::Direction.parse("down"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_equal :self_collision, result.eliminated[snake.id]
+    refute snake.alive?
+  end
+
   def test_a_second_report_of_the_cell_just_entered_does_not_kill
     world, = responsive_world
     snake = world.snakes.first

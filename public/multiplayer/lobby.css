@@ -833,14 +833,57 @@
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
 }
 html.mp-page-focused,
-html.mp-page-focused body { overflow: hidden; }
-html.mp-page-focused .mp-page-focus,
+html.mp-page-focused body {
+  overflow: hidden;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+  -webkit-tap-highlight-color: transparent;
+}
+/* A focused phone is a steering surface. Text cannot be highlighted, and
+   ordinary controls cannot be pressed. Unfocus and anything inside a dialog
+   stay live. */
+html.mp-page-focused body * {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-drag: none;
+}
 html.mp-page-focused button,
 html.mp-page-focused a,
 html.mp-page-focused input,
 html.mp-page-focused select,
 html.mp-page-focused textarea,
-html.mp-page-focused label { touch-action: manipulation; }
+html.mp-page-focused label,
+html.mp-page-focused summary,
+html.mp-page-focused [role="button"] {
+  pointer-events: none;
+}
+html.mp-page-focused #mp-page-focus {
+  pointer-events: auto;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+}
+html.mp-page-focused dialog,
+html.mp-page-focused dialog * {
+  pointer-events: auto;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+html.mp-page-focused dialog button,
+html.mp-page-focused dialog a,
+html.mp-page-focused dialog input,
+html.mp-page-focused dialog select,
+html.mp-page-focused dialog textarea,
+html.mp-page-focused dialog label,
+html.mp-page-focused dialog summary,
+html.mp-page-focused dialog [role="button"] {
+  pointer-events: auto;
+}
 .mp-debug-card .mp-card__hint,
 .mp-spectate-card .mp-card__hint,
 .mp-food-cover-card .mp-card__hint { max-width: 42ch; }

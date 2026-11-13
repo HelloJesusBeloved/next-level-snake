@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host share_host give_host permanent_spectator pause color capabilities board presentation_strategy kick ban restart stop spectate_while_playing snakes_cover_food]
+    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host share_host give_host demote_host permanent_spectator pause color capabilities board presentation_strategy kick ban restart stop spectate_while_playing snakes_cover_food]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -265,6 +265,11 @@ module Api
     # POST /api/rooms/:code/give_host — promote them and step down.
     def give_host
       change_host!(:give_host_to!)
+    end
+
+    # POST /api/rooms/:code/demote_host — original host only.
+    def demote_host
+      change_host!(:demote_host!)
     end
 
     # POST /api/rooms/:code/permanent_spectator — { member_id, enabled }.
@@ -534,22 +539,25 @@ module Api
       membership&.reload
       current_match = room.matches.order(id: :desc).first
       participant = current_match&.match_participants&.find_by(room_membership_id: membership&.id)
+      founder_id = room.room_memberships.minimum(:id)
       {
-        room: room_payload(room, membership),
+        room: room_payload(room, membership, founder_id: founder_id),
         member: membership && member_payload(membership, membership,
                                               match_participant_id: participant&.id,
                                               last_input_seq: participant&.last_input_seq,
-                                              connection: participant&.connection_payload),
+                                              connection: participant&.connection_payload,
+                                              founder: membership.id == founder_id),
         viewer: viewer_payload,
         config: config_payload
       }
     end
 
-    def room_payload(room, viewer_membership = nil, at: Time.current)
+    def room_payload(room, viewer_membership = nil, at: Time.current, founder_id: nil)
       active = room.active_memberships.to_a
       members = room.roster_memberships.to_a
       match = room.matches.order(id: :desc).first
       participants_by_membership = match ? match.match_participants.index_by(&:room_membership_id) : {}
+      founder_id ||= room.room_memberships.minimum(:id)
       {
         code: room.invitation_code,
         # Monotonic state sequence: clients apply an event only when it is
@@ -572,7 +580,8 @@ module Api
           member_payload(member, viewer_membership, at: at,
                          match_participant_id: participant&.id,
                          last_input_seq: participant&.last_input_seq,
-                         connection: participant&.connection_payload)
+                         connection: participant&.connection_payload,
+                         founder: member.id == founder_id)
         end,
         counts: {
           members: active.size,
@@ -591,7 +600,8 @@ module Api
     # Deliberately small: ids are per-room and opaque, and no account names,
     # guest tokens or public ids are exposed to other players.
     def member_payload(member, viewer_membership = nil, at: Time.current,
-                       match_participant_id: nil, last_input_seq: nil, connection: nil)
+                       match_participant_id: nil, last_input_seq: nil, connection: nil,
+                       founder: false)
       {
         id: member.id,
         display_name: member.display_name,
@@ -603,6 +613,7 @@ module Api
         last_input_seq: last_input_seq,
         connection: connection,
         host: member.host?,
+        founder: founder ? true : false,
         ready: member.ready?,
         state: member.state,
         departure: member.departure,

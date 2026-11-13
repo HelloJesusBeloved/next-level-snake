@@ -286,6 +286,30 @@ class Room < ApplicationRecord
     member
   end
 
+  # The membership created with the room. Sharing the crown does not move this.
+  def founder_membership
+    room_memberships.order(:id).first
+  end
+
+  def founder?(membership)
+    membership.present? && membership.id == founder_membership&.id
+  end
+
+  # The original host can take a crown they shared back. Promoted hosts cannot
+  # demote the original host, or each other.
+  def demote_host!(actor, member, emit: true)
+    with_lock do
+      raise InvalidTransition, "Only the original host can remove a host." unless host?(actor) && founder?(actor)
+      raise InvalidTransition, "That player is not in this room." unless member&.room_id == id && member.active?
+      raise InvalidTransition, "You cannot remove yourself." if member.id == actor.id
+      raise InvalidTransition, "That player is not a host." unless member.host?
+
+      member.update!(role: "player")
+    end
+    notify_events!([[:host_changed, { host: actor.id }]]) if emit
+    member
+  end
+
   # A permanent spectator stays on the roster and out of every Brawl. Turning
   # it off during a live match does not put them back in that snake.
   def set_permanent_spectator!(actor, member, enabled:)
@@ -308,10 +332,11 @@ class Room < ApplicationRecord
     member
   end
 
-  # Host pause. "self" holds only the host's snake and does not change the
+  # Host pause. "self" holds only that host's snake and does not change the
   # room status. "others" holds every other living snake, or releases them
-  # on a short countdown while this host stays held. The simulator copies
-  # these columns onto the world; the HTTP process never steps that world.
+  # on a short countdown. A host who paused themselves stays paused when
+  # someone else unpauses everyone. The simulator copies `held` onto the
+  # world; the HTTP process never steps that world.
   GOD_PAUSE_COUNTDOWN = 3
 
   def set_god_pause!(actor, scope:)
@@ -327,20 +352,26 @@ class Room < ApplicationRecord
       case scope.to_s
       when "self"
         raise InvalidTransition, "Your snake is not in this Brawl." unless me&.status == "alive"
-        if me.held? && me.hold_release_at.nil?
-          me.update!(held: false, hold_release_at: nil)
+        if me.self_held?
+          if match.host_pause == "paused"
+            me.update!(self_held: false, held: true, hold_release_at: nil)
+          elsif match.host_pause == "countdown"
+            me.update!(self_held: false, held: true, hold_release_at: match.host_pause_until)
+          else
+            me.update!(self_held: false, held: false, hold_release_at: nil)
+          end
         else
-          me.update!(held: true, hold_release_at: nil)
+          me.update!(self_held: true, held: true, hold_release_at: nil)
         end
       when "others"
         others = match.match_participants.where(status: "alive")
         others = others.where.not(id: me.id) if me
         if match.host_pause == "paused"
           release = now + GOD_PAUSE_COUNTDOWN
-          others.where(held: true).update_all(hold_release_at: release, updated_at: now)
+          others.where(self_held: false).update_all(held: true, hold_release_at: release, updated_at: now)
           match.update!(host_pause: "countdown", host_pause_until: release)
         elsif match.host_pause == "countdown"
-          # Already counting them back in. Leave the host's own hold alone.
+          # Already counting them back in. A self-held host is not part of it.
         else
           others.update_all(held: true, hold_release_at: nil, updated_at: now)
           match.update!(host_pause: "paused", host_pause_until: nil)
