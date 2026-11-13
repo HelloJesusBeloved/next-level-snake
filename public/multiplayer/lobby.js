@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-22';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-23';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
 import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
 import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-22';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-23';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -134,6 +134,7 @@ export function mountLobby(root) {
     boardOverlay: $('mp-board-overlay'),
     panelLobby: $('mp-panel-lobby'),
     panelOver: $('mp-panel-over'),
+    overReason: $('mp-over-reason'),
     overRanks: $('mp-over-ranks'),
     eliminated: $('mp-eliminated'),
     spectateBtn: $('mp-spectate'),
@@ -183,6 +184,8 @@ export function mountLobby(root) {
     cable: { status: 'idle', reason: null },
     // Step 10: presentation-only mirror of the server's connection state.
     matchLink: 'idle',
+    matchDisconnects: 0,
+    lastMatchDisconnectAt: null,
     freezeTimer: null,
     resumedTimer: null,
     rosterSignature: '',
@@ -315,6 +318,7 @@ export function mountLobby(root) {
         `Own snake: local and final · painted ${pr.painted ? 'LOCAL' : 'server frame'} · armed by ${pr.mode?.testOnly ? 'TEST OVERRIDE (not a Responsive match)' : 'server strategy'}`,
         `Local tick ${pr.predictedTick} · last reported seq ${pr.reportedSeq ?? '–'} · pending reports [${pr.pendingSeqs.join(', ') || '–'}]`,
         `Turns waiting for the next cell: ${pr.pending} · steps ${pr.predictedTicks} · eats ${pr.predictedFood || 0} · corrections ${pr.corrections} (a packet cannot move you)`,
+        `Local ${pr.dead ? 'DEAD (stopped reporting)' : 'alive'} · frozen ${pr.frozen ? 'yes' : 'no'} · grow left ${pr.grow ?? '–'} · stalled-clock discards ${pr.catchupDiscards ?? 0}`,
         `Server tick ${pr.confirmedTick ?? '–'} is the frame other players are painted from. It is not this snake's clock.`,
       ];
     }
@@ -373,6 +377,9 @@ export function mountLobby(root) {
     return [
       `Network RTT: ${rtt === null ? 'no sample yet' : `${rtt}ms measured (input round trip)${jitter === null ? '' : ` · spread ${jitter}ms`}`}` +
         ` · propagation to this board ≈ ${rtt === null ? '–' : `${Math.round(rtt / 2)}ms estimated`}`,
+      `Match socket drops: ${state.matchDisconnects}` +
+        `${state.lastMatchDisconnectAt ? ` · last ${Math.round((Date.now() - state.lastMatchDisconnectAt) / 1000)}s ago` : ''}` +
+        ` · cable reconnect attempts ${consumer?.connection?.monitor?.reconnectAttempts ?? 0}`,
       decisive
         ? `Ticks: local ${predicted ?? '–'} · server ${confirmed ?? '–'} (different clocks on purpose)` +
           ` · remote playhead ${d?.playback?.lastSample?.tick ?? '–'}` +
@@ -609,6 +616,20 @@ export function mountLobby(root) {
     };
   }
 
+  function endReasonText(snapshot) {
+    const alive = Array.isArray(snapshot?.p) ? snapshot.p.filter((player) => player && player.a).length : 0;
+    if (snapshot?.e === 'tick_limit') {
+      return 'Time is up. Snakes that were still moving were stopped together.';
+    }
+    if (snapshot?.e === 'last_standing') {
+      return alive <= 1
+        ? 'One snake was still alive. A body left on the board can already be out.'
+        : 'The server ended the round as last snake standing.';
+    }
+    if (snapshot?.e) return `Ended: ${String(snapshot.e).replace(/_/g, ' ')}`;
+    return '';
+  }
+
   // Lobby overlay before a round, game-over ranks after one. A finished match
   // that the host already sent back to the lobby is a new ready screen, not
   // another results popup.
@@ -624,6 +645,7 @@ export function mountLobby(root) {
     overlay.classList.toggle('is-visible', showLobby || finished);
     if (el.panelLobby) el.panelLobby.classList.toggle('is-visible', showLobby);
     if (el.panelOver) el.panelOver.classList.toggle('is-visible', finished);
+    if (el.overReason) el.overReason.textContent = finished ? endReasonText(state.gameSnapshot) : '';
     if (el.peek) el.peek.hidden = !finished;
     if (!finished && state.peeking) setPeeking(false);
     if (finished && state.gameSnapshot) renderResults();
@@ -1241,6 +1263,8 @@ export function mountLobby(root) {
         disconnected() {
           gameRenderer?.discardPendingFrames();
           stopMatchHeartbeat();
+          state.matchDisconnects += 1;
+          state.lastMatchDisconnectAt = Date.now();
           setBrawlConn('lost', 'Connection lost — reconnecting… your snake may be frozen for up to 30s.');
         },
         rejected() {

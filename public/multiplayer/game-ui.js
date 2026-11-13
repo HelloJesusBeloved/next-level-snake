@@ -39,6 +39,14 @@ export function newlyEliminated(previous, next) {
     .map((player) => player.i);
 }
 
+function eliminationLabel(reason) {
+  if (reason === 'left') return 'Left';
+  if (reason === 'self_collision') return 'Crashed';
+  if (reason === 'body_collision') return 'Hit snake';
+  if (reason === 'head_on') return 'Head-on';
+  return 'Out';
+}
+
 export function buildResultsTable(snapshot, tickMs, ownId) {
   const table = document.createElement('table');
   table.className = 'mp-results-table';
@@ -58,7 +66,7 @@ export function buildResultsTable(snapshot, tickMs, ownId) {
       `<td><strong>${esc(entry.sc ?? player.sc)}</strong></td>` +
       `<td>${esc(formatSurvival(player.sv, tickMs))}</td>` +
       `<td>${esc(player.lg ?? player.l)}</td>` +
-      `<td>${player.a ? (player.fr ? 'Frozen' : 'Survived') : (player.er === 'left' ? 'Left' : 'Eliminated')}</td>`;
+      `<td>${player.a ? (player.fr ? 'Frozen' : 'Survived') : eliminationLabel(player.er)}</td>`;
     body.append(row);
   }
   table.append(body);

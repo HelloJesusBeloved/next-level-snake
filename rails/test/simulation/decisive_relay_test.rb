@@ -26,6 +26,23 @@ class DecisiveRelayTest < Minitest::Test
     [outcome, cell, direction]
   end
 
+  def test_the_duration_cap_does_not_stop_snakes_that_are_still_reporting
+    world, = responsive_world(participants: 2)
+    first, second = world.snakes
+    place(world, first, body: [[4, 4], [3, 4], [2, 4]])
+    place(world, second, body: [[4, 10], [3, 10], [2, 10]])
+    world.active_ticks = world.config.max_ticks
+    assert_equal :queued, step_into(world, first, "right", 1)[0]
+    assert_equal :queued, step_into(world, second, "right", 1)[0]
+    world.step!
+    assert_equal "running", world.status.to_s
+    assert_nil world.end_reason
+    assert first.alive? && second.alive?
+    assert_equal [5, 4], first.head
+    assert_equal [5, 10], second.head
+    assert_operator world.active_ticks, :>, world.config.max_ticks
+  end
+
   def test_a_responsive_snake_holds_until_a_cell_is_reported
     world, = responsive_world
     snake = world.snakes.first
@@ -56,6 +73,65 @@ class DecisiveRelayTest < Minitest::Test
     assert_equal [5, 5], snake.head
     assert_equal "down", snake.direction.name
     assert_empty snake.poses
+  end
+
+  def test_a_straight_skipped_cell_stays_in_the_body_and_the_stale_tail_does_not
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[4, 4], [3, 4], [2, 4]], direction: "right")
+    outcome = world.enqueue_pose!(player_id: snake.id, cell: [6, 4],
+                                  direction: Simulation::Direction.parse("right"),
+                                  tick: world.tick, seq: 1)
+    assert_equal :queued, outcome
+    world.step!
+    assert_equal [6, 4], snake.head
+    assert_equal [[6, 4], [5, 4], [4, 4]], snake.body
+    assert snake.alive?
+  end
+
+  def test_a_diagonal_skip_does_not_invent_a_corner
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[4, 4], [3, 4], [2, 4]], direction: "right")
+    world.enqueue_pose!(player_id: snake.id, cell: [6, 5],
+                        direction: Simulation::Direction.parse("down"),
+                        tick: world.tick, seq: 1)
+    world.step!
+    assert_equal [6, 5], snake.head
+    refute_includes snake.body, [5, 4]
+    refute_includes snake.body, [5, 5]
+    assert_equal 3, snake.length
+  end
+
+  def test_stepping_onto_your_own_tail_while_not_growing_lives
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[5, 5], [5, 6], [4, 6], [4, 5]], direction: "left", grow: 0)
+    assert_equal :queued, step_into(world, snake, "left", 1)[0]
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal [4, 5], snake.head
+    assert_equal "running", world.status.to_s
+  end
+
+  def test_entering_a_dead_snake_does_not_eliminate_or_end_the_match
+    world, = responsive_world(participants: 3)
+    first, second, third = world.snakes
+    place(world, first, body: [[5, 5], [4, 5], [3, 5]])
+    place(world, second, body: [[6, 5], [6, 6], [6, 7]], direction: "up")
+    place(world, third, body: [[15, 9], [14, 9], [13, 9]])
+    second.eliminate!(at_tick: 0, reason: :self_collision)
+    assert_equal :queued, step_into(world, first, "right", 1)[0]
+    world.enqueue_pose!(player_id: third.id, cell: [16, 9],
+                        direction: Simulation::Direction.parse("right"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[first.id]
+    assert first.alive? && third.alive?
+    refute second.alive?
+    assert_equal [6, 5], first.head
+    assert_equal "running", world.status.to_s
   end
 
   def test_a_non_adjacent_report_is_still_painted

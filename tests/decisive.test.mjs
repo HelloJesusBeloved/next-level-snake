@@ -199,6 +199,51 @@ test('a finished board does not start the local snake', () => {
   }
 });
 
+test('a stalled clock takes one cell instead of walking the missed ones', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  // One cell ahead is empty. The cell after that is still body, so a five-step
+  // catch-up would crash. A stalled tab must not take those steps.
+  local.observe(frame([10, 9, 8, 12, 13, 14]));
+  now.t = TICK * 8;
+  assert.equal(local.advance(now.t), 1);
+  assert.equal(local.dead, false);
+  assert.equal(local.body[0], 11);
+  assert.equal(local.summary().catchupDiscards, 1);
+  now.t += TICK;
+  assert.equal(local.advance(now.t), 1);
+  assert.equal(local.dead, true, 'the next real step still crashes on the body');
+});
+
+test('server growth is adopted when the confirmed head matches and ignored when it does not', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  local.observe(frame([10, 9, 8], { player: { gr: 2 } }));
+  assert.equal(local.grow, 2);
+  local.grow = 0;
+  local.observe(frame([10, 9, 8], { frame: { t: 4 }, player: { gr: 2 } }));
+  assert.equal(local.grow, 2, 'an aligned frame restores outstanding growth');
+  local.observe(frame([80, 79, 78], { frame: { t: 5 }, player: { gr: 4, d: 'down' } }));
+  assert.equal(local.grow, 2, 'a different server body must not clobber local growth');
+  assert.equal(local.body[0], 10);
+});
+
+test('a local crash the server rejected is replaced by the living server body', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  local.observe(frame([10, 9, 8]));
+  local.dead = true;
+  local.running = false;
+  local.nextStepAt = null;
+  local.observe(frame([4, 3, 2], { frame: { t: 6 }, player: { a: true, gr: 0 } }));
+  assert.equal(local.dead, false);
+  assert.equal(local.running, true);
+  assert.deepEqual(local.body, [4, 3, 2]);
+  now.t = TICK;
+  assert.equal(local.advance(now.t), 1);
+  assert.equal(local.body[0], 5);
+});
+
 test('hold freezes a running snake without clearing its body', () => {
   const now = { t: 0 };
   const local = snake(now);

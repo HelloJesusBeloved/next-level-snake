@@ -153,6 +153,8 @@ test('real renderer keeps every authoritative tick but only writes HUD once per 
     devicePixelRatio: 1,
     setInterval: (fn) => setInterval(fn, 1000),
     clearInterval: (id) => clearInterval(id),
+    addEventListener: () => {},
+    removeEventListener: () => {},
   };
   globalThis.document = {
     hidden: false,

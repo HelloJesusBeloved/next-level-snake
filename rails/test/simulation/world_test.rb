@@ -191,6 +191,21 @@ class WorldCollisionTest < Minitest::Test
     assert second.alive?
   end
 
+  def test_a_dead_opponent_is_not_solid_and_does_not_end_the_match
+    world = build_world(participants: 3, mode: :duel)
+    first, second, third = world.snakes
+    place(world, first, body: [[5, 5], [4, 5], [3, 5]])
+    place(world, second, body: [[6, 5], [6, 6], [6, 7]], direction: "up")
+    place(world, third, body: [[15, 9], [14, 9], [13, 9]])
+    second.eliminate!(at_tick: 0, reason: :self_collision)
+    result = world.step!
+    assert_nil result.eliminated[first.id]
+    assert first.alive? && third.alive?
+    refute second.alive?
+    assert_equal [6, 5], first.head, "the cell a snake died on does not eliminate the next snake"
+    assert_equal "running", world.status.to_s
+  end
+
   def test_an_eliminated_snake_stops_moving_and_releases_its_cells
     world = build_world(participants: 3, mode: :duel)
     first, second, third = world.snakes
@@ -370,14 +385,26 @@ class WorldRankingAndLifecycleTest < Minitest::Test
     assert_equal :tick_limit, world.end_reason
   end
 
-  def test_match_completes_at_the_tick_limit_with_standings
+  def test_a_duration_cap_does_not_stop_snakes_that_are_still_alive
     world = build_world(participants: 2, max_ticks: 10)
     world.snakes.each { |snake| place(world, snake, body: [[snake.id * 5, 3], [snake.id * 5 - 1, 3], [snake.id * 5 - 2, 3]]) }
-    10.times { world.step! unless world.completed? }
-    assert world.completed?
-    assert_equal :tick_limit, world.end_reason
-    assert_equal 10, world.tick
-    assert_equal [1, 2], world.standings.map(&:placement)
+    30.times { world.step! }
+    refute world.completed?, "max_ticks must not finish a round snakes are still playing"
+    assert_nil world.end_reason
+    assert_equal 30, world.tick
+    assert_equal 30, world.active_ticks
+    assert_equal 2, world.alive_count
+  end
+
+  def test_a_world_already_past_the_duration_cap_keeps_going
+    world = build_world(participants: 2, max_ticks: 10)
+    world.snakes.each { |snake| place(world, snake, body: [[snake.id * 5, 8], [snake.id * 5 - 1, 8], [snake.id * 5 - 2, 8]]) }
+    world.active_ticks = world.config.max_ticks
+    world.step!
+    refute world.completed?, "being at max_ticks must not finish the step"
+    assert_nil world.end_reason
+    assert_equal 2, world.alive_count
+    assert_operator world.active_ticks, :>, world.config.max_ticks
   end
 
   def test_last_standing_ends_a_two_player_match

@@ -19,6 +19,10 @@ class Match < ApplicationRecord
   PRESENCE_STALE_SECONDS = 90
   ORPHAN_MATCH_GRACE_SECONDS = 60
   MODES = %w[brawl duel].freeze
+  # Retired round length. World used to finish at this many seconds of
+  # movement (`tick_limit`) while snakes were still alive. Do not derive a
+  # match from it. The column is still required; new matches store the
+  # engine ceiling instead, which a normal brawl cannot reach.
   DEFAULT_DURATION_SECONDS = 180
   TICK_PRESET_MS = Simulation::Config::SPEED_PRESETS
 
@@ -140,8 +144,10 @@ class Match < ApplicationRecord
     end
   end
 
-  def self.derive_max_ticks(tick_ms)
-    [(DEFAULT_DURATION_SECONDS * 1_000.0 / tick_ms).round, Simulation::Config::MIN_MAX_TICKS].max
+  def self.derive_max_ticks(_tick_ms)
+    # Not a duration. complete_if_over! does not read this. The old value
+    # was 180s of ticks, and that is what stopped live snakes.
+    Simulation::Config::MAX_MAX_TICKS
   end
 
   def presentation_strategy_is_immutable

@@ -16,7 +16,6 @@ const DIRECTIONS = Object.freeze({
 });
 const OPPOSITE = Object.freeze({ up: 'down', down: 'up', left: 'right', right: 'left' });
 const QUEUE_CAP = 2;
-const CATCHUP_CAP = 5;
 
 const wrap = (value, size) => ((value % size) + size) % size;
 
@@ -56,6 +55,7 @@ export class DecisiveSnake {
     this.frozenPauses = 0;
     this.resets = 0;
     this.steps = 0;
+    this.catchupDiscards = 0;
   }
 
   enable(reason = 'responsive') {
@@ -166,7 +166,7 @@ export class DecisiveSnake {
     this.body = own.b.slice();
     this.direction = DIRECTIONS[own.d] ? own.d : 'right';
     this.queue = [];
-    this.grow = 0;
+    this.grow = Number.isInteger(own.gr) ? own.gr : 0;
     this.score = Number.isInteger(own.sc) ? own.sc : 0;
     this.serverScore = this.score;
     this.dead = own.a === false;
@@ -192,6 +192,17 @@ export class DecisiveSnake {
       this.running = false;
       this.nextStepAt = null;
       return;
+    }
+    // A local crash the server did not accept must not stick. Leaving `dead`
+    // set stops every later report, and a Responsive snake with no reports
+    // holds forever — that is the permanent freeze, not the 30s grace ring.
+    // The server body is the one that survived, so this is the correction.
+    if (this.dead) {
+      this.seedFrom(own, frame);
+      return;
+    }
+    if (Number.isInteger(own.gr) && this.body.length === own.b.length && this.body[0] === own.b[0]) {
+      this.grow = own.gr;
     }
     // Anything other than a running frame holds. Do not mark a living winner
     // dead just because the match ended — the final body should stay visible.
@@ -259,19 +270,20 @@ export class DecisiveSnake {
 
   advance(now) {
     if (!this.active || this.nextStepAt === null) return 0;
-    let steps = 0;
-    while (steps < CATCHUP_CAP && now >= this.nextStepAt) {
-      this.stepOnce();
-      steps += 1;
-      this.nextStepAt += this.tickMs;
-      if (!this.active) break;
+    if (now < this.nextStepAt) return 0;
+    // One cell per call. A hidden tab, an occluded window, or a long frame
+    // leaves nextStepAt in the past. Walking every missed cell is what drives
+    // a snake into its own tail while nobody is steering, and the local death
+    // then stops reports for the rest of the match.
+    if (now - this.nextStepAt > this.tickMs) {
+      this.catchupDiscards += 1;
+      this.nextStepAt = now;
     }
-    // A hidden tab does not skip cells. Missed time is dropped and the snake
-    // continues from the cell it is already on, one step per tickMs.
-    if (this.active && this.nextStepAt !== null && now - this.nextStepAt > this.tickMs) {
-      this.nextStepAt = now + this.tickMs;
-    }
-    return steps;
+    this.stepOnce();
+    if (!this.active) return 1;
+    this.nextStepAt += this.tickMs;
+    if (now >= this.nextStepAt) this.nextStepAt = now + this.tickMs;
+    return 1;
   }
 
   stepOnce() {
@@ -348,6 +360,9 @@ export class DecisiveSnake {
       enabled: this.enabled,
       active: this.active,
       seeded: this.seeded,
+      dead: this.dead,
+      frozen: this.frozen,
+      grow: this.grow,
       reason: this.reason,
       confirmedTick: this.serverTick,
       predictedTick: this.tick,
@@ -372,7 +387,7 @@ export class DecisiveSnake {
       leadStalls: 0,
       horizonRefusals: 0,
       droppedPending: 0,
-      catchupDiscards: 0,
+      catchupDiscards: this.catchupDiscards,
       foreignApplied: 0,
       predictedFood: this.eaten,
       predictedGrowths: this.eaten,

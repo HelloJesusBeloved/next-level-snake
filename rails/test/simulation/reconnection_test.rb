@@ -194,17 +194,20 @@ class ReconnectionTest < Minitest::Test
     assert restored.player(snake.id).alive?
   end
 
-  def test_tick_limit_does_not_bypass_a_freeze
+  def test_a_duration_cap_does_not_end_a_frozen_snake
     tiny = build_world(participants: 2, max_ticks: 10, seed: 21)
     tiny.freeze_player!(tiny.snakes.first.id, now_ms: NOW, until_ms: NOW + GRACE_MS)
-    10.times { tiny.step! }
-    assert_equal 10, tiny.tick
-    assert tiny.completed?
+    30.times { tiny.step! }
+    assert_operator tiny.tick, :>, 10
+    refute tiny.completed?
+    assert_nil tiny.end_reason
     assert tiny.snakes.first.alive?
+    assert tiny.snakes.first.frozen?
   end
 end
 
-# Step 10 (round 2): the round clock may never run down because of a browser.
+# Step 10 (round 2): a browser cannot run the round down, and neither can
+# the old movement-duration cap.
 class FrozenDurationTest < Minitest::Test
   include SimulationTestSupport
 
@@ -220,23 +223,24 @@ class FrozenDurationTest < Minitest::Test
     assert_equal 0, world.active_ticks, "no movement, no duration consumed"
     refute world.completed?, "an all-frozen board must never time out into a result"
 
-    # One snake comes back: movement progress resumes, and only then does the
-    # 10-tick duration start being spent again.
+    # One snake comes back. Movement ticks resume. They still must not
+    # finish the round while both snakes are alive.
     world.resume_player!(world.snakes[0].id)
     10.times { world.step! }
     assert_equal 10, world.active_ticks
-    assert world.completed?
-    assert_equal :tick_limit, world.end_reason
-    assert world.snakes.all?(&:alive?), "timeout must not kill anybody"
+    refute world.completed?, "movement time must not stop snakes that are still alive"
+    assert_nil world.end_reason
+    assert world.snakes.all?(&:alive?)
   end
 
-  def test_one_moving_snake_keeps_the_round_clock_honest
+  def test_one_moving_snake_does_not_end_the_round
     world = build_world(participants: 2, max_ticks: 10, seed: 6)
     world.freeze_player!(world.snakes[1].id, now_ms: NOW, until_ms: NOW + 30_000)
     10.times { world.step! }
-    assert world.completed?, "an actively playing snake still ends on time"
+    refute world.completed?
+    assert_nil world.end_reason
     assert_equal 10, world.active_ticks
-    assert world.snakes[1].alive?, "the frozen player is not punished by the ending"
+    assert world.snakes.all?(&:alive?), "the frozen player is not punished, and neither is the one still moving"
   end
 
   def test_active_ticks_survive_a_checkpoint_round_trip

@@ -41,10 +41,10 @@ module Simulation
     attr_reader :id, :config, :rules, :snakes, :tick, :status, :end_reason,
                 :started_at_tick, :ended_at_tick, :columns, :rows, :presentation_strategy,
                 :food_events
-    # Ticks on which at least one alive snake could actually move. The match
-    # DURATION limit is measured against this, not against the raw tick
-    # counter, so a room where everybody backgrounded their tab simply pauses
-    # instead of timing out into a finished game.
+    # Ticks on which at least one alive snake could actually move. Kept so a
+    # fully frozen board is still distinguishable from a live one. It must
+    # not finish the match: a duration cap stopped snakes that were still
+    # moving.
     attr_accessor :active_ticks
     # Server wall clock (epoch ms) stamped onto each snapshot by the leased
     # owner. Clients may render a countdown from it; they never decide when a
@@ -353,7 +353,10 @@ module Simulation
 
       survivors = targets.keys.map { |player_id| player!(player_id) }.reject { |snake| eliminated.key?(snake.id) }
       consumed = consume_food!(survivors, targets, next_tick)
-      survivors.each { |snake| snake.advance!(targets.fetch(snake.id)) }
+      eaten_growth = consumed.to_h { |snake, _food| [snake.id, config.growth] }
+      survivors.each do |snake|
+        advance_reported!(snake, targets.fetch(snake.id), growth_added: eaten_growth.fetch(snake.id, 0))
+      end
       consumed.each { |_snake, food| @shared_food.delete(food) } if rules.shared_food?
       survivors.each { |snake| snake.survived_ticks += 1 }
       eliminated.each do |player_id, reason|
@@ -499,11 +502,11 @@ module Simulation
     end
 
     def complete_if_over!
-      if snakes.length > 1 && alive_count <= 1
-        finish!(reason: :last_standing)
-      elsif @active_ticks >= config.max_ticks
-        finish!(reason: :tick_limit)
-      end
+      # A round ends when one or fewer snakes are left. It does not end
+      # because a clock ran out. The old `tick_limit` (180s of movement)
+      # stopped every snake that was still going, which is not a finished
+      # brawl. The host can still restart or disband.
+      finish!(reason: :last_standing) if snakes.length > 1 && alive_count <= 1
     end
 
     def consume_food!(survivors, targets, next_tick)
@@ -579,6 +582,43 @@ module Simulation
       return nil if free.empty?
 
       free[@rng.below(free.length)]
+    end
+
+    # A reported cell that skipped a straight run (a dropped report) still lands
+    # on the cell the browser is on. The cells in between are filled and the
+    # tail is popped once per skipped step, so the body does not keep a hole
+    # plus a stale segment. A turn during the gap is not a straight line: the
+    # head still jumps, because inventing the corner would be a guess.
+    def advance_reported!(snake, cell, growth_added:)
+      gap = straight_intermediates(snake.head, cell)
+      if gap && !gap.empty?
+        pending = snake.grow - growth_added
+        snake.grow = pending.positive? ? pending : 0
+        gap.each { |step| snake.advance!(step) }
+        snake.grow += growth_added
+      end
+      snake.advance!(cell)
+    end
+
+    # Cells strictly between two points on one row or one column, along the
+    # short way around the board. Empty when the points are already one step
+    # apart. Nil when the jump is diagonal or too long to be one dropped run.
+    def straight_intermediates(from, to)
+      dx, dy = step_delta(from, to)
+      return [] if dx.abs + dy.abs <= 1
+      return nil unless dx.zero? || dy.zero?
+
+      distance = dx.abs + dy.abs
+      return nil if distance > 8
+
+      sx = dx <=> 0
+      sy = dy <=> 0
+      x, y = from
+      (distance - 1).times.map do
+        x = (x + sx) % @columns
+        y = (y + sy) % @rows
+        [x, y]
+      end
     end
 
     def wrap(x, y)

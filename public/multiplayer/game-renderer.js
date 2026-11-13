@@ -5,7 +5,7 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-18';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-23';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -110,6 +110,26 @@ export class MultiplayerGameRenderer {
       }
     };
     document.addEventListener('visibilitychange', this.onVisibility);
+    // An occluded window does not always flip document.hidden, and a dropped
+    // animation frame leaves predictionLoop set so the loop never starts again.
+    // Focus, pageshow, or a tap restarts it and drops the missed time first.
+    this.onWake = () => {
+      if (document.hidden) return;
+      const at = this.clock();
+      const stepMs = this.local?.tickMs || this.tickMs;
+      const late = this.local && this.local.nextStepAt != null && at - this.local.nextStepAt > stepMs;
+      const loopDown = this.predictionLoop === null && (this.local?.enabled || this.playback?.enabled);
+      if (!late && !loopDown) return;
+      this.hidden = false;
+      this.local?.resumeClock(at);
+      this.stopPredictionLoop();
+      this.startPredictionLoop();
+      this.requestDraw();
+    };
+    window.addEventListener('focus', this.onWake);
+    window.addEventListener('pageshow', this.onWake);
+    this.onPointerWake = () => this.onWake();
+    window.addEventListener('pointerdown', this.onPointerWake, true);
     this.view = { width: 0, height: 0, dpr: 1 };
     this.theme = this.readTheme();
     this.gridCache = null;
@@ -410,7 +430,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step10-mobile3', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-23', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -1144,6 +1164,9 @@ export class MultiplayerGameRenderer {
     this.localDisplay = false;
     this.hudBudget.stop();
     document.removeEventListener('visibilitychange', this.onVisibility);
+    window.removeEventListener('focus', this.onWake);
+    window.removeEventListener('pageshow', this.onWake);
+    window.removeEventListener('pointerdown', this.onPointerWake, true);
     if (this.dustFrame) cancelAnimationFrame(this.dustFrame);
     this.discardPendingFrames();
     this.stopFreezeRings();

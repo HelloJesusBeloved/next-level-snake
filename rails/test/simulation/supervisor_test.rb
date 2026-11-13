@@ -40,6 +40,16 @@ class SupervisorTest < Minitest::Test
                 columns: 96, rows: 72, speed_level: 6)
   end
 
+  # The next classic step is a self-collision for one snake only, so the
+  # round ends as last snake standing. Supervisor completion tests used to
+  # get that terminal step from the duration cap.
+  def arm_last_standing!(world)
+    first, second = world.snakes
+    place(world, first, body: [[5, 5], [6, 5], [7, 5]], direction: "right")
+    place(world, second, body: [[40, 10], [39, 10], [38, 10]], direction: "right")
+    world
+  end
+
   def test_attaches_only_what_it_owns_and_steps_on_the_monotonic_clock
     ownership = FakeOwnership.new
     supervisor = Simulation::Supervisor.new(ownership: ownership, checkpoint_every: 5,
@@ -102,12 +112,7 @@ class SupervisorTest < Minitest::Test
       false
     end
     supervisor = Simulation::Supervisor.new(ownership: ownership, renew_interval_ms: 0)
-    world = big_world(max_ticks: Simulation::Config::MIN_MAX_TICKS)
-    # One tick away from the cap: the next step completes the match. The
-    # duration limit is measured in MOVEMENT ticks (active_ticks), so both
-    # counters are positioned together here.
-    world.instance_variable_set(:@tick, Simulation::Config::MIN_MAX_TICKS - 1)
-    world.instance_variable_set(:@active_ticks, Simulation::Config::MIN_MAX_TICKS - 1)
+    world = arm_last_standing!(big_world)
     supervisor.attach(world, now_ms: 0)
 
     report = supervisor.tick!(now_ms: world.config.tick_ms)
@@ -163,7 +168,7 @@ class SupervisorTest < Minitest::Test
   def test_completes_once_and_detaches
     ownership = FakeOwnership.new
     supervisor = Simulation::Supervisor.new(ownership: ownership, checkpoint_every: 5)
-    world = big_world(max_ticks: Simulation::Config::MIN_MAX_TICKS)
+    world = arm_last_standing!(big_world)
     supervisor.attach(world, now_ms: 0)
     tick = world.config.tick_ms
     completed = []
@@ -171,7 +176,8 @@ class SupervisorTest < Minitest::Test
       report = supervisor.tick!(now_ms: tick * 3 * (call + 1))
       completed.concat(report[:completed])
     end
-    assert_equal Simulation::Config::MIN_MAX_TICKS, world.tick
+    assert world.completed?
+    assert_equal :last_standing, world.end_reason
     assert_equal [world.id], completed
     assert_equal 1, ownership.completions.length
     refute supervisor.attach?(world.id)
