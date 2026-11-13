@@ -56,6 +56,7 @@ export class DecisiveSnake {
     this.resets = 0;
     this.steps = 0;
     this.catchupDiscards = 0;
+    this.awaitingServer = false;
   }
 
   enable(reason = 'responsive') {
@@ -108,7 +109,16 @@ export class DecisiveSnake {
 
   noteQueued() { return false; }
   noteApplied() { return false; }
-  noteRejected() { return false; }
+  // A report the server refused because this snake is frozen or the socket
+  // is gone. Stop. Another local step hides a pellet the server never ate,
+  // while everyone else still sees the frozen body.
+  noteRejected(_seq, reason) {
+    if (reason !== 'frozen' && reason !== 'disconnected') return false;
+    this.ignoredFood = null;
+    this.frozen = reason === 'frozen';
+    this.holdForServer(reason);
+    return true;
+  }
   setLeadTargetMs() { return null; }
 
   reset(reason = 'reset', { reconnect = false } = {}) {
@@ -121,6 +131,7 @@ export class DecisiveSnake {
     this.grow = 0;
     this.pellet = null;
     this.ignoredFood = null;
+    this.awaitingServer = false;
     this.nextStepAt = null;
     this.tick = 0;
     this.pendingSeqs = [];
@@ -138,6 +149,19 @@ export class DecisiveSnake {
     return true;
   }
 
+  // The phone was locked, or the server refused the report. Do not walk the
+  // cells that elapsed, and do not keep hiding a pellet this snake never ate.
+  // The next snapshot replaces this body.
+  holdForServer(reason = 'server') {
+    this.awaitingServer = true;
+    this.running = false;
+    this.nextStepAt = null;
+    this.queue = [];
+    this.ignoredFood = null;
+    this.reason = reason;
+    return true;
+  }
+
   observe(frame) {
     if (!this.enabled || !frame || !Array.isArray(frame.p)) return false;
     const own = frame.p.find((player) => Number(player.i) === Number(this.ownParticipantId));
@@ -149,7 +173,9 @@ export class DecisiveSnake {
     if (frame.m != null) this.matchId = frame.m;
     if (Number.isInteger(frame.t)) this.serverTick = frame.t;
 
-    if (!this.seeded || matchChanged || this.body.length === 0) this.seedFrom(own, frame);
+    if (!this.seeded || matchChanged || this.body.length === 0 || this.awaitingServer) {
+      this.seedFrom(own, frame);
+    }
     this.adoptRemote(own, frame);
     return true;
   }
@@ -176,6 +202,7 @@ export class DecisiveSnake {
     this.running = frame.s === 'running' && !this.dead && !this.frozen;
     this.pellet = null;
     this.ignoredFood = null;
+    this.awaitingServer = false;
     this.tick = 0;
     this.seeded = true;
     this.matchId = frame.m;
@@ -186,7 +213,7 @@ export class DecisiveSnake {
   adoptRemote(own, frame) {
     if (Number.isInteger(own.sc)) this.serverScore = own.sc;
     if (own.sc > this.score) this.score = own.sc;
-    this.adoptFood(frame);
+    this.adoptFood(frame, own);
     if (own.a === false) {
       this.dead = true;
       this.running = false;
@@ -207,6 +234,11 @@ export class DecisiveSnake {
     // Anything other than a running frame holds. Do not mark a living winner
     // dead just because the match ended — the final body should stay visible.
     if (own.fr || frame.s !== 'running') {
+      if (own.fr && this.body[0] !== own.b[0]) {
+        this.seedFrom(own, frame);
+        return;
+      }
+      if (own.fr) this.ignoredFood = null;
       if (own.fr && !this.frozen) this.frozenPauses += 1;
       this.frozen = !!own.fr;
       this.running = false;
@@ -219,7 +251,7 @@ export class DecisiveSnake {
     if (resume) this.nextStepAt = this.clock() + this.tickMs;
   }
 
-  adoptFood(frame) {
+  adoptFood(frame, own) {
     if (!frame || !Array.isArray(frame.f)) return;
     const owned = frame.f.find((food) => food && Number.isInteger(food.o) &&
       Number(food.o) === Number(this.ownParticipantId) && Number.isInteger(food.c));
@@ -229,7 +261,10 @@ export class DecisiveSnake {
       const shared = frame.f.find((food) => food && Number.isInteger(food.c));
       cell = shared ? shared.c : null;
     }
-    if (this.ignoredFood !== null && cell !== this.ignoredFood) this.ignoredFood = null;
+    // A frozen snake did not eat. Showing the old pellet again is the respawn
+    // the server never owed us. A cell that actually changed still clears it.
+    if (own?.fr) this.ignoredFood = null;
+    else if (this.ignoredFood !== null && cell !== this.ignoredFood) this.ignoredFood = null;
     this.pellet = cell;
   }
 

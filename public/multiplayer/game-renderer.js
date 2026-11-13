@@ -5,7 +5,7 @@
 // Both tick one whole square at a time, the same way single-player does.
 import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
-import { DecisiveSnake } from './decisive.js?v=step11-responsive-23';
+import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
 
 const HEX = /^#[0-9a-f]{6}$/i;
@@ -110,7 +110,7 @@ export class MultiplayerGameRenderer {
       } else {
         this.hudBudget.start();
         this.hudBudget.add('scores', () => this.drawScoreboard());
-        this.local?.resumeClock(this.clock());
+        this.wakeLocalClock();
         this.cadence.reset();
         if (this.snapshot) this.cadence.receive(this.snapshot, this.clock(), true);
         // A dropped animation frame while the tab was suspended leaves the
@@ -132,7 +132,7 @@ export class MultiplayerGameRenderer {
       const loopDown = this.predictionLoop === null && (this.local?.enabled || this.playback?.enabled);
       if (!late && !loopDown) return;
       this.hidden = false;
-      this.local?.resumeClock(at);
+      this.wakeLocalClock();
       this.stopPredictionLoop();
       this.startPredictionLoop();
       this.requestDraw();
@@ -357,6 +357,22 @@ export class MultiplayerGameRenderer {
     return this.playback.materialize(frame, this.snapshot) || false;
   }
 
+  // A phone lock suspends the page, so the prediction loop never slides
+  // nextStepAt forward the way a backgrounded desktop tab does. Waking into
+  // that stall used to step the local snake while the server still had it
+  // frozen. Hold and ask for the body the server actually has. A short hitch
+  // still resumes, one cell, the same as a stalled clock.
+  wakeLocalClock(at = this.clock()) {
+    const stepMs = this.local?.tickMs || this.tickMs;
+    const lateMs = this.local?.nextStepAt != null ? at - this.local.nextStepAt : 0;
+    if (this.local && lateMs > stepMs * 2) {
+      this.local.holdForServer('suspended');
+      this.requestResync('suspended');
+      return;
+    }
+    this.local?.resumeClock(at);
+  }
+
   requestResync(reason) {
     if (!this.onResyncNeeded) return false;
     const now = this.clock();
@@ -452,7 +468,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-24', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-25', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,

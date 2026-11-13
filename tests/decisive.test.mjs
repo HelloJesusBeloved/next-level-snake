@@ -257,3 +257,67 @@ test('hold freezes a running snake without clearing its body', () => {
   assert.equal(local.body[0], 11);
   assert.equal(local.active, false);
 });
+
+test('a lock holds the clock until the server body replaces it', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  local.observe(frame([10, 9, 8], { frame: { f: [{ c: 40, o: 1 }] } }));
+  assert.equal(local.submit('up').rejectedReason, null);
+  assert.equal(local.holdForServer('suspended'), true);
+  now.t = TICK * 8;
+  assert.equal(local.advance(now.t), 0);
+  assert.deepEqual(local.body, [10, 9, 8]);
+  assert.equal(local.queue.length, 0);
+  assert.equal(local.awaitingServer, true);
+  assert.equal(local.food, 40, 'a hold must not keep hiding a pellet the server still has');
+  local.observe(frame([10, 9, 8], { frame: { t: 9, f: [{ c: 40, o: 1 }] } }));
+  assert.equal(local.awaitingServer, false);
+  assert.equal(local.running, true);
+  assert.equal(local.queue.length, 0, 'the turn queued during the lock is not applied to the old body');
+  now.t = TICK * 9;
+  assert.equal(local.advance(now.t), 1);
+  assert.equal(local.body[0], 11);
+});
+
+test('a frozen snapshot snaps a walked-away body and shows the uneaten pellet', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  const bite = 11;
+  local.observe(frame([10, 9, 8], { frame: { f: [{ c: bite, o: 1 }] } }));
+  now.t = TICK;
+  local.advance(now.t);
+  assert.equal(local.body[0], bite);
+  assert.equal(local.food, null);
+  local.observe(frame([10, 9, 8], {
+    frame: { t: 4, f: [{ c: bite, o: 1 }] },
+    player: { fr: true, sc: 0 },
+  }));
+  assert.deepEqual(local.body, [10, 9, 8]);
+  assert.equal(local.food, bite);
+  assert.equal(local.running, false);
+  assert.equal(local.frozen, true);
+  now.t = TICK * 5;
+  assert.equal(local.advance(now.t), 0);
+  assert.deepEqual(local.body, [10, 9, 8]);
+});
+
+test('a frozen rejection stops the local snake and unhides the pellet', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  const bite = 11;
+  local.observe(frame([10, 9, 8], { frame: { f: [{ c: bite, o: 1 }] } }));
+  now.t = TICK;
+  local.advance(now.t);
+  assert.equal(local.food, null);
+  assert.equal(local.noteRejected(1, 'frozen'), true);
+  assert.equal(local.food, bite);
+  assert.equal(local.frozen, true);
+  assert.equal(local.running, false);
+  assert.equal(local.awaitingServer, true);
+  now.t = TICK * 4;
+  assert.equal(local.advance(now.t), 0);
+  assert.equal(local.body[0], bite, 'the step already taken stays until a snapshot');
+  assert.equal(local.noteRejected(2, 'disconnected'), true);
+  assert.equal(local.frozen, false);
+  assert.equal(local.advance(now.t), 0);
+});

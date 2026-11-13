@@ -307,10 +307,16 @@ module Simulation
         next unless pose
 
         snake.poses.shift
-        snake.direction = pose.direction
+        cell = [pose.cell[0], pose.cell[1]]
         snake.last_applied_seq = pose.seq
         snake.last_applied_tick = next_tick
-        targets[snake.id] = [pose.cell[0], pose.cell[1]]
+        # A reload reports the cell this snake already occupies. The head is
+        # always in surviving_cells, so painting that report as a step is a
+        # self-collision in the open, not only when the head touches the tail.
+        next if cell == snake.head
+
+        snake.direction = pose.direction
+        targets[snake.id] = cell
       end
 
       blocking = {}
@@ -392,6 +398,10 @@ module Simulation
     end
 
     # Reconnection within grace (or later while still alive): restore control.
+    # Poses left by the socket that just died are not steps the new page
+    # agreed to. Leaving them queued plays one extra cell. The reloaded page
+    # then reports that same cell, and the head blocks it. That death does
+    # not depend on the head touching the tail.
     def resume_player!(player_id)
       snake = player(player_id)
       return :not_a_participant unless snake
@@ -399,6 +409,10 @@ module Simulation
       # A dead participant reconnects as an eliminated spectator; it can never
       # be handed back control of a body that no longer moves.
       snake.unfreeze!(connection_state: "connected")
+      if snake.alive? && presentation_strategy == "responsive"
+        snake.poses.clear
+        snake.queue.clear
+      end
       snake.alive? ? :resumed : :eliminated
     end
 

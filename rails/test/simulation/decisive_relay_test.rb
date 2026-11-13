@@ -115,6 +115,82 @@ class DecisiveRelayTest < Minitest::Test
     assert_equal "running", world.status.to_s
   end
 
+  def test_a_second_report_of_the_cell_just_entered_does_not_kill
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[5, 5], [5, 6], [4, 6], [4, 5]], direction: "left", grow: 0)
+    # Head is touching the tail. The first report steps onto it. A reload
+    # reports that same cell again, which is now the head.
+    assert_equal :queued, step_into(world, snake, "left", 1)[0]
+    world.enqueue_pose!(player_id: snake.id, cell: [4, 5],
+                        direction: Simulation::Direction.parse("left"),
+                        tick: world.tick, seq: 2)
+    world.step!
+    assert_equal [4, 5], snake.head
+    assert snake.alive?
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal [4, 5], snake.head
+    assert_empty snake.poses
+    assert_equal 2, snake.last_applied_seq
+  end
+
+  def test_reporting_the_cell_already_occupied_does_not_kill_in_the_open
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[8, 8], [7, 8], [6, 8]], direction: "right", grow: 0)
+    # Straight snake. The head is not on the tail. A reload still reports
+    # the cell the old socket already entered.
+    world.enqueue_pose!(player_id: snake.id, cell: [8, 8],
+                        direction: Simulation::Direction.parse("right"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal [8, 8], snake.head
+    assert_equal [[8, 8], [7, 8], [6, 8]], snake.body
+  end
+
+  def test_resume_drops_a_forward_pose_so_an_open_reload_steps_once
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[8, 8], [7, 8], [6, 8]], direction: "right", grow: 0)
+    assert_equal :queued, step_into(world, snake, "right", 1)[0]
+    assert_equal :frozen, world.freeze_player!(snake.id, now_ms: 1_000, until_ms: 31_000)
+    assert_equal :resumed, world.resume_player!(snake.id)
+    assert_empty snake.poses
+    world.step!
+    assert_equal [8, 8], snake.head
+    assert snake.alive?
+    assert_equal :queued, step_into(world, snake, "right", 2)[0]
+    world.step!
+    assert_equal [9, 8], snake.head
+    assert snake.alive?
+  end
+
+  def test_resume_drops_poses_queued_before_the_freeze
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[5, 5], [5, 6], [4, 6], [4, 5]], direction: "left", grow: 0)
+    assert_equal :queued, step_into(world, snake, "left", 1)[0]
+    assert_equal :frozen, world.freeze_player!(snake.id, now_ms: 1_000, until_ms: 31_000)
+    assert_equal 1, snake.poses.length
+    world.step!
+    assert_equal [5, 5], snake.head, "a frozen snake does not spend the queued pose"
+    assert_equal :resumed, world.resume_player!(snake.id)
+    assert_empty snake.poses
+    assert_empty snake.queue
+    held = snake.head.dup
+    world.step!
+    assert_equal held, snake.head
+    assert snake.alive?
+    assert_equal :queued, step_into(world, snake, "left", 2)[0]
+    world.step!
+    assert_equal [4, 5], snake.head
+    assert snake.alive?
+  end
+
   def test_entering_a_dead_snake_does_not_eliminate_or_end_the_match
     world, = responsive_world(participants: 3)
     first, second, third = world.snakes
