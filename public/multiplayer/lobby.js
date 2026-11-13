@@ -484,7 +484,7 @@ export function mountLobby(root) {
           ? '<span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span>'
           : '';
         const mod = amHost && !member.you && !departed
-          ? `<span class="mp-player__mod"><button type="button" class="btn btn--small" data-kick="${member.id}">Kick</button><button type="button" class="btn btn--small btn--danger" data-ban="${member.id}">Ban</button></span>`
+          ? `<span class="mp-player__mod"><button type="button" class="mp-player__more" data-mod="${member.id}" aria-haspopup="menu" aria-expanded="false" aria-controls="mp-mod-${member.id}" aria-label="Actions for ${esc(member.display_name)}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button><span class="mp-player__menu" id="mp-mod-${member.id}" role="menu" hidden><button type="button" role="menuitem" data-kick="${member.id}">Kick</button><button type="button" role="menuitem" class="is-ban" data-ban="${member.id}">Ban</button></span></span>`
           : '';
         const badge = departed
           ? `<span class="mp-badge is-${member.departure}">${member.departure === 'kicked' ? 'Kicked' : 'Banned'}</span>`
@@ -2087,11 +2087,30 @@ export function mountLobby(root) {
     gameRenderer?.setSnakesCoverFood(enabled);
     roomAction('snakes_cover_food', { enabled });
   });
+  function closeModMenus() {
+    el.roster?.querySelectorAll('.mp-player__more').forEach((button) => {
+      const menu = button.parentElement?.querySelector('.mp-player__menu');
+      if (menu) menu.hidden = true;
+      button.setAttribute('aria-expanded', 'false');
+    });
+  }
   on(el.roster, 'click', (event) => {
+    const more = event.target.closest?.('[data-mod]');
+    if (more) {
+      const menu = more.parentElement?.querySelector('.mp-player__menu');
+      const willOpen = !!menu?.hidden;
+      closeModMenus();
+      if (willOpen && menu) {
+        menu.hidden = false;
+        more.setAttribute('aria-expanded', 'true');
+      }
+      return;
+    }
     const kick = event.target.closest?.('[data-kick]');
     const ban = event.target.closest?.('[data-ban]');
     const button = kick || ban;
     if (!button || !state.room) return;
+    closeModMenus();
     const id = Number(button.dataset.kick || button.dataset.ban);
     const member = (state.room.members || []).find((entry) => entry.id === id);
     const name = member?.display_name || 'this player';
@@ -2104,6 +2123,13 @@ export function mountLobby(root) {
         roomAction('ban', { member_id: id });
       }, null, { title: 'Ban this player?', ok: 'Ban', cancel: 'Cancel' });
     }
+  });
+  on(document, 'click', (event) => {
+    if (event.target.closest?.('.mp-player__mod')) return;
+    closeModMenus();
+  });
+  on(document, 'keydown', (event) => {
+    if (event.key === 'Escape') closeModMenus();
   });
   on(el.lobbyViewBtn, 'click', () => showGamePane('lobby'));
   on(el.pageFocusBtn, 'click', () => {

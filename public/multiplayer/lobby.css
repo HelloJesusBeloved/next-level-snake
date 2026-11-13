@@ -97,7 +97,7 @@
   background: color-mix(in srgb, var(--ink) 35%, transparent);
 }
 .mp-player.is-you { border-color: color-mix(in srgb, var(--accent-2) 55%, transparent); }
-.mp-player__main { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; overflow: hidden; }
+.mp-player__main { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
 .mp-player__name {
   font-weight: 600;
   font-size: 14px;
@@ -113,9 +113,73 @@
   color: var(--muted);
 }
 .mp-player__spacer { flex: 1 1 auto; }
-.mp-player__mod { display: inline-flex; gap: 6px; flex: 0 0 auto; margin-left: auto; }
-.mp-player__mod .btn { min-height: 32px; padding: 4px 10px; }
+.mp-player__mod { position: relative; display: inline-flex; flex: 0 0 auto; margin-left: auto; }
+.mp-player__more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: 700 18px/1 'IBM Plex Mono', ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+.mp-player__more svg { display: block; fill: currentColor; }
+.mp-player__more:hover,
+.mp-player__more[aria-expanded='true'] {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent-2) 55%, var(--line));
+  background: color-mix(in srgb, var(--accent-2) 14%, transparent);
+}
+.mp-player__more:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.mp-player__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: grid;
+  gap: 2px;
+  min-width: 148px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, var(--accent-2) 42%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 94%, #050505);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.48);
+}
+.mp-player__menu[hidden] { display: none; }
+.mp-player__menu button {
+  appearance: none;
+  margin: 0;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font: 600 11px/1.2 'IBM Plex Mono', ui-monospace, monospace;
+  letter-spacing: 0.14em;
+  text-align: left;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.mp-player__menu button:hover,
+.mp-player__menu button:focus-visible {
+  background: color-mix(in srgb, var(--text) 8%, transparent);
+  outline: none;
+}
+.mp-player__menu button.is-ban { color: var(--red); }
+.mp-player__menu button.is-ban:hover,
+.mp-player__menu button.is-ban:focus-visible {
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+}
 .mp-player__main + .mp-badge { margin-left: auto; }
+/* The swatch's white ring paints 1px outside the box. The name row used to
+   clip that edge. Give every player, host or not, room for it. */
+.mp-player .mp-identity-color { margin: 1px; }
 
 .mp-crown {
   display: inline-flex;
@@ -702,7 +766,21 @@ html.mp-page-focused label { touch-action: manipulation; }
     margin-right: -12px;
   }
   .mp-screen { width: 100%; max-width: var(--screen-max); margin-left: auto; margin-right: auto; }
-  .mp-standings-card { order: 2; }
+  /* Single player reserves a cabinet deck under the frame on every theme.
+     On a phone that empty pad (or the arcade deck) sat between the board
+     and the standings. Drop it so the scores can use the same gap as the
+     live pill above the board. */
+  .mp-stage .mp-screen { padding-bottom: 0; }
+  html[data-theme='arcade'] .mp-stage .cabinet { display: none; }
+  .mp-standings-card {
+    order: 2;
+    /* The board cancels the room's 12px padding, so standings do too and
+       run the full width under it. The live pill sits 10px above the board
+       (its own margin). The column gap is 8px, so 2px more matches that. */
+    margin-top: 2px;
+    margin-left: -12px;
+    margin-right: -12px;
+  }
   .mp-under-board { display: contents; }
   .mp-host-actions {
     display: flex;
