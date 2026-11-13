@@ -179,7 +179,9 @@ class Match < ApplicationRecord
       participant_id: participant_id,
       # Step 10: the browser renders the countdown from server values only.
       freeze_grace_seconds: self.class.freeze_grace_seconds,
-      presence_stale_seconds: self.class.presence_stale_seconds }
+      presence_stale_seconds: self.class.presence_stale_seconds,
+      host_pause: host_pause,
+      host_pause_until_ms: host_pause_until && (host_pause_until.to_f * 1000).round }
   end
 
   # Queue a direction from a channel that authenticated the connection and
@@ -204,6 +206,7 @@ class Match < ApplicationRecord
     # Commands from a frozen/unattended snake are never authoritative, even if
     # a stale socket slips one past the disconnect handler.
     return :disconnected unless participant.connection_state == "connected"
+    return :frozen if participant.held? && (participant.hold_release_at.nil? || participant.hold_release_at > now)
     return :frozen if participant.freeze_deadline_at.present? && participant.freeze_deadline_at > now
     return :stale_sequence unless input.seq.is_a?(Integer) && input.seq > participant.last_input_seq
 
@@ -218,6 +221,7 @@ class Match < ApplicationRecord
     reserved = match_participants
                .where(id: participant.id, status: "alive", connection_state: "connected")
                .where("last_input_seq < ?", input.seq)
+               .where("held = FALSE OR (hold_release_at IS NOT NULL AND hold_release_at <= ?)", now)
                .where("freeze_deadline_at IS NULL OR freeze_deadline_at <= ?", now)
                .update_all(last_input_seq: input.seq, updated_at: now)
     return :stale_sequence if reserved.zero?
@@ -241,6 +245,7 @@ class Match < ApplicationRecord
     return :not_a_participant unless participant
     return :eliminated unless participant.status == "alive"
     return :disconnected unless participant.connection_state == "connected"
+    return :frozen if participant.held? && (participant.hold_release_at.nil? || participant.hold_release_at > now)
     return :frozen if participant.freeze_deadline_at.present? && participant.freeze_deadline_at > now
     return :stale_sequence unless report.seq.is_a?(Integer) && report.seq > participant.last_input_seq
     return :invalid_tick unless report.tick.is_a?(Integer) && report.tick >= 0
@@ -252,6 +257,7 @@ class Match < ApplicationRecord
     reserved = match_participants
                .where(id: participant.id, status: "alive", connection_state: "connected")
                .where("last_input_seq < ?", report.seq)
+               .where("held = FALSE OR (hold_release_at IS NOT NULL AND hold_release_at <= ?)", now)
                .where("freeze_deadline_at IS NULL OR freeze_deadline_at <= ?", now)
                .update_all(last_input_seq: report.seq, updated_at: now)
     return :stale_sequence if reserved.zero?
@@ -496,6 +502,7 @@ class Match < ApplicationRecord
   # exception: that snake is removed immediately (reason :left).
   def sync_connection_states!(world, now: Time.current)
     world.server_time_ms = (now.to_f * 1000).round
+    pause_state, pause_until = self.class.where(id: id).pick(:host_pause, :host_pause_until)
     # One indexed read of every participant instead of a row lock plus a
     # per-participant `reload` on every simulator pass (the step-10 version did
     # both ~20 times per second, which alone cost more than the simulation).
@@ -504,12 +511,17 @@ class Match < ApplicationRecord
       "match_participants.connection_state",
       "match_participants.freeze_deadline_at",
       "match_participants.status",
-      "room_memberships.departure"
+      "room_memberships.departure",
+      "match_participants.held",
+      "match_participants.hold_release_at",
+      "room_memberships.permanent_spectator"
     )
     events = []
     expired = []
+    released_holds = []
+    hidden = []
 
-    states.each do |participant_id, state, deadline, status, departure|
+    states.each do |participant_id, state, deadline, status, departure, held_flag, release_at, permanent|
       snake = world.player(participant_id)
       next unless snake
 
@@ -528,29 +540,43 @@ class Match < ApplicationRecord
 
       case state
       when "connected"
-        next unless snake.frozen?
-
-        world.resume_player!(participant_id)
-        events << { participant: participant_id, state: "resumed" }
+        if snake.frozen?
+          world.resume_player!(participant_id)
+          events << { participant: participant_id, state: "resumed" }
+        end
       when "disconnected"
         if snake.alive? && deadline.present? && deadline > now
-          next if snake.frozen?
-
-          world.freeze_player!(participant_id, now_ms: (now.to_f * 1000).round,
-                                              until_ms: (deadline.to_f * 1000).round)
-          events << { participant: participant_id, state: "frozen",
-                      grace_deadline_at: deadline.iso8601(6) }
+          unless snake.frozen?
+            world.freeze_player!(participant_id, now_ms: (now.to_f * 1000).round,
+                                                until_ms: (deadline.to_f * 1000).round)
+            events << { participant: participant_id, state: "frozen",
+                        grace_deadline_at: deadline.iso8601(6) }
+          end
         else
           world.release_player!(participant_id) if snake.frozen?
           expired << participant_id
           events << { participant: participant_id, state: "unattended", reason: "grace_expired" }
         end
       when "unattended"
-        next unless snake.frozen?
-
-        world.release_player!(participant_id)
-        events << { participant: participant_id, state: "unattended" }
+        if snake.frozen?
+          world.release_player!(participant_id)
+          events << { participant: participant_id, state: "unattended" }
+        end
       end
+
+      # God-pause is not a connection freeze. resume_player! must not clear it,
+      # or the next 150 ms pass would drop a host pause on a connected snake.
+      if snake.alive? && held_flag && (release_at.nil? || release_at > now)
+        snake.held = true
+        snake.poses.clear
+        snake.queue.clear
+      elsif release_at.present? && release_at <= now
+        snake.held = false
+        released_holds << participant_id
+      else
+        snake.held = false
+      end
+      hidden << participant_id if permanent
     end
 
     unless expired.empty?
@@ -560,6 +586,18 @@ class Match < ApplicationRecord
                         .update_all(connection_state: "unattended", frozen_at: nil,
                                     freeze_deadline_at: nil, updated_at: now)
     end
+    unless released_holds.empty?
+      match_participants.where(id: released_holds).update_all(held: false, hold_release_at: nil, updated_at: now)
+    end
+    if pause_state == "countdown" && pause_until.present? && pause_until <= now
+      self.class.where(id: id, host_pause: "countdown")
+          .update_all(host_pause: nil, host_pause_until: nil, updated_at: now)
+      pause_state = nil
+      pause_until = nil
+    end
+    world.host_pause = pause_state
+    world.host_pause_until_ms = pause_until && (pause_until.to_f * 1000).round
+    world.hidden_participant_ids = hidden
     events.each { |fields| MatchChannel.broadcast_event(id, { type: "connection", match: id }.merge(fields)) }
     events
   end
@@ -574,7 +612,7 @@ class Match < ApplicationRecord
 
     participant.update_columns(
       status: "left", connection_state: "unattended",
-      frozen_at: nil, freeze_deadline_at: nil, updated_at: now
+      frozen_at: nil, freeze_deadline_at: nil, held: false, hold_release_at: nil, updated_at: now
     )
     match_inputs.where(match_participant_id: participant.id).delete_all
     participant

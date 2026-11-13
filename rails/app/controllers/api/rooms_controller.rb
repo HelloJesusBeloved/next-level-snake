@@ -19,7 +19,7 @@ module Api
     # recorded *before* any sweep can decide the caller went quiet.
     before_action :touch_presence!
     before_action :sweep_stale_rooms!, only: %i[create show join current]
-    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host color capabilities board presentation_strategy kick ban restart stop spectate_while_playing snakes_cover_food]
+    before_action :load_room!, only: %i[show join ready leave start lobby disband transfer_host share_host give_host permanent_spectator pause color capabilities board presentation_strategy kick ban restart stop spectate_while_playing snakes_cover_food]
 
     # POST /api/rooms — create a room and become its host.
     def create
@@ -257,6 +257,41 @@ module Api
       render_error("invalid_transition", e.message, :conflict)
     end
 
+    # POST /api/rooms/:code/share_host — both players stay hosts.
+    def share_host
+      change_host!(:share_host_with!)
+    end
+
+    # POST /api/rooms/:code/give_host — promote them and step down.
+    def give_host
+      change_host!(:give_host_to!)
+    end
+
+    # POST /api/rooms/:code/permanent_spectator — { member_id, enabled }.
+    def permanent_spectator
+      membership = require_host!
+      return unless membership
+
+      target = seated_member!
+      return unless target
+
+      @room.set_permanent_spectator!(membership, target, enabled: params[:enabled])
+      render json: state_payload(@room.reload, membership.reload)
+    rescue Room::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
+    end
+
+    # POST /api/rooms/:code/pause — { scope: "self" | "others" }.
+    def pause
+      membership = require_host!
+      return unless membership
+
+      @room.set_god_pause!(membership, scope: params[:scope])
+      render json: state_payload(@room.reload, membership.reload)
+    rescue Room::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
+    end
+
     # POST /api/rooms/:code/kick — host force-leave. State stays "left" so they
     # can rejoin; departure is "kicked". POST ban is state "removed".
     def kick
@@ -399,6 +434,27 @@ module Api
       nil
     end
 
+    def change_host!(method_name)
+      membership = require_host!
+      return unless membership
+
+      target = seated_member!
+      return unless target
+
+      @room.public_send(method_name, membership, target)
+      render json: state_payload(@room.reload, membership.reload)
+    rescue Room::InvalidTransition => e
+      render_error("invalid_transition", e.message, :conflict)
+    end
+
+    def seated_member!
+      target = @room.room_memberships.active.find_by(id: params[:member_id])
+      return target if target
+
+      render_error("member_not_found", "That player is not in this room.", :not_found)
+      nil
+    end
+
     def moderate_member!(action)
       host = require_host!
       return unless host
@@ -521,7 +577,7 @@ module Api
         counts: {
           members: active.size,
           online: active.count { |member| member.online?(at: at) },
-          ready: active.count { |member| member.ready? && !member.spectator? },
+          ready: active.count { |member| member.ready? && !member.spectator? && !member.permanent_spectator? },
           capacity: room.max_members
         },
         start: room.start_eligibility(at: at),
@@ -541,6 +597,7 @@ module Api
         display_name: member.display_name,
         color: member.identity_color,
         spectator: member.spectator?,
+        permanent_spectator: member.permanent_spectator?,
         device: member.device_kind(at: at),
         match_participant_id: match_participant_id,
         last_input_seq: last_input_seq,

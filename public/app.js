@@ -513,11 +513,9 @@
       });
     }
 
-    // ---- auto-select the account's favorite theme on sign-in ----------------------------------
-    // The toggle lives in the profile's favorite-theme card and is device-local
-    // (snake.autoTheme.v1). The favorite itself belongs to the account, so it is
-    // fetched once at sign-in rather than cached here. A plain page load never
-    // touches the theme: whatever you last picked on this device survives it.
+    // The favorite lives on the account. The switch used to live only in
+    // localStorage, so clearing cookies (and that key with them) made the
+    // next sign-in skip it. The account flag is what sign-in trusts.
     var AUTO_THEME_KEY = 'snake.autoTheme.v1';
 
     function autoThemeWanted() {
@@ -525,15 +523,27 @@
       catch (err) { return false; }
     }
 
-    function maybeAutoTheme() {
-      if (!authUser || !autoThemeWanted()) return;
-      api('/api/profile').then(readJson).then(function (out) {
-        var id = out.ok && out.json.user ? out.json.user.favorite_theme : null;
+    function maybeAutoTheme(user) {
+      var serverOn = !!(user && user.apply_favorite_theme);
+      var localOn = autoThemeWanted();
+      if (localOn && user && !serverOn) {
+        serverOn = true;
+        api('/api/profile', { method: 'PATCH', body: JSON.stringify({ apply_favorite_theme: true }) }).catch(function () {});
+      }
+      if (serverOn) {
+        try { window.localStorage.setItem(AUTO_THEME_KEY, '1'); } catch (err) { /* blocked */ }
+      }
+      if (!authUser || (!serverOn && !localOn)) return;
+      var finish = function (id) {
         if (!id || !THEMES[id] || id === settings.theme) return;
         settings.theme = id;
         saveSettings(settings);
         applyTheme();
         renderSettings();
+      };
+      if (user && user.favorite_theme) { finish(user.favorite_theme); return; }
+      api('/api/profile').then(readJson).then(function (out) {
+        finish(out.ok && out.json.user ? out.json.user.favorite_theme : null);
       }).catch(function () { /* offline: keep the theme this device already has */ });
     }
 
@@ -999,7 +1009,7 @@
           if (authDialog && authDialog.open) authDialog.close();
           if (!flushPendingRun()) loadScores();
           loadBoard();
-          maybeAutoTheme();
+          maybeAutoTheme(out.json.user);
         })
         .catch(function () {
           if (errEl) errEl.textContent = 'Network error — try again';

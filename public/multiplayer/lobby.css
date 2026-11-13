@@ -85,8 +85,9 @@
   font-size: 13px;
 }
 
-.mp-roster { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; }
+.mp-roster { list-style: none; margin: 16px 0 0; padding: 0; display: grid; gap: 8px; overflow: visible; }
 .mp-player {
+  position: relative;
   display: flex;
   flex-wrap: nowrap;
   align-items: center;
@@ -97,6 +98,39 @@
   background: color-mix(in srgb, var(--ink) 35%, transparent);
 }
 .mp-player.is-you { border-color: color-mix(in srgb, var(--accent-2) 55%, transparent); }
+.mp-player.is-host {
+  border-width: 3px;
+  border-color: var(--crown, #e2b657);
+}
+.mp-player.is-permanent {
+  border-style: dotted;
+  border-width: 2px;
+}
+.mp-player.is-host.is-permanent {
+  border-style: dotted;
+  border-width: 3px;
+  border-color: var(--crown, #e2b657);
+}
+.mp-perm-tip {
+  display: none;
+  position: absolute;
+  left: 12px;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel) 96%, #000);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font: 600 11px/1.2 'IBM Plex Mono', ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+.mp-player.is-permanent:hover .mp-perm-tip,
+.mp-player.is-permanent:focus-within .mp-perm-tip { display: block; }
 .mp-player__main { display: inline-flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
 .mp-player__name {
   font-weight: 600;
@@ -529,7 +563,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin: 2px 0 10px;
+  margin: 0;
   padding: 6px 10px;
   border-radius: 999px;
   font-size: 13px;
@@ -538,6 +572,61 @@
   color: var(--green, #35ff6b);
   border: 1px solid rgba(53, 255, 107, .3);
   width: fit-content;
+}
+.mp-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 2px 0 10px;
+}
+.mp-score-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  line-height: 1.35;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+  color: var(--text);
+}
+.mp-score-pill[hidden] { display: none; }
+.mp-score-pill__label {
+  color: var(--muted);
+  font: 600 10px/1 'IBM Plex Mono', ui-monospace, monospace;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.mp-score-pill strong { font-variant-numeric: tabular-nums; }
+.mp-god { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.mp-god[hidden] { display: none; }
+.mp-god__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 36px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--ink) 42%, transparent);
+  color: var(--text);
+  font: 700 11px/1 'IBM Plex Mono', ui-monospace, monospace;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+.mp-god__btn svg { display: block; fill: currentColor; }
+.mp-god__btn[hidden] { display: none; }
+.mp-god__btn[aria-pressed='true'] {
+  color: var(--crown, #e2b657);
+  border-color: var(--crown, #e2b657);
+  background: color-mix(in srgb, var(--crown, #e2b657) 16%, transparent);
 }
 .mp-brawl-conn[data-state='lost'] {
   background: rgba(255, 59, 48, .14);
@@ -553,6 +642,12 @@
   background: rgba(255, 255, 255, .08);
   color: inherit;
   border-color: rgba(255, 255, 255, .18);
+}
+.mp-brawl-conn[data-state='paused'],
+.mp-brawl-conn[data-state='countdown'] {
+  background: rgba(226, 182, 87, .16);
+  color: var(--crown, #e2b657);
+  border-color: rgba(226, 182, 87, .55);
 }
 .mp-brawl-conn__ring {
   width: 12px;
@@ -575,6 +670,11 @@
   color: #ff8a84;
   border-color: rgba(255, 59, 48, .5);
   background: rgba(255, 59, 48, .14);
+}
+.mp-game-score__tag.is-paused {
+  color: var(--crown, #e2b657);
+  border-color: rgba(226, 182, 87, .55);
+  background: rgba(226, 182, 87, .14);
 }
 
 /* Mobile hot-path isolation. These are presentation-only constraints: no
@@ -756,30 +856,37 @@ html.mp-page-focused label { touch-action: manipulation; }
 @media (max-width: 900px) {
   #multiplayer-root.band { padding: 16px 16px 32px; }
   .mp-room { padding: 12px; margin-top: 12px; }
-  .mp-play { display: flex; flex-direction: column; gap: 8px; }
+  .mp-play { display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 8px; }
   /* The board chrome is one unit so standings can sit directly under it.
      Leave is a separate flex item below standings; host buttons follow. */
   .mp-game { display: contents; }
   .mp-stage {
     order: 1;
-    margin-left: -12px;
-    margin-right: -12px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    margin: 0;
   }
-  .mp-screen { width: 100%; max-width: var(--screen-max); margin-left: auto; margin-right: auto; }
-  /* Single player reserves a cabinet deck under the frame on every theme.
-     On a phone that empty pad (or the arcade deck) sat between the board
-     and the standings. Drop it so the scores can use the same gap as the
-     live pill above the board. */
+  .mp-status-row,
+  .mp-stage .mp-screen,
+  .mp-standings-card {
+    width: min(100%, var(--screen-max));
+    max-width: var(--screen-max);
+    margin-left: auto;
+    margin-right: auto;
+    align-self: center;
+    box-sizing: border-box;
+  }
+  .mp-status-row { margin-top: 2px; margin-bottom: 10px; }
   .mp-stage .mp-screen { padding-bottom: 0; }
   html[data-theme='arcade'] .mp-stage .cabinet { display: none; }
   .mp-standings-card {
     order: 2;
-    /* The board cancels the room's 12px padding, so standings do too and
-       run the full width under it. The live pill sits 10px above the board
-       (its own margin). The column gap is 8px, so 2px more matches that. */
+    /* Same width as the board (both capped by --screen-max and centered).
+       The live pill sits 10px above the board. The column gap is 8px, so
+       2px more matches that. */
     margin-top: 2px;
-    margin-left: -12px;
-    margin-right: -12px;
   }
   .mp-under-board { display: contents; }
   .mp-host-actions {

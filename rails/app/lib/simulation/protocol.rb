@@ -54,6 +54,10 @@ module Simulation
         # countdown from this, but transitions remain server-owned.
         "ts" => (world.server_time_ms || 0)
       }
+      if world.host_pause
+        payload["pause"] = { "s" => world.host_pause, "until" => world.host_pause_until_ms }
+      end
+      payload["ps"] = Array(world.hidden_participant_ids)
       # Responsive-only. Classic snapshots stay byte-for-byte the previous shape:
       # no tick_ms, no monotonic tick stamp, no food generation, no eaten list.
       if responsive
@@ -77,7 +81,8 @@ module Simulation
         # Step 10 connection state. "fr" drives the red loading ring on the
         # head; "gu" is the absolute server deadline (epoch ms); "cy" is the
         # server's authoritative connection classification.
-        "fr" => snake.frozen?, "gu" => snake.frozen_until_ms, "cy" => snake.connection_state,
+        "fr" => snake.frozen? || snake.held?, "gu" => (snake.frozen? ? snake.frozen_until_ms : nil),
+        "hd" => snake.held? && !snake.frozen?, "cy" => snake.connection_state,
         "fz" => snake.frozen_ticks
       }
     end
@@ -145,7 +150,8 @@ module Simulation
         "i" => snake.id,
         "h" => head && (head[1] * columns + head[0]),
         "d" => snake.direction.name, "l" => snake.length, "sc" => snake.score,
-        "a" => snake.alive, "fr" => snake.frozen?, "gu" => snake.frozen_until_ms,
+        "a" => snake.alive, "fr" => snake.frozen? || snake.held?,
+        "hd" => snake.held? && !snake.frozen?, "gu" => (snake.frozen? ? snake.frozen_until_ms : nil),
         "cy" => snake.connection_state, "is" => snake.last_applied_seq,
         "it" => snake.last_applied_tick, "el" => snake.eliminated_at_tick,
         "er" => snake.elimination_reason&.to_s

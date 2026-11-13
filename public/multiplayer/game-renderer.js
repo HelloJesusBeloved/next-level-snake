@@ -3,7 +3,7 @@
 // local clock (decisive.js) and steps everyone else from confirmed cells
 // one tick behind (playback.js). A packet never relocates the local snake.
 // Both tick one whole square at a time, the same way single-player does.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step10-mobile4';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-26';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
@@ -315,6 +315,22 @@ export class MultiplayerGameRenderer {
     return true;
   }
 
+  // Host pause of this snake only. Stops the local clock before the round
+  // trip; a later snapshot with hd/fr keeps it stopped.
+  holdGod() {
+    if (!this.local?.seeded || this.local.dead) return false;
+    this.local.frozen = true;
+    this.local.running = false;
+    this.local.nextStepAt = null;
+    return true;
+  }
+
+  setHiddenStandings(ids) {
+    this.hiddenStandings = ids instanceof Set ? ids : new Set(ids || []);
+    this.scoreSignature = '';
+    if (this.snapshot) this.drawScoreboard();
+  }
+
   configureLocal(match) {
     if (!this.local) return;
     this.local.configure({
@@ -468,7 +484,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-25', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-26', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -857,7 +873,7 @@ export class MultiplayerGameRenderer {
     for (const player of this.snapshot?.p || []) {
       const node = this.scoreRows.get(player.i)?.tag;
       if (!node || !player.fr) continue;
-      text(node, `frozen ${this.graceSecondsLeft(player)}s`);
+      text(node, player.hd ? 'paused' : `frozen ${this.graceSecondsLeft(player)}s`);
     }
   }
 
@@ -884,6 +900,7 @@ export class MultiplayerGameRenderer {
     for (const standing of board.q || []) {
       const player = players.get(standing.i);
       if (!player) continue;
+      if (this.hiddenStandings && (this.hiddenStandings.has(standing.i) || this.hiddenStandings.has(Number(standing.i)))) continue;
       const existing = this.scoreRows.get(standing.i);
       if (existing) {
         text(existing.place, `${standing.p}.`);
@@ -934,6 +951,7 @@ export class MultiplayerGameRenderer {
   // A later server frame can only raise that number, never take the bite back.
   paintOwnScore() {
     if (!this.local?.seeded || this.ownParticipantId == null) return;
+    this.onShownScore?.(this.local.shownScore);
     const row = this.scoreRows.get(this.ownParticipantId) || this.scoreRows.get(Number(this.ownParticipantId));
     if (!row) return;
     text(row.score, `${this.local.shownScore} pts`);
@@ -941,7 +959,10 @@ export class MultiplayerGameRenderer {
   }
 
   paintTag(tag, player) {
-    if (player.a && player.fr) {
+    if (player.a && player.hd) {
+      if (tag.className !== 'mp-game-score__tag is-paused') tag.className = 'mp-game-score__tag is-paused';
+      text(tag, 'paused');
+    } else if (player.a && player.fr) {
       if (tag.className !== 'mp-game-score__tag is-frozen') tag.className = 'mp-game-score__tag is-frozen';
       text(tag, `frozen ${this.graceSecondsLeft(player)}s`);
     } else if (player.a) {

@@ -71,6 +71,6 @@ export function hudKey(snapshot, ownId, tickMs) {
   if (!snapshot) return '';
   const players = snapshot.p || [];
   return `${snapshot.m}:${snapshot.s}:${ownId}:${tickMs}:${players.map((p) =>
-    `${p.i}:${p.a ? 1 : 0}:${p.fr ? 1 : 0}:${p.sc}:${p.l}:${p.n}:${p.c}:${Math.floor(p.sv * tickMs / 1000)}`
+    `${p.i}:${p.a ? 1 : 0}:${p.fr ? 1 : 0}:${p.hd ? 1 : 0}:${p.sc}:${p.l}:${p.n}:${p.c}:${Math.floor(p.sv * tickMs / 1000)}`
   ).join(';')}`;
 }

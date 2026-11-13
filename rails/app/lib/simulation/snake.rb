@@ -17,7 +17,7 @@ module Simulation
                   :survived_ticks, :longest_length, :last_seq, :last_applied_seq,
                   :last_applied_tick, :food, :food_eaten_at_tick,
                   :elimination_reason, :frozen, :frozen_until_ms, :frozen_ticks,
-                  :connection_state
+                  :connection_state, :held
 
     # One reported cell waiting to be painted onto everyone else. Responsive
     # matches move by adopting these, one per server tick. Classic never reads
@@ -31,7 +31,7 @@ module Simulation
                    last_applied_seq: 0, last_applied_tick: nil,
                    food: nil, food_eaten_at_tick: nil, queue: [], poses: [],
                    elimination_reason: nil, frozen: false, frozen_until_ms: nil,
-                   frozen_ticks: 0, connection_state: "connected")
+                   frozen_ticks: 0, connection_state: "connected", held: false)
       @id = Integer(id)
       @name = name.to_s
       @color_hex = color_hex.to_s
@@ -59,6 +59,7 @@ module Simulation
       @frozen_until_ms = frozen_until_ms && Integer(frozen_until_ms)
       @frozen_ticks = Integer(frozen_ticks)
       @connection_state = CONNECTION_STATES.include?(connection_state.to_s) ? connection_state.to_s : "connected"
+      @held = held ? true : false
     end
 
     def alive?
@@ -67,6 +68,12 @@ module Simulation
 
     def frozen?
       alive? && @frozen
+    end
+
+    # Host pause. Independent of a dropped connection: the grace pass must
+    # not clear it just because the socket is still up.
+    def held?
+      alive? && @held
     end
 
     # Stops movement while preserving every authoritative field: body, length,
@@ -166,6 +173,7 @@ module Simulation
       # and its connection becomes a spectator concern, not a simulation one.
       self.frozen = false
       self.frozen_until_ms = nil
+      self.held = false
     end
 
     def occupied_cells
@@ -185,7 +193,8 @@ module Simulation
                                          "seq" => pose.seq, "t" => pose.tick } },
         "food" => food&.to_state, "ate_at" => food_eaten_at_tick,
         "frozen" => frozen, "frozen_until" => frozen_until_ms,
-        "frozen_ticks" => frozen_ticks, "connection" => connection_state
+        "frozen_ticks" => frozen_ticks, "connection" => connection_state,
+        "held" => @held ? true : false
       }
     end
 
@@ -208,7 +217,8 @@ module Simulation
         food: state["food"] && Food.from_state(state["food"]),
         food_eaten_at_tick: state["ate_at"], frozen: state.fetch("frozen", false),
         frozen_until_ms: state["frozen_until"], frozen_ticks: state.fetch("frozen_ticks", 0),
-        connection_state: state.fetch("connection", "connected")
+        connection_state: state.fetch("connection", "connected"),
+        held: state["held"] ? true : false
       )
     end
   end

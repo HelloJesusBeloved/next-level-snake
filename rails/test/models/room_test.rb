@@ -219,13 +219,24 @@ class RoomTest < ActiveSupport::TestCase
     assert room.host?(seat)
   end
 
-  test "the database refuses two active hosts in one room" do
+  test "hosts can share the crown and the giver can step down alone" do
     room = make_room_with_user_host
     seat = room.join!(guest_session: make_guest.first, display_name: "Usurper")
+    giver = room.host_membership
 
-    assert_raises(ActiveRecord::RecordNotUnique) do
-      seat.update_columns(role: "host")
-    end
+    room.share_host_with!(giver, seat)
+
+    assert_equal 2, room.room_memberships.active.where(role: "host").count
+    assert giver.reload.host?
+    assert seat.reload.host?
+
+    third = room.join!(guest_session: make_guest.first, display_name: "Third")
+    room.give_host_to!(giver, third)
+
+    assert_equal "player", giver.reload.role
+    assert seat.reload.host?
+    assert third.reload.host?
+    assert_equal 2, room.room_memberships.active.where(role: "host").count
   end
 
   test "room creation does not disturb existing accounts or scores" do

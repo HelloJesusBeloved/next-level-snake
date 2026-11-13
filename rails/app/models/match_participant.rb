@@ -59,7 +59,9 @@ class MatchParticipant < ApplicationRecord
       frozen_at: frozen_at&.iso8601(6),
       grace_deadline_at: freeze_deadline_at&.iso8601(6),
       freezes_used: freeze_windows_used,
-      last_seen_at: last_seen_at&.iso8601(6)
+      last_seen_at: last_seen_at&.iso8601(6),
+      held: held?,
+      hold_release_at: hold_release_at&.iso8601(6)
     }
   end
 end

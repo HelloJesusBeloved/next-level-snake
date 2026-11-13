@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
+ActiveRecord::Schema[8.0].define(version: 2026_01_18_000000) do
   # These are extensions that must be enabled in order to support this database
   enable_extension "pg_catalog.plpgsql"
 
@@ -84,6 +84,8 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
     t.datetime "last_freeze_started_at"
     t.bigint "freeze_ticks", default: 0, null: false
     t.datetime "last_seen_at"
+    t.boolean "held", default: false, null: false
+    t.datetime "hold_release_at"
     t.index ["match_id", "placement"], name: "match_participants_placement_idx"
     t.index ["match_id", "connection_state"], name: "match_participants_connection_idx"
     t.index ["match_id", "room_membership_id"], name: "match_participants_identity_idx", unique: true
@@ -121,6 +123,8 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
     t.jsonb "live_snapshot"
     t.bigint "snapshot_tick", default: 0, null: false
     t.string "presentation_strategy", default: "responsive", null: false
+    t.string "host_pause"
+    t.datetime "host_pause_until"
     t.index ["room_id", "created_at"], name: "matches_room_created_idx"
     t.index ["room_id"], name: "matches_one_live_per_room_idx", unique: true, where: "((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('running'::character varying)::text, ('paused'::character varying)::text]))"
     t.index ["status", "lease_expires_at"], name: "matches_claimable_idx"
@@ -128,6 +132,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
     t.check_constraint "growth >= 0 AND growth <= 100", name: "matches_growth_check"
     t.check_constraint "mode::text = ANY (ARRAY['brawl'::character varying::text, 'duel'::character varying::text])", name: "matches_mode_check"
     t.check_constraint "presentation_strategy::text = ANY (ARRAY['classic'::character varying::text, 'responsive'::character varying::text])", name: "matches_presentation_strategy_check"
+    t.check_constraint "host_pause IS NULL OR (host_pause::text = ANY (ARRAY['paused'::character varying::text, 'countdown'::character varying::text]))", name: "matches_host_pause_check"
     t.check_constraint "snapshot_tick >= 0", name: "matches_snapshot_tick_check"
     t.check_constraint "status::text = ANY (ARRAY['pending'::character varying::text, 'running'::character varying::text, 'paused'::character varying::text, 'completed'::character varying::text, 'abandoned'::character varying::text, 'interrupted'::character varying::text])", name: "matches_status_check"
     t.check_constraint "tick >= 0 AND checkpoint_tick >= 0", name: "matches_ticks_check"
@@ -149,6 +154,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
     t.datetime "updated_at", null: false
     t.integer "color_slot", null: false
     t.boolean "spectator", default: false, null: false
+    t.boolean "permanent_spectator", default: false, null: false
     t.jsonb "device_reports", default: {}, null: false
     t.index "room_id, lower((display_name)::text)", name: "room_memberships_active_name_idx", unique: true, where: "((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text]))"
     t.index ["guest_session_id"], name: "index_room_memberships_on_guest_session_id"
@@ -157,7 +163,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
     t.index ["room_id", "guest_session_id"], name: "room_memberships_room_guest_idx", unique: true, where: "(guest_session_id IS NOT NULL)"
     t.index ["room_id", "state"], name: "room_memberships_room_state_idx"
     t.index ["room_id", "user_id"], name: "room_memberships_room_user_idx", unique: true, where: "(user_id IS NOT NULL)"
-    t.index ["room_id"], name: "room_memberships_one_host_idx", unique: true, where: "(((role)::text = 'host'::text) AND ((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text])))"
+    t.index ["room_id"], name: "room_memberships_hosts_idx", where: "(((role)::text = 'host'::text) AND ((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text])))"
     t.index ["user_id"], name: "index_room_memberships_on_user_id"
     t.index ["user_id"], name: "room_memberships_one_active_user_idx", unique: true, where: "((user_id IS NOT NULL) AND ((state)::text = ANY (ARRAY[('joined'::character varying)::text, ('ready'::character varying)::text, ('playing'::character varying)::text])))"
     t.check_constraint "(state::text = ANY (ARRAY['left'::character varying::text, 'removed'::character varying::text])) AND left_at IS NOT NULL OR (state::text = ANY (ARRAY['joined'::character varying::text, 'ready'::character varying::text, 'playing'::character varying::text])) AND left_at IS NULL", name: "room_memberships_left_at_check"
@@ -220,6 +226,7 @@ ActiveRecord::Schema[8.0].define(version: 2026_01_17_000000) do
     t.string "username", null: false
     t.string "password_digest", null: false
     t.string "favorite_theme"
+    t.boolean "apply_favorite_theme", default: false, null: false
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.index "lower((username)::text)", name: "users_username_lower_idx", unique: true

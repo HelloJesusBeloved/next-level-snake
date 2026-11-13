@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-25';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-26';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
 import { createPageFocus, shouldRevealBoard } from './page-focus.js?v=step11-responsive-18';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
-import { createPlayBudget, text } from './play-budget.js?v=step10-mobile4';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-24';
+import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-26';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-26';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -119,6 +119,11 @@ export function mountLobby(root) {
     movementPacing: $('mp-movement-pacing'),
     brawlConn: $('mp-brawl-conn'),
     brawlConnText: $('mp-brawl-conn-text'),
+    scorePill: $('mp-score-pill'),
+    scoreValue: $('mp-score-pill-value'),
+    god: $('mp-god'),
+    pauseSelf: $('mp-pause-self'),
+    pauseOthers: $('mp-pause-others'),
     gameTick: $('mp-game-tick'),
     gameInputStatus: $('mp-game-input-status'),
     gameHint: $('mp-game-hint'),
@@ -190,6 +195,8 @@ export function mountLobby(root) {
     matchDisconnects: 0,
     lastMatchDisconnectAt: null,
     freezeTimer: null,
+    pauseTimer: null,
+    godSelf: false,
     resumedTimer: null,
     rosterSignature: '',
     standingsSignature: '',
@@ -223,6 +230,7 @@ export function mountLobby(root) {
     ownParticipantId: null,
   }) : null;
   gameRenderer?.setDecisiveStepHandler((report) => sendReport(report));
+  if (gameRenderer) gameRenderer.onShownScore = (score) => paintScorePill(score);
 
   // ---- helpers --------------------------------------------------------------
 
@@ -259,6 +267,81 @@ export function mountLobby(root) {
     state.matchLink = kind;
     if (el.brawlConn && el.brawlConn.dataset.state !== kind) el.brawlConn.dataset.state = kind;
     text(el.brawlConnText, label);
+  }
+
+  function paintScorePill(score) {
+    if (!el.scorePill) return;
+    const show = state.room?.state === 'in_match' && state.member && !state.member.permanent_spectator;
+    el.scorePill.hidden = !show;
+    if (!show || !Number.isFinite(Number(score))) return;
+    text(el.scoreValue, String(score));
+  }
+
+  function hiddenStandingIds(snapshot) {
+    const ids = new Set();
+    for (const id of snapshot?.ps || []) ids.add(Number(id));
+    for (const member of state.room?.members || []) {
+      if (member.permanent_spectator && member.match_participant_id != null) ids.add(Number(member.match_participant_id));
+    }
+    return ids;
+  }
+
+  function pauseInfo(snapshot) {
+    if (snapshot?.pause?.s) return snapshot.pause;
+    if (state.match?.host_pause) return { s: state.match.host_pause, until: state.match.host_pause_until_ms };
+    return null;
+  }
+
+  function stopPauseCountdown() {
+    if (state.pauseTimer) { window.clearInterval(state.pauseTimer); state.pauseTimer = null; }
+  }
+
+  function showPauseCountdown(untilMs) {
+    const until = Number(untilMs);
+    const tick = () => {
+      const now = Date.now() + (gameRenderer?.serverOffsetMs || 0);
+      const left = Number.isFinite(until) ? Math.max(0, Math.ceil((until - now) / 1000)) : 0;
+      if (left <= 0) {
+        stopPauseCountdown();
+        if (state.matchLink === 'countdown') setBrawlConn('live', 'Live');
+        return;
+      }
+      setBrawlConn('countdown', `Resuming ${left}`);
+    };
+    stopPauseCountdown();
+    tick();
+    state.pauseTimer = window.setInterval(tick, 250);
+  }
+
+  function applyPauseOval(snapshot) {
+    const pause = pauseInfo(snapshot);
+    if (pause?.s === 'paused') { stopPauseCountdown(); setBrawlConn('paused', 'Paused'); return true; }
+    if (pause?.s === 'countdown') { showPauseCountdown(pause.until); return true; }
+    if (state.matchLink === 'paused' || state.matchLink === 'countdown') {
+      stopPauseCountdown();
+      setBrawlConn('live', 'Live');
+    }
+    return false;
+  }
+
+  function syncGodPause(snapshot) {
+    const amHost = !!state.member?.host;
+    const inMatch = state.room?.state === 'in_match';
+    if (el.god) el.god.hidden = !(amHost && inMatch);
+    const ownId = state.member?.match_participant_id;
+    const own = snapshot?.p?.find((player) => player.i === ownId);
+    const selfHeld = !!(own?.hd) || !!state.godSelf || !!state.member?.connection?.held && state.member?.connection?.hold_release_at == null;
+    const pause = pauseInfo(snapshot);
+    const othersHeld = pause?.s === 'paused' || pause?.s === 'countdown';
+    if (el.pauseOthers) {
+      el.pauseOthers.hidden = !(selfHeld || othersHeld);
+      el.pauseOthers.setAttribute('aria-pressed', othersHeld ? 'true' : 'false');
+    }
+    if (el.pauseSelf) el.pauseSelf.setAttribute('aria-pressed', selfHeld ? 'true' : 'false');
+    const hidden = hiddenStandingIds(snapshot || state.gameSnapshot);
+    gameRenderer?.setHiddenStandings(hidden);
+    if (own && Number.isFinite(own.sc)) paintScorePill(gameRenderer?.local?.shownScore ?? own.sc);
+    else if (!inMatch) paintScorePill(null);
   }
 
   function stopFreezeCountdown() {
@@ -470,7 +553,7 @@ export function mountLobby(root) {
       // lobbies). It now repaints only when something visible changed.
       const rosterSignature = `${amHost ? 1 : 0}:` + JSON.stringify((room.members || []).map((member) => [
         member.id, member.display_name, member.online, member.host, member.ready,
-        member.spectator, member.you, member.color?.hex, member.departure, member.state,
+        member.spectator, member.permanent_spectator, member.you, member.color?.hex, member.departure, member.state,
       ]));
       if (rosterSignature !== state.rosterSignature) {
         state.rosterSignature = rosterSignature;
@@ -479,18 +562,24 @@ export function mountLobby(root) {
         const tags = [];
         if (member.you) tags.push('<span class="mp-player__tag">you</span>');
         if (!departed && !member.online) tags.push('<span class="mp-player__tag">away</span>');
-        if (!departed && member.spectator) tags.push('<span class="mp-player__tag">spectating</span>');
+        if (!departed && member.spectator && !member.permanent_spectator) tags.push('<span class="mp-player__tag">spectating</span>');
         const crown = member.host
           ? '<span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span>'
           : '';
+        const hostBits = member.host ? '' : `<button type="button" role="menuitem" data-share-host="${member.id}">Share host</button><button type="button" role="menuitem" data-give-host="${member.id}">Give host</button>`;
+        const permBit = member.permanent_spectator
+          ? `<button type="button" role="menuitem" data-perm="${member.id}" data-perm-on="0">Player again</button>`
+          : `<button type="button" role="menuitem" data-perm="${member.id}" data-perm-on="1">Permanent spectator</button>`;
         const mod = amHost && !member.you && !departed
-          ? `<span class="mp-player__mod"><button type="button" class="mp-player__more" data-mod="${member.id}" aria-haspopup="menu" aria-expanded="false" aria-controls="mp-mod-${member.id}" aria-label="Actions for ${esc(member.display_name)}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button><span class="mp-player__menu" id="mp-mod-${member.id}" role="menu" hidden><button type="button" role="menuitem" data-kick="${member.id}">Kick</button><button type="button" role="menuitem" class="is-ban" data-ban="${member.id}">Ban</button></span></span>`
+          ? `<span class="mp-player__mod"><button type="button" class="mp-player__more" data-mod="${member.id}" aria-haspopup="menu" aria-expanded="false" aria-controls="mp-mod-${member.id}" aria-label="Actions for ${esc(member.display_name)}"><svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button><span class="mp-player__menu" id="mp-mod-${member.id}" role="menu" hidden>${hostBits}${permBit}<button type="button" role="menuitem" data-kick="${member.id}">Kick</button><button type="button" role="menuitem" class="is-ban" data-ban="${member.id}">Ban</button></span></span>`
           : '';
         const badge = departed
           ? `<span class="mp-badge is-${member.departure}">${member.departure === 'kicked' ? 'Kicked' : 'Banned'}</span>`
           : `<span class="mp-badge${member.ready ? ' is-ready' : ''}">${member.ready ? 'Ready' : 'Not ready'}</span>`;
+        const tip = member.permanent_spectator ? '<span class="mp-perm-tip" role="tooltip">Permanent Spectator</span>' : '';
         return [
-          `<li class="mp-player${member.you ? ' is-you' : ''}${departed ? ` is-${member.departure}` : ''}" data-member-id="${member.id}">`,
+          `<li class="mp-player${member.you ? ' is-you' : ''}${member.host ? ' is-host' : ''}${member.permanent_spectator ? ' is-permanent' : ''}${departed ? ` is-${member.departure}` : ''}" data-member-id="${member.id}">`,
+          tip,
           '<span class="mp-player__main">',
           `<span class="mp-identity-color" style="--player-color:${/^#[0-9A-F]{6}$/i.test(member.color?.hex) ? member.color.hex : '#808080'}" role="img" aria-label="${esc(member.color?.label || 'Player color')}"></span>`,
           `<span class="mp-dot${member.online ? ' is-online' : ''}" aria-hidden="true"></span>`,
@@ -544,6 +633,7 @@ export function mountLobby(root) {
     if (el.restart) el.restart.hidden = !amHost || room.state !== 'in_match';
     if (el.stop) el.stop.hidden = !amHost || room.state !== 'in_match';
     if (el.hostNote) el.hostNote.hidden = !amHost;
+    syncGodPause(state.gameSnapshot);
     state.invite = room.invite_url || '';
     if (el.inviteUrl) el.inviteUrl.textContent = state.invite;
     // Web Share is progressive enhancement; Copy Link is always present.
@@ -780,7 +870,7 @@ export function mountLobby(root) {
     if (!snapshot) return '';
     // Built by concatenation: this runs on every authoritative frame and a
     // JSON.stringify of two arrays per tick is measurable on a phone.
-    let signature = `${snapshot.t}:${state.match?.tick_ms}:${state.member?.match_participant_id}`;
+    let signature = `${snapshot.t}:${state.match?.tick_ms}:${state.member?.match_participant_id}:${[...hiddenStandingIds(snapshot)].sort().join(',')}`;
     for (const row of snapshot.q || []) signature += `|${row.i}:${row.p}:${row.sc}`;
     for (const player of snapshot.p || []) signature += `#${player.i}:${player.a ? 1 : 0}${player.fr ? 1 : 0}:${player.l}:${player.sv}`;
     return signature;
@@ -795,7 +885,7 @@ export function mountLobby(root) {
     state.standingsSignature = signature;
     container.replaceChildren();
     container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
-      state.member?.match_participant_id));
+      state.member?.match_participant_id, hiddenStandingIds(state.gameSnapshot)));
   }
 
   function renderResults() {
@@ -806,7 +896,7 @@ export function mountLobby(root) {
     state.resultsSignature = signature;
     container.replaceChildren();
     container.append(buildResultsTable(state.gameSnapshot, state.match?.tick_ms,
-      state.member?.match_participant_id));
+      state.member?.match_participant_id, hiddenStandingIds(state.gameSnapshot)));
   }
 
   // ---- server conversation ---------------------------------------------------
@@ -1104,8 +1194,24 @@ export function mountLobby(root) {
         if (errEl) errEl.textContent = (out.json && out.json.error) || 'Something went wrong';
         return;
       }
+      maybeAutoThemeFromUser(out.json && out.json.user);
       afterAuth();
     }).catch(() => { if (errEl) errEl.textContent = 'Network error — try again'; });
+  }
+
+  function maybeAutoThemeFromUser(user) {
+    if (!user) return;
+    var serverOn = !!user.apply_favorite_theme;
+    var localOn = false;
+    try { localOn = window.localStorage.getItem('snake.autoTheme.v1') === '1'; } catch (err) { localOn = false; }
+    if (localOn && !serverOn) {
+      serverOn = true;
+      api('/api/profile', { method: 'PATCH', body: JSON.stringify({ apply_favorite_theme: true }) }).catch(function () {});
+    }
+    if (serverOn) {
+      try { window.localStorage.setItem('snake.autoTheme.v1', '1'); } catch (err) { /* blocked */ }
+    }
+    if ((serverOn || localOn) && user.favorite_theme) pickTheme(user.favorite_theme);
   }
 
   // ---- theme picker (same segmented control as the game page settings) -------
@@ -1422,6 +1528,7 @@ export function mountLobby(root) {
       state.controls = own ? { id: own.i, a: own.a, fr: own.fr, d: own.d } : null;
       if (el.gameStatus && !state.match?.spectator && message.s === 'running') {
         if (!own?.a) text(el.gameStatus, 'Eliminated · watching the Brawl');
+        else if (own.hd) text(el.gameStatus, 'Your snake is paused');
         else if (own.fr) text(el.gameStatus, 'Your snake is frozen · reconnecting');
         else text(el.gameStatus, 'Live · your snake is controlled by the server');
       }
@@ -1436,16 +1543,24 @@ export function mountLobby(root) {
       const ownId = state.member?.match_participant_id;
       // Mirror the SERVER's frozen/spectator state on the non-blocking banner.
       if (own) {
+        if (state.godSelf) {
+          if (own.hd) state.godSelf = false;
+          else gameRenderer?.holdGod();
+        }
+        const roomPaused = applyPauseOval(message);
         if (!own.a) {
           markSpectating();
-        } else if (own.fr) {
+        } else if (own.hd && !roomPaused) {
+          if (state.matchLink === 'paused' || state.matchLink === 'countdown') setBrawlConn('live', 'Live');
+        } else if (!roomPaused && own.fr && !own.hd) {
           showGraceCountdown(Number.isFinite(own.gu) ? new Date(own.gu).toISOString() : null);
-        } else if (state.matchLink === 'lost' || state.matchLink === 'warn') {
+        } else if (!roomPaused && (state.matchLink === 'lost' || state.matchLink === 'warn')) {
           markResumed();
-        } else if (!state.match?.spectator) {
+        } else if (!roomPaused && !state.match?.spectator && state.matchLink !== 'live') {
           setBrawlConn('live', 'Live');
         }
       }
+      syncGodPause(message);
       if (died.includes(ownId)) {
         const entry = message.q?.find((row) => row.i === ownId);
         showEliminationOverlay(document, {
@@ -2108,13 +2223,25 @@ export function mountLobby(root) {
     }
     const kick = event.target.closest?.('[data-kick]');
     const ban = event.target.closest?.('[data-ban]');
-    const button = kick || ban;
+    const share = event.target.closest?.('[data-share-host]');
+    const give = event.target.closest?.('[data-give-host]');
+    const perm = event.target.closest?.('[data-perm]');
+    const button = kick || ban || share || give || perm;
     if (!button || !state.room) return;
     closeModMenus();
-    const id = Number(button.dataset.kick || button.dataset.ban);
+    const id = Number(button.dataset.kick || button.dataset.ban || button.dataset.shareHost || button.dataset.giveHost || button.dataset.perm);
     const member = (state.room.members || []).find((entry) => entry.id === id);
     const name = member?.display_name || 'this player';
-    if (kick) {
+    if (share) {
+      roomAction('share_host', { member_id: id });
+    } else if (give) {
+      confirmSwitch(`Give host to ${name} and step down? You can still be a host again if someone shares it.`, () => {
+        roomAction('give_host', { member_id: id });
+      }, null, { title: 'Give host?', ok: 'Give host', cancel: 'Cancel' });
+    } else if (perm) {
+      const enable = button.dataset.permOn === '1';
+      roomAction('permanent_spectator', { member_id: id, enabled: enable });
+    } else if (kick) {
       confirmSwitch(`${name} is kicked and their snake forfeits. They can join again with the same code.`, () => {
         roomAction('kick', { member_id: id });
       }, null, { title: 'Kick this player?', ok: 'Kick', cancel: 'Cancel' });
@@ -2123,6 +2250,32 @@ export function mountLobby(root) {
         roomAction('ban', { member_id: id });
       }, null, { title: 'Ban this player?', ok: 'Ban', cancel: 'Cancel' });
     }
+  });
+  on(el.pauseSelf, 'click', () => {
+    if (!state.room) return;
+    const pressed = el.pauseSelf.getAttribute('aria-pressed') === 'true';
+    state.godSelf = !pressed;
+    if (state.godSelf) gameRenderer?.holdGod();
+    el.pauseSelf.setAttribute('aria-pressed', state.godSelf ? 'true' : 'false');
+    if (el.pauseOthers) el.pauseOthers.hidden = !(state.godSelf || el.pauseOthers.getAttribute('aria-pressed') === 'true');
+    api(`/api/rooms/${state.room.code}/pause`, {
+      method: 'POST', body: JSON.stringify({ scope: 'self' }),
+    }).then((out) => {
+      if (!out.ok) {
+        state.godSelf = false;
+        flash((out.json && out.json.error) || 'Could not pause.', 'error');
+      }
+      if (out.json) apply(out);
+    }).catch(() => { state.godSelf = false; flash('Network error — try again', 'error'); });
+  });
+  on(el.pauseOthers, 'click', () => {
+    if (!state.room) return;
+    api(`/api/rooms/${state.room.code}/pause`, {
+      method: 'POST', body: JSON.stringify({ scope: 'others' }),
+    }).then((out) => {
+      if (!out.ok) flash((out.json && out.json.error) || 'Could not pause everyone.', 'error');
+      if (out.json) apply(out);
+    }).catch(() => flash('Network error — try again', 'error'));
   });
   on(document, 'click', (event) => {
     if (event.target.closest?.('.mp-player__mod')) return;

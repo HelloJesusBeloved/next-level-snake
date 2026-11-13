@@ -50,6 +50,9 @@ module Simulation
     # owner. Clients may render a countdown from it; they never decide when a
     # freeze starts or ends.
     attr_accessor :server_time_ms
+    # Host pause, copied from the match row by the simulator. Not part of the
+    # checkpoint: the database columns are the source of truth.
+    attr_accessor :host_pause, :host_pause_until_ms, :hidden_participant_ids
 
     def initialize(id:, config:, participants:, state: nil, presentation_strategy: "classic")
       @id = id
@@ -60,6 +63,9 @@ module Simulation
       @columns = config.columns
       @rows = config.rows
       @server_time_ms = nil
+      @host_pause = nil
+      @host_pause_until_ms = nil
+      @hidden_participant_ids = []
       @food_events = []
       @responsive_frames = []
       @responsive_noted_tick = nil
@@ -236,7 +242,7 @@ module Simulation
       @food_events = []
       # Frozen snakes are present but immobile. They are NOT elimination
       # candidates and they never accrue survival ticks while frozen.
-      movers = alive_snakes.reject(&:frozen?)
+      movers = alive_snakes.reject { |snake| snake.frozen? || snake.held? }
       frozen_snakes.each { |snake| snake.frozen_ticks += 1 if snake.alive? }
       targets = {}
       movers.each do |snake|
@@ -299,7 +305,7 @@ module Simulation
     def step_relay!
       next_tick = @tick + 1
       @food_events = []
-      movers = alive_snakes.reject(&:frozen?)
+      movers = alive_snakes.reject { |snake| snake.frozen? || snake.held? }
       frozen_snakes.each { |snake| snake.frozen_ticks += 1 if snake.alive? }
       targets = {}
       movers.each do |snake|

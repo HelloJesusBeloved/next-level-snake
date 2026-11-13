@@ -132,7 +132,7 @@ class RoomMembership < ApplicationRecord
 
     room.with_lock do
       reload
-      raise InvalidTransition, "Spectators cannot ready up during a match." if spectator? || room.in_match?
+      raise InvalidTransition, "Spectators cannot ready up during a match." if spectator? || permanent_spectator? || room.in_match?
       update!(state: "ready")
     end
     room.notify_events!([[:member_ready, { member: id, ready: true }]])
@@ -197,7 +197,7 @@ class RoomMembership < ApplicationRecord
     raise InvalidTransition, "removed members cannot rejoin this room" if state == "removed"
 
     update!(state: "joined", display_name: display_name, role: "player",
-            spectator: room.in_match?, device_reports: {},
+            spectator: room.in_match? || permanent_spectator?, device_reports: {},
             joined_at: Time.current, left_at: nil, last_seen_at: Time.current,
             departure: nil)
     self
@@ -262,6 +262,7 @@ class RoomMembership < ApplicationRecord
         room.matches.live.find_each { |match| match.forfeit_membership!(self) }
       end
       next unless was_host
+      next if room.room_memberships.active.where(role: "host").exists?
 
       successor = room.room_memberships.active.seated_first.first
       if successor

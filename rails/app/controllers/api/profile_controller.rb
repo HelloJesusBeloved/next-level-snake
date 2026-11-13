@@ -1,6 +1,6 @@
 module Api
   # GET   /api/profile  — the signed-in player's account and full game log
-  # PATCH /api/profile  — { favorite_theme: "violet" | null }
+  # PATCH /api/profile  — { favorite_theme: "violet" | null, apply_favorite_theme: true | false }
   class ProfileController < BaseController
     # The profile page charts everything it is given, so cap the payload.
     MAX_GAMES = 1000
@@ -20,9 +20,14 @@ module Api
 
     def update
       return render_unauthorized("Sign in to edit your profile") unless current_user
-      return render json: { error: "Nothing to update" }, status: :bad_request unless params.key?(:favorite_theme)
+      theme = params.key?(:favorite_theme)
+      flag = params.key?(:apply_favorite_theme)
+      return render json: { error: "Nothing to update" }, status: :bad_request unless theme || flag
 
-      current_user.favorite_theme = params[:favorite_theme].presence
+      current_user.favorite_theme = params[:favorite_theme].presence if theme
+      if flag
+        current_user.apply_favorite_theme = ActiveModel::Type::Boolean.new.cast(params[:apply_favorite_theme])
+      end
 
       if current_user.save
         render_profile(current_user, true)
@@ -60,6 +65,7 @@ module Api
         user: {
           username: user.username,
           favorite_theme: user.favorite_theme,
+          apply_favorite_theme: user.apply_favorite_theme?,
           created_at: user.created_at,
           rank: rank,
           total_games: total_games,

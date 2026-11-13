@@ -222,8 +222,12 @@ class Room < ApplicationRecord
     end
   end
 
+  def host_memberships
+    room_memberships.active.where(role: "host").order(:joined_at, :id)
+  end
+
   def host_membership
-    room_memberships.find_by(role: "host", state: RoomMembership::ACTIVE_STATES)
+    host_memberships.first
   end
 
   def host?(membership)
@@ -231,11 +235,10 @@ class Room < ApplicationRecord
       membership.role == "host" && membership.active?
   end
 
-  # Hands hosting to another seated member. Demotes before promoting so
-  # the one-active-host partial unique index never sees two hosts.
-  # `emit: false` is for callers that already hold this room's lock and will
-  # broadcast the change themselves once they release it (join!, depart!,
-  # sweep!). Standalone callers use emit: true (the default).
+  # Hands the only crown to another seated member. Sharing is share_host_with!;
+  # this still demotes whoever currently holds the single crown so older
+  # callers (join succession, the host leaving) keep one host when that is
+  # all the room had.
   def transfer_host_to!(new_host, emit: true)
     promoted = false
     with_lock do
@@ -244,14 +247,109 @@ class Room < ApplicationRecord
       end
 
       current = host_membership
-      next if current&.id == new_host.id
+      next if current&.id == new_host.id && host_memberships.count == 1
 
-      current&.update!(role: "player")
+      current&.update!(role: "player") if current && host_memberships.count <= 1
       new_host.update!(role: "host")
       promoted = true
     end
     notify_events!([[:host_changed, { host: new_host.id }]]) if emit && promoted
     new_host
+  end
+
+  # Both stay hosts. Either can change the room; the last write wins.
+  def share_host_with!(actor, member, emit: true)
+    changed = false
+    with_lock do
+      raise InvalidTransition, "Only a host can share the crown." unless host?(actor)
+      raise InvalidTransition, "That player is not in this room." unless member&.room_id == id && member.active?
+      next if member.host?
+
+      member.update!(role: "host")
+      changed = true
+    end
+    notify_events!([[:host_changed, { host: member.id }]]) if emit && changed
+    member
+  end
+
+  # Promote them and step down. Other hosts, if any, keep the crown.
+  def give_host_to!(actor, member, emit: true)
+    with_lock do
+      raise InvalidTransition, "Only a host can give the crown." unless host?(actor)
+      raise InvalidTransition, "That player is not in this room." unless member&.room_id == id && member.active?
+      raise InvalidTransition, "Pick another player." if member.id == actor.id
+
+      member.update!(role: "host") unless member.host?
+      actor.update!(role: "player")
+    end
+    notify_events!([[:host_changed, { host: member.id }]]) if emit
+    member
+  end
+
+  # A permanent spectator stays on the roster and out of every Brawl. Turning
+  # it off during a live match does not put them back in that snake.
+  def set_permanent_spectator!(actor, member, enabled:)
+    flag = ActiveModel::Type::Boolean.new.cast(enabled) == true
+    with_lock do
+      raise InvalidTransition, "Only a host can change spectators." unless host?(actor)
+      raise InvalidTransition, "That player is not in this room." unless member&.room_id == id && member.active?
+      raise InvalidTransition, "You cannot do that to yourself." if member.id == actor.id
+
+      if flag
+        member.update!(permanent_spectator: true, spectator: true, state: "joined")
+        matches.live.find_each { |match| match.forfeit_membership!(member) }
+      elsif lobby? || finished?
+        member.update!(permanent_spectator: false, spectator: false)
+      else
+        member.update!(permanent_spectator: false)
+      end
+    end
+    notify_events!([[:member_updated, { member: member.id }]])
+    member
+  end
+
+  # Host pause. "self" holds only the host's snake and does not change the
+  # room status. "others" holds every other living snake, or releases them
+  # on a short countdown while this host stays held. The simulator copies
+  # these columns onto the world; the HTTP process never steps that world.
+  GOD_PAUSE_COUNTDOWN = 3
+
+  def set_god_pause!(actor, scope:)
+    with_lock do
+      raise InvalidTransition, "Only a host can pause." unless host?(actor)
+      raise InvalidTransition, "Only a live Brawl can be paused." unless in_match?
+
+      match = matches.live.order(id: :desc).first
+      raise InvalidTransition, "There is no live Brawl to pause." unless match
+
+      me = match.match_participants.find_by(room_membership_id: actor.id)
+      now = Time.current
+      case scope.to_s
+      when "self"
+        raise InvalidTransition, "Your snake is not in this Brawl." unless me&.status == "alive"
+        if me.held? && me.hold_release_at.nil?
+          me.update!(held: false, hold_release_at: nil)
+        else
+          me.update!(held: true, hold_release_at: nil)
+        end
+      when "others"
+        others = match.match_participants.where(status: "alive")
+        others = others.where.not(id: me.id) if me
+        if match.host_pause == "paused"
+          release = now + GOD_PAUSE_COUNTDOWN
+          others.where(held: true).update_all(hold_release_at: release, updated_at: now)
+          match.update!(host_pause: "countdown", host_pause_until: release)
+        elsif match.host_pause == "countdown"
+          # Already counting them back in. Leave the host's own hold alone.
+        else
+          others.update_all(held: true, hold_release_at: nil, updated_at: now)
+          match.update!(host_pause: "paused", host_pause_until: nil)
+        end
+      else
+        raise InvalidTransition, "Unknown pause."
+      end
+    end
+    self
   end
 
   def lobby?
@@ -323,8 +421,7 @@ class Room < ApplicationRecord
       end
       raise InvalidTransition, "only a lobby can start a Brawl" unless lobby?
       raise InvalidTransition, "only Brawls are available in this step" unless mode == "brawl"
-      host_id = room_memberships.active.where(role: "host").pick(:id)
-      raise InvalidTransition, "Only the current host can start a Brawl." if actor && actor.id != host_id
+      raise InvalidTransition, "Only the current host can start a Brawl." if actor && !host?(actor)
       # Step 3: both strategies are playable. Nothing is silently substituted:
       # whatever the host froze is what the match record carries, and the client
       # is told which one is running through `strategy` on every frame.
@@ -356,6 +453,7 @@ class Room < ApplicationRecord
       }
       room_memberships.active.update_all(spectator: true, updated_at: now)
       room_memberships.where(id: players.map(&:id)).update_all(state: "playing", spectator: false, updated_at: now)
+      seat_permanent_spectators!(now)
       update!(state: "in_match", started_at: now, finished_at: nil, match_configuration: frozen_config)
       # Durable match + frozen participants. Rules execute in Simulation::World;
       # this row is the ownership/checkpoint/results shell.
@@ -373,8 +471,7 @@ class Room < ApplicationRecord
     interrupted = []
     with_lock do
       raise InvalidTransition, "only a live Brawl can be restarted" unless in_match?
-      host_id = room_memberships.active.where(role: "host").pick(:id)
-      raise InvalidTransition, "Only the current host can restart a Brawl." if actor.nil? || actor.id != host_id
+      raise InvalidTransition, "Only the current host can restart a Brawl." if actor.nil? || !host?(actor)
 
       now = Time.current
       matches.live.find_each do |match|
@@ -417,8 +514,7 @@ class Room < ApplicationRecord
     interrupted = []
     with_lock do
       raise InvalidTransition, "only a live Brawl can be stopped" unless in_match?
-      host_id = room_memberships.active.where(role: "host").pick(:id)
-      raise InvalidTransition, "Only the current host can stop a Brawl." if actor.nil? || actor.id != host_id
+      raise InvalidTransition, "Only the current host can stop a Brawl." if actor.nil? || !host?(actor)
 
       now = Time.current
       matches.live.find_each do |match|
@@ -439,6 +535,7 @@ class Room < ApplicationRecord
 
       room_memberships.where(state: "playing").update_all(state: "joined", updated_at: now)
       room_memberships.active.update_all(spectator: false, updated_at: now)
+      seat_permanent_spectators!(now)
       update!(state: "lobby", finished_at: nil)
     end
     notify_events!([[:room_state, { state: "lobby", reason: "host_stop" }]])
@@ -456,8 +553,7 @@ class Room < ApplicationRecord
     changed = false
     with_lock do
       raise InvalidTransition, "This room is closed." if closed?
-      host_id = room_memberships.active.where(role: "host").pick(:id)
-      raise InvalidTransition, "Only the host can change spectate options." if actor.nil? || actor.id != host_id
+      raise InvalidTransition, "Only the host can change spectate options." if actor.nil? || !host?(actor)
       next if settings["spectate_while_playing"] == flag
 
       update!(settings: settings.merge("spectate_while_playing" => flag))
@@ -474,8 +570,7 @@ class Room < ApplicationRecord
     changed = false
     with_lock do
       raise InvalidTransition, "This room is closed." if closed?
-      host_id = room_memberships.active.where(role: "host").pick(:id)
-      raise InvalidTransition, "Only the host can change food cover." if actor.nil? || actor.id != host_id
+      raise InvalidTransition, "Only the host can change food cover." if actor.nil? || !host?(actor)
       next if settings["snakes_cover_food"] == flag
 
       update!(settings: settings.merge("snakes_cover_food" => flag))
@@ -494,6 +589,7 @@ class Room < ApplicationRecord
       room_memberships.where(state: "playing")
                       .update_all(state: "joined", updated_at: Time.current)
       room_memberships.active.update_all(spectator: false)
+      seat_permanent_spectators!(Time.current)
       matches.live.find_each { |match| match.abandon!(reason: "room_finished") }
       update!(state: "finished", finished_at: Time.current)
     end
@@ -507,10 +603,10 @@ class Room < ApplicationRecord
   def return_to_lobby!(actor: nil)
     with_lock do
       raise InvalidTransition, "only a finished room can return to the lobby" unless finished?
-      host_id = room_memberships.active.where(role: "host").pick(:id)
-      raise InvalidTransition, "Only the current host can start another Brawl." if actor && actor.id != host_id
+      raise InvalidTransition, "Only the current host can start another Brawl." if actor && !host?(actor)
 
       room_memberships.active.update_all(spectator: false)
+      seat_permanent_spectators!(Time.current)
       update!(state: "lobby", finished_at: nil)
     end
     notify_events!([[:room_state, { state: state }]])
@@ -605,10 +701,13 @@ class Room < ApplicationRecord
     drop_cutoff = at - self.class.config.member_drop
     return true if members.any? { |member| member.seen_at < drop_cutoff }
 
-    host = members.find { |member| member.role == "host" }
-    return true if host.nil?
-    return true if members.any? { |member| member.id != host.id && member.online?(at: at) } &&
-                   host.seen_at <= at - self.class.config.host_grace
+    hosts = members.select(&:host?)
+    return true if hosts.empty? && members.any?
+
+    grace_cutoff = at - self.class.config.host_grace
+    if hosts.any? && hosts.all? { |host| host.seen_at <= grace_cutoff }
+      return true if members.any? { |member| !member.host? && member.online?(at: at) }
+    end
 
     return false unless members.empty?
 
@@ -690,7 +789,7 @@ class Room < ApplicationRecord
   # Who could actually play right now. Ready votes are deliberately NOT part
   # of this: the host decides, readiness is advisory (step 3 requirement 6).
   def eligible_players(at: Time.current)
-    members_online(at: at).reject(&:spectator?)
+    members_online(at: at).reject { |member| member.spectator? || member.permanent_spectator? }
   end
 
   # Everything the host's Start control needs, as data. Note `engine_ready`
@@ -774,20 +873,21 @@ class Room < ApplicationRecord
     ids
   end
 
-  # Predictable succession: the longest-seated member who is still online,
-  # or failing that the longest-seated member at all. Never a silent host.
+  # A silent host used to be the only crown, so one stale host meant succession.
+  # With shared hosts, succession waits until every host is past the grace
+  # window. A room with no host still picks the longest-seated member.
   def transfer_host_after_grace!(at: Time.current)
-    current = host_membership
-    candidates = room_memberships.active.seated_first.to_a
-    successor =
-      if current.nil?
-        candidates.find { |member| member.online?(at: at) } || candidates.first
-      elsif current.seen_at <= at - self.class.config.host_grace
-        candidates.find { |member| member.id != current.id && member.online?(at: at) }
-      end
-    return nil unless successor && successor != current
+    hosts = room_memberships.active.where(role: "host").order(:joined_at, :id).to_a
+    grace_cutoff = at - self.class.config.host_grace
+    return nil if hosts.any? { |host| host.seen_at > grace_cutoff }
 
-    transfer_host_to!(successor, emit: false)
+    candidates = room_memberships.active.seated_first.to_a
+    successor = candidates.find { |member| member.role != "host" && member.online?(at: at) }
+    successor ||= candidates.find { |member| member.role != "host" } if hosts.empty?
+    return nil unless successor
+
+    hosts.each { |host| host.update!(role: "player") }
+    successor.update!(role: "host")
     successor
   end
 
@@ -801,6 +901,11 @@ class Room < ApplicationRecord
 
     disband!(reason: "expired", at: at, emit: false)
     true
+  end
+
+  def seat_permanent_spectators!(now = Time.current)
+    room_memberships.active.where(permanent_spectator: true)
+                    .update_all(spectator: true, state: "joined", updated_at: now)
   end
 
   def release_all_memberships!(at: Time.current)

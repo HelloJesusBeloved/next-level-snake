@@ -49,7 +49,7 @@ function eliminationLabel(reason) {
   return 'Out';
 }
 
-export function buildResultsTable(snapshot, tickMs, ownId) {
+export function buildResultsTable(snapshot, tickMs, ownId, hidden) {
   const table = document.createElement('table');
   table.className = 'mp-results-table';
   const head = document.createElement('thead');
@@ -57,18 +57,21 @@ export function buildResultsTable(snapshot, tickMs, ownId) {
     '<th scope="col">Points</th><th scope="col">Survived</th>' +
     '<th scope="col">Longest</th><th scope="col">Status</th></tr>';
   table.append(head);
+  const skip = hidden instanceof Set ? hidden : new Set(hidden || []);
   const body = document.createElement('tbody');
   for (const { entry, player } of orderedPlayers(snapshot)) {
+    if (skip.has(player.i) || skip.has(Number(player.i))) continue;
     const row = document.createElement('tr');
     if (player.i === ownId) row.classList.add('is-you');
     const color = HEX.test(player.c) ? player.c : '#808080';
+    const status = player.a ? (player.hd ? 'Paused' : (player.fr ? 'Frozen' : 'Survived')) : eliminationLabel(player.er);
     row.innerHTML =
       `<td>${esc(entry.p)}</td>` +
       `<td><span class="mp-identity-color" style="--player-color:${esc(color)}" aria-hidden="true"></span> ${esc(player.n)}</td>` +
       `<td><strong>${esc(entry.sc ?? player.sc)}</strong></td>` +
       `<td>${esc(formatSurvival(player.sv, tickMs))}</td>` +
       `<td>${esc(player.lg ?? player.l)}</td>` +
-      `<td>${player.a ? (player.fr ? 'Frozen' : 'Survived') : eliminationLabel(player.er)}</td>`;
+      `<td>${status}</td>`;
     body.append(row);
   }
   table.append(body);

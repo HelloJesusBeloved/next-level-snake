@@ -104,7 +104,7 @@ class ProtocolTest < Minitest::Test
     keys = world.snapshot["p"].flat_map(&:keys).uniq.sort
     # Optional connection and input-acknowledgement fields remain limited to
     # authoritative presentation state, not any other player's identity.
-    assert_equal %w[a b c cy d el er fr fz gu i is it l lg n sc sv], keys
+    assert_equal %w[a b c cy d el er fr fz gu hd i is it l lg n sc sv], keys
     assert_includes keys, "fr"
     assert_includes keys, "gu"
     assert_includes keys, "cy"

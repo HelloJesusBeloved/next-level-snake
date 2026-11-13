@@ -2,7 +2,6 @@
 
 import Script from "next/script";
 import { useEffect } from "react";
-import { PUBLIC_ASSET_VERSION } from "@/lib/public-assets";
 
 /**
  * public/profile.js draws the whole profile into #profile-root. React hydrates
@@ -23,7 +22,7 @@ export default function ProfileRuntime() {
   return (
     <Script
       id="snake-profile"
-      src={`/profile.js?v=${PUBLIC_ASSET_VERSION}`}
+      src={`/profile.js?v=2026-11-13.1`}
       strategy="afterInteractive"
       onReady={() => {
         window.dispatchEvent(new Event("snake-profile-loaded"));

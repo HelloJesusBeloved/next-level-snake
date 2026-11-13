@@ -24,7 +24,7 @@ export default function GameRuntime() {
       {engineReady && (
         <Script
           id="snake-controls"
-          src={`/app.js?v=${PUBLIC_ASSET_VERSION}`}
+          src={`/app.js?v=2026-11-13.1`}
           strategy="afterInteractive"
         />
       )}

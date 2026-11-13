@@ -12,9 +12,9 @@
 
   var TOKEN_KEY = 'snake.token.v1';
   var STORE_KEY = 'snake.settings.v1';
-  // "Auto-select my favorite theme when I sign in". Device-local on purpose:
-  // the theme itself already lives in snake.settings.v1 on this device, and
-  // the toggle only decides whether signing in overwrites it.
+  // "Auto-select my favorite theme when I sign in". Stored on the account
+  // (apply_favorite_theme) so clearing this browser's cookies still applies
+  // it. localStorage is a copy, written back on sign-in.
   var AUTO_THEME_KEY = 'snake.autoTheme.v1';
 
   var LEVELS = [
@@ -275,6 +275,7 @@
     state.totalGames = typeof json.user.total_games === 'number' ? json.user.total_games : null;
     state.rank = json.user.rank || 1;
     state.favorite = json.user.favorite_theme || null;
+    state.applyFavorite = json.user.apply_favorite_theme === true;
     state.chartMode = 'all';
     state.logMode = 'all';
     var savedSort = readLogSort();
@@ -283,6 +284,7 @@
     state.logShown = LOG_PAGE;
     state.confirmId = null;
     state.themeNote = '';
+    syncAutoThemeFlag();
     maybeAutoTheme();
   }
 
@@ -486,7 +488,7 @@
           '<input type="checkbox" id="pf-theme-auto"' + (autoThemeOn() ? ' checked' : '') + '>' +
           '<span class="pf-autotheme__text">' +
             '<span class="pf-autotheme__label">Auto-select my favorite theme when I sign in</span>' +
-            '<span class="pf-autotheme__hint">Saved on this device. Signing in then switches the game and this page to your favorite instead of the last theme you picked here.</span>' +
+            '<span class="pf-autotheme__hint">Saved on your account. Clearing cookies still switches you to your favorite the next time you sign in.</span>' +
           '</span>' +
         '</label>' +
         '<div class="pf-theme-actions">' +
@@ -922,6 +924,7 @@
   }
 
   function autoThemeOn() {
+    if (state.applyFavorite === true) return true;
     try { return window.localStorage.getItem(AUTO_THEME_KEY) === '1'; }
     catch (err) { return false; }
   }
@@ -931,6 +934,17 @@
       if (on) window.localStorage.setItem(AUTO_THEME_KEY, '1');
       else window.localStorage.removeItem(AUTO_THEME_KEY);
     } catch (err) { /* storage blocked */ }
+  }
+
+  function syncAutoThemeFlag() {
+    if (!state.isYou) return;
+    var local = false;
+    try { local = window.localStorage.getItem(AUTO_THEME_KEY) === '1'; } catch (err) { local = false; }
+    if (state.applyFavorite && !local) setAutoTheme(true);
+    else if (local && !state.applyFavorite) {
+      state.applyFavorite = true;
+      api('/api/profile', { method: 'PATCH', body: JSON.stringify({ apply_favorite_theme: true }) }).catch(function () {});
+    }
   }
 
   // Called right after a successful sign-in (never on a plain page load, so a
@@ -1125,6 +1139,8 @@
     if (id === 'pf-theme-auto') {
       var on = !!e.target.checked;
       setAutoTheme(on);
+      state.applyFavorite = on;
+      api('/api/profile', { method: 'PATCH', body: JSON.stringify({ apply_favorite_theme: on }) }).catch(function () {});
       if (!on) {
         state.themeNote = 'Auto-select is off — this device keeps whichever theme you last chose.';
       } else if (state.favorite) {

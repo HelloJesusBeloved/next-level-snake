@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-24.1">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-26">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -157,10 +157,25 @@
           </div>
           <span class="mp-game__tick" id="mp-game-tick" aria-live="off"></span>
         </div>
+        <div class="mp-status-row">
         <p class="mp-brawl-conn" id="mp-brawl-conn" data-state="live" role="status" aria-live="polite">
           <span class="mp-brawl-conn__ring" aria-hidden="true"></span>
           <span id="mp-brawl-conn-text">Live</span>
         </p>
+        <p class="mp-score-pill" id="mp-score-pill" hidden>
+          <span class="mp-score-pill__label">Score</span>
+          <strong id="mp-score-pill-value">0</strong>
+        </p>
+        <div class="mp-god" id="mp-god" hidden>
+          <button type="button" class="mp-god__btn" id="mp-pause-others" hidden aria-pressed="false" aria-label="Pause everyone else">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="5" y="4" width="4" height="16" rx="1"/><rect x="15" y="4" width="4" height="16" rx="1"/></svg>
+            All
+          </button>
+          <button type="button" class="mp-god__btn" id="mp-pause-self" aria-pressed="false" aria-label="Pause your snake">
+            <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>
+          </button>
+        </div>
+        </div>
         <p class="mp-game__follow-row" id="mp-follow-row" hidden>
           <label for="mp-follow">Spectate</label>
           <select id="mp-follow" aria-label="Follow a living player"></select>
@@ -422,5 +437,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-25"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-26"></script>
 <% end %>
