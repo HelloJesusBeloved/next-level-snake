@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-35';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-36';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-35';
+import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-36';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
-import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-35';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-35';
+import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-36';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-36';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -66,6 +66,7 @@ function api(url, options) {
 
 export function mountLobby(root) {
   if (!root) return;
+  const inviteOnly = root.dataset.inviteOnly === 'true';
 
   const el = {
     flash: $('mp-flash'),
@@ -1139,13 +1140,27 @@ export function mountLobby(root) {
     if (!code || code.length < 4) { el.codePreview.hidden = true; return; }
     api(`/api/rooms/${code}`).then((out) => {
       el.codePreview.hidden = false;
-      if (!out.ok) { el.codePreview.textContent = (out.json && out.json.error) || 'That code did not work.'; return; }
+      if (!out.ok) {
+        const message = (out.json && out.json.error) || 'That code did not work.';
+        el.codePreview.textContent = message;
+        if (inviteOnly) flash(message, 'error');
+        return;
+      }
       if (out.json.room && out.json.room.members) { el.codePreview.hidden = true; return; } // already a member
       const preview = out.json.room || {};
       const counts = preview.counts || {};
+      const host = preview.host_name || 'Someone';
       el.codePreview.textContent = preview.joinable
-        ? `${preview.state === 'in_match' ? 'Spectate this Brawl · ' : ''}${preview.host_name || 'Someone'}'s room · ${counts.members}/${counts.capacity} players`
+        ? `${preview.state === 'in_match' ? 'Spectate this Brawl · ' : ''}${host}'s room · ${counts.members}/${counts.capacity} players`
         : 'That room is not open for joining right now.';
+      if (inviteOnly) {
+        flash(
+          preview.joinable
+            ? `Enter your name, then join ${host}'s room (${code}).`
+            : 'That room is not open for joining right now.',
+          preview.joinable ? 'info' : 'error',
+        );
+      }
     }).catch(() => { el.codePreview.hidden = true; });
   }
 
@@ -2534,7 +2549,7 @@ export function mountLobby(root) {
     } else if (code) {
       if (el.code) el.code.value = code;
       previewCode(code);
-      flash('Enter a name, then join this room.', 'info');
+      if (!inviteOnly) flash('Enter a name, then join this room.', 'info');
       if (el.name && !el.name.value) el.name.focus();
     }
     poll();

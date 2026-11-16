@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-35">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-36">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -55,6 +55,7 @@
 
 <main class="band" id="multiplayer-root" aria-labelledby="multiplayer-title"
       data-room-code="<%= @invitation_code %>"
+      data-invite-only="<%= @invite_only ? "true" : "false" %>"
       data-poll-interval="<%= Rails.application.config.x.multiplayer.poll_interval %>">
   <p class="band__eyebrow">A new way to play</p>
   <h1 class="band__title" id="multiplayer-title">Multiplayer</h1>
@@ -95,8 +96,9 @@
   <p class="mp-flash" id="mp-flash" role="status" aria-live="polite" hidden></p>
 
   <%# ---- not in a room ------------------------------------------------- %>
-  <section class="mp-grid" id="mp-entry" hidden>
-    <article class="mp-card">
+  <section class="mp-grid<%= " mp-entry--invite" if @invite_only %>" id="mp-entry" hidden>
+    <% if @invite_only %><div class="mp-card mp-invite-card" id="mp-invite-card"><% end %>
+    <article class="<%= @invite_only ? "mp-invite-part" : "mp-card" %>">
       <h2 class="mp-card__title">Play as</h2>
       <p class="mp-card__hint" id="mp-identity-note">Guests can play straight away — no account needed.</p>
       <label class="auth-field">
@@ -105,10 +107,12 @@
                placeholder="e.g. Ada" spellcheck="false">
       </label>
       <p class="mp-card__hint">Used in this room only. Your account name never changes.</p>
+      <% unless @invite_only %>
       <div class="mp-actions" id="mp-auth-actions">
         <button class="btn btn--small" id="mp-signin" type="button">Sign in</button>
         <button class="btn btn--small" id="mp-create-account" type="button">Create account</button>
       </div>
+      <% end %>
     </article>
 
     <% unless @invite_only %>
@@ -121,7 +125,7 @@
     </article>
     <% end %>
 
-    <article class="mp-card">
+    <article class="<%= @invite_only ? "mp-invite-part" : "mp-card" %>">
       <h2 class="mp-card__title">Join a room</h2>
       <p class="mp-card__hint">Enter the code a friend shared, or open their invitation link.</p>
       <label class="auth-field">
@@ -131,13 +135,14 @@
       </label>
       <p class="mp-card__hint" id="mp-code-preview" hidden></p>
       <div class="mp-actions">
-        <button class="btn btn--primary" id="mp-join" type="button">Join with Code</button>
+        <button class="btn btn--primary" id="mp-join" type="button"><%= @invite_only ? "Join" : "Join with Code" %></button>
         <button class="btn" id="mp-scan-open" type="button">
           <svg class="nav-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M3 12h18" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Scan QR Code
         </button>
       </div>
     </article>
+    <% if @invite_only %></div><% end %>
   </section>
 
   <%# ---- inside a room ---------------------------------------------------- %>
@@ -439,5 +444,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-35"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-36"></script>
 <% end %>

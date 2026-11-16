@@ -43,6 +43,17 @@
 .mp-card__sub { color: var(--muted); font-weight: 400; }
 .mp-card .auth-field { margin: 0; }
 
+/* Invitation link: Play as and Join a room are one card, not two. */
+.mp-entry--invite {
+  grid-template-columns: minmax(260px, 480px);
+}
+.mp-invite-card { gap: 22px; }
+.mp-invite-part {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .mp-actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: auto; }
 .mp-actions--room { margin-top: 18px; }
 

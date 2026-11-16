@@ -72,7 +72,13 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     assert_includes response.body, "multiplayer-root"
     assert_includes response.body, "mp-themes"
     assert_includes response.body, "multiplayer-title"
-    assert_includes response.body, "Join with Code"
+    assert_includes response.body, "Play as"
+    assert_includes response.body, "Join a room"
+    assert_includes response.body, 'id="mp-invite-card"'
+    assert_includes response.body, ">Join</button>"
+    assert_not_includes response.body, "Join with Code"
+    assert_not_includes response.body, 'id="mp-auth-actions"'
+    assert_includes response.body, 'id="mp-signin-top"'
     assert_includes response.body, %(value="#{code}")
     assert_not_includes response.body, 'id="mp-create"'
   end
@@ -82,6 +88,9 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_includes response.body, "mp-themes"
     assert_includes response.body, 'value="000000"'
+    assert_includes response.body, 'id="mp-invite-card"'
+    assert_includes response.body, ">Join</button>"
+    assert_not_includes response.body, 'id="mp-auth-actions"'
     assert_not_includes response.body, 'id="mp-create"'
   end
 

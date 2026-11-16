@@ -126,7 +126,14 @@ test('a guest creates a room, wears the crown, and a friend joins by link', asyn
   await expect(friend.locator('#mp-themes')).toBeVisible();
   await expect(friend.locator('#multiplayer-title')).toBeVisible();
   await expect(friend.locator('#mp-create')).toHaveCount(0);
+  await expect(friend.locator('#mp-auth-actions')).toHaveCount(0);
+  await expect(friend.locator('#mp-signin-top')).toBeVisible();
+  await expect(friend.locator('#mp-invite-card')).toBeVisible();
+  await expect(friend.locator('#mp-invite-card')).toContainText('Play as');
+  await expect(friend.locator('#mp-invite-card')).toContainText('Join a room');
+  await expect(friend.getByRole('button', { name: 'Join', exact: true })).toBeVisible();
   await expect(friend.locator('#mp-code')).toHaveValue(code);
+  await expect(friend.locator('#mp-flash')).toContainText(`Enter your name, then join Ada's room (${code}).`);
   await friend.fill('#mp-name', 'Grace');
   await friend.click('#mp-join');
   await expect(friend).toHaveURL(new RegExp(`/multiplayer/${code}$`));
