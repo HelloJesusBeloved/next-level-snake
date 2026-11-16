@@ -895,12 +895,6 @@ html.mp-page-focused dialog [role="button"] {
   color: var(--green);
 }
 .mp-board-overlay:not(.is-visible) { pointer-events: none; }
-#multiplayer-root.band {
-  box-sizing: border-box;
-  padding-left: clamp(16px, 3vw, 40px);
-  padding-right: clamp(16px, 3vw, 40px);
-  overflow-x: clip;
-}
 /* The single-player sheet reserves 82–96px under every theme once the window
    is under 1100px. That padding is empty space between the board and Leave
    unless the arcade deck is actually drawn. The room page does not use it. */
@@ -940,7 +934,9 @@ html[data-theme='arcade'] .mp-screen { padding-bottom: var(--cabinet-bottom); }
 #mp-over-ranks { margin: 10px 0 14px; text-align: left; }
 #mp-over-ranks .mp-results-table { font-size: 12px; }
 @media (max-width: 1179px) {
-  #multiplayer-root.band { padding: 16px 16px 32px; }
+  /* The vertical site label is a fixed 54px rail until 720px. Padding of 16px
+     on the left puts the board and the standings underneath it. */
+  #multiplayer-root.band { padding: 16px 20px 32px 54px; }
   .mp-room { padding: 12px; margin-top: 12px; }
   .mp-play { display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 8px; }
   /* The board chrome is one unit so standings can sit directly under it.
@@ -955,19 +951,23 @@ html[data-theme='arcade'] .mp-screen { padding-bottom: var(--cabinet-bottom); }
     margin: 0;
   }
   .mp-status-row,
-  .mp-stage,
   .mp-stage .mp-screen,
-  .mp-standings-card,
-  .mp-under-board {
-    width: 100%;
-    max-width: 100%;
-    margin-left: 0;
-    margin-right: 0;
-    align-self: stretch;
+  .mp-standings-card {
+    width: min(100%, var(--screen-max));
+    max-width: var(--screen-max);
+    margin-left: auto;
+    margin-right: auto;
+    align-self: center;
     box-sizing: border-box;
   }
   .mp-status-row { margin-top: 2px; margin-bottom: 10px; }
-  .mp-stage .mp-screen { padding-bottom: 0; }
+  /* The arcade deck is not drawn in this layout, so its 82–96px reservation
+     would be an empty band between the board and Leave. */
+  .mp-stage .mp-screen,
+  html[data-theme='arcade'] .mp-stage .mp-screen {
+    --cabinet-bottom: 0px;
+    padding-bottom: 0;
+  }
   html[data-theme='arcade'] .mp-stage .cabinet { display: none; }
   .mp-standings-card {
     order: 2;
@@ -1013,4 +1013,7 @@ html[data-theme='arcade'] .mp-screen { padding-bottom: var(--cabinet-bottom); }
 }
 @media (max-width: 900px) and (pointer: coarse) {
   .mp-page-focus { display: inline-flex; }
+}
+@media (max-width: 720px) {
+  #multiplayer-root.band { padding: 16px 16px 32px; }
 }

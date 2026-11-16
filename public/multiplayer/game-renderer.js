@@ -3,7 +3,7 @@
 // local clock (decisive.js) and steps everyone else from confirmed cells
 // one tick behind (playback.js). A packet never relocates the local snake.
 // Both tick one whole square at a time, the same way single-player does.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-31';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-32';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
@@ -252,12 +252,12 @@ export class MultiplayerGameRenderer {
   // The match socket dropped. Stop walking and stop reporting. A snake that
   // keeps going while the server has it frozen sends one late cell, and a
   // full-width chase makes that cell look like a crash. The next snapshot
-  // replaces this body, and a pellet the server never ate is shown again.
+  // replaces this body. The socket is already down, so this does not ask for
+  // another frame — the reconnect sends one.
   holdForDisconnect() {
     if (this.local?.enabled && this.local.seeded && !this.local.dead) {
       this.local.holdForServer('disconnected');
     }
-    this.requestResync('disconnected');
   }
 
   // User steering bypasses display pacing. The next server-confirmed turn is
@@ -495,7 +495,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-31', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-32', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -1162,19 +1162,20 @@ export class MultiplayerGameRenderer {
       const live = Array.isArray(liveFrame.f) ? liveFrame.f : [];
       const simulated = smooth && Array.isArray(smooth.food) ? smooth.food : null;
       const drawFood = (food) => {
-        if (!food || !Number.isInteger(food.c)) return;
+        if (!food || !Number.isInteger(food.c)) return false;
         const owner = Number(food.o);
         if (owner === ownId && this.local?.enabled && this.local.seeded) {
           const localFood = this.local.food;
           if (Number.isInteger(localFood)) {
             drawPellet(localFood, pelletColor(food.o));
-            return;
+            return true;
           }
           // Local bite hid this cell. Keep it hidden only while the server still
           // says that same cell. A respawn is a different cell and must be drawn.
-          if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) return;
+          if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) return false;
         }
         drawPellet(food.c, pelletColor(food.o));
+        return true;
       };
       if (!simulated) {
         for (let f = 0; f < live.length; f++) drawFood(live[f]);
@@ -1182,8 +1183,7 @@ export class MultiplayerGameRenderer {
       }
       let drewOwn = false;
       const markOwn = (food) => {
-        if (ownId != null && Number(food.o) === ownId) drewOwn = true;
-        drawFood(food);
+        if (drawFood(food) && ownId != null && Number(food.o) === ownId) drewOwn = true;
       };
       for (let f = 0; f < simulated.length; f++) {
         const food = simulated[f];

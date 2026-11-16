@@ -103,6 +103,24 @@ class DecisiveRelayTest < Minitest::Test
     assert_equal 3, snake.length
   end
 
+  def test_a_reconnect_jump_into_the_body_holds_instead_of_crashing
+    world, = responsive_world
+    snake = world.snakes.first
+    # The reports from a dead socket never arrived. The next cell is inside
+    # the body and is not a straight chase, so it must not be a crash.
+    body = [[8, 8], [7, 8], [6, 8], [5, 8], [5, 7], [6, 7], [7, 7]]
+    place(world, snake, body: body, direction: "right")
+    world.enqueue_pose!(player_id: snake.id, cell: [6, 7],
+                        direction: Simulation::Direction.parse("up"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal [8, 8], snake.head
+    assert_equal body, snake.body
+    assert_empty snake.poses
+  end
+
   def test_stepping_onto_your_own_tail_while_not_growing_lives
     world, = responsive_world
     snake = world.snakes.first

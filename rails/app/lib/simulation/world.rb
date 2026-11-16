@@ -336,6 +336,7 @@ module Simulation
       end
 
       eliminated = {}
+      held_back = []
       targets.each do |player_id, cell|
         snake = player!(player_id)
         # The head is allowed to enter the cell the tail is leaving, and to
@@ -343,10 +344,17 @@ module Simulation
         # those steps at once. Judging only the final cell against today's
         # tail kills a snake that has been following itself — a full column,
         # or one dropped report as it turns the corner.
+        # A jump that is not that chase and lands inside the body is a
+        # reconnect, not a crash. Drop the pose and leave the server body
+        # where it is. The browser replaces its own body from the snapshot.
         path = reported_path(snake, cell)
-        hit = path ? path_hits_self?(snake, path) : snake.surviving_cells.include?(cell)
-        eliminated[player_id] = :self_collision if hit
+        if path.nil?
+          held_back << player_id if snake.surviving_cells.include?(cell)
+          next
+        end
+        eliminated[player_id] = :self_collision if path_hits_self?(snake, path)
       end
+      held_back.each { |player_id| targets.delete(player_id) }
 
       if rules.solid_opponents?
         targets.each_key do |player_id|
