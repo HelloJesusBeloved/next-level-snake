@@ -206,7 +206,7 @@ test('cacheable multiplayer entry points and modified dependency imports carry t
   // have not changed since step 10 deliberately keep their old tag (their cached
   // copies are still correct). tests/asset-cache-tags.test.mjs checks that every
   // reference to one module agrees.
-  const release = 'step11-responsive-30';
+  const release = 'step11-responsive-31';
   const previous = 'step11-responsive-25';
   const prior = 'step11-responsive-18';
   const unchanged = 'step10-mobile4';

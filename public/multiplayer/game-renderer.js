@@ -3,7 +3,7 @@
 // local clock (decisive.js) and steps everyone else from confirmed cells
 // one tick behind (playback.js). A packet never relocates the local snake.
 // Both tick one whole square at a time, the same way single-player does.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-30';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-31';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
@@ -249,6 +249,17 @@ export class MultiplayerGameRenderer {
     this.cadence.reset();
   }
 
+  // The match socket dropped. Stop walking and stop reporting. A snake that
+  // keeps going while the server has it frozen sends one late cell, and a
+  // full-width chase makes that cell look like a crash. The next snapshot
+  // replaces this body, and a pellet the server never ate is shown again.
+  holdForDisconnect() {
+    if (this.local?.enabled && this.local.seeded && !this.local.dead) {
+      this.local.holdForServer('disconnected');
+    }
+    this.requestResync('disconnected');
+  }
+
   // User steering bypasses display pacing. The next server-confirmed turn is
   // urgent too (see accept). This does NOT predict the requested direction.
   expedite() {
@@ -484,7 +495,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-30', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-31', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -1169,15 +1180,32 @@ export class MultiplayerGameRenderer {
         for (let f = 0; f < live.length; f++) drawFood(live[f]);
         return;
       }
+      let drewOwn = false;
+      const markOwn = (food) => {
+        if (ownId != null && Number(food.o) === ownId) drewOwn = true;
+        drawFood(food);
+      };
       for (let f = 0; f < simulated.length; f++) {
         const food = simulated[f];
         if (!food || (ownId != null && Number(food.o) === ownId)) continue;
-        drawFood(food);
+        markOwn(food);
       }
       for (let f = 0; f < live.length; f++) {
         const food = live[f];
         if (!food || ownId == null || Number(food.o) !== ownId) continue;
-        drawFood(food);
+        markOwn(food);
+      }
+      // A dropped socket can omit your pellet from the newest frame, or hide
+      // it after a bite the server never counted. The buffered cell is the
+      // one everyone else is still drawing.
+      if (!drewOwn && ownId != null) {
+        for (let f = 0; f < simulated.length; f++) {
+          const food = simulated[f];
+          if (!food || Number(food.o) !== ownId) continue;
+          if (this.local?.ignoredFood != null && food.c === this.local.ignoredFood) break;
+          markOwn(food);
+          break;
+        }
       }
     };
 

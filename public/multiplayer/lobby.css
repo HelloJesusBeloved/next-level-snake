@@ -741,11 +741,11 @@
    does not leave a postage-stamp board. */
 .mp-play {
   display: grid;
-  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
+  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
   grid-template-areas:
     "standings stage"
     "options stage";
-  gap: 14px 16px;
+  gap: 18px 28px;
   align-items: start;
 }
 .mp-standings-card { grid-area: standings; min-width: 0; }
@@ -766,7 +766,7 @@
   align-items: center;
   gap: 10px;
   width: min(100%, 520px);
-  margin: 10px auto 0;
+  margin: 8px auto 0;
 }
 /* Desktop: the wrapper is not a box, so Start / Leave / Disband / Stop / Restart
    share one centered row. Mobile turns it back into a row of host buttons. */
@@ -832,6 +832,7 @@
   letter-spacing: 0.08em;
   text-transform: uppercase;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  display: none;
 }
 html.mp-page-focused,
 html.mp-page-focused body {
@@ -894,19 +895,31 @@ html.mp-page-focused dialog [role="button"] {
   color: var(--green);
 }
 .mp-board-overlay:not(.is-visible) { pointer-events: none; }
+#multiplayer-root.band {
+  box-sizing: border-box;
+  padding-left: clamp(16px, 3vw, 40px);
+  padding-right: clamp(16px, 3vw, 40px);
+  overflow-x: clip;
+}
 /* The single-player sheet reserves 82–96px under every theme once the window
-   is under 1100px, so toggling Arcade does not jump the page. In a room that
-   padding is empty space between the board and Leave / Start unless the
-   arcade deck is actually drawn. */
-.mp-screen { --cabinet-bottom: 0px; }
+   is under 1100px. That padding is empty space between the board and Leave
+   unless the arcade deck is actually drawn. The room page does not use it. */
+#multiplayer-root,
+.mp-screen {
+  --cabinet-bottom: 0px;
+}
+.mp-screen { padding-bottom: 0; }
+html[data-theme='arcade'] #multiplayer-root,
 html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
+html[data-theme='arcade'] .mp-screen { padding-bottom: var(--cabinet-bottom); }
 @media (max-width: 720px) {
+  html[data-theme='arcade'] #multiplayer-root,
   html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 82px; }
 }
-@media (min-width: 901px) {
+@media (min-width: 1180px) {
   /* Largest 24×18 board that still fits the stage column and the viewport.
-     The single-player --screen-max cap is wider than this column on a short
-     window and would letterbox the board. */
+     Side panels stay off below this width so a split window keeps the full
+     board instead of crushing it into the page margin. */
   .mp-stage .mp-screen {
     width: min(100%, calc((100dvh - 168px) * 24 / 18));
     max-width: 100%;
@@ -921,11 +934,12 @@ html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
     max-width: 100%;
     margin-top: 8px;
   }
+  .mp-page-focus { display: none; }
 }
 #mp-panel-over { width: min(460px, 100%); }
 #mp-over-ranks { margin: 10px 0 14px; text-align: left; }
 #mp-over-ranks .mp-results-table { font-size: 12px; }
-@media (max-width: 900px) {
+@media (max-width: 1179px) {
   #multiplayer-root.band { padding: 16px 16px 32px; }
   .mp-room { padding: 12px; margin-top: 12px; }
   .mp-play { display: flex; flex-direction: column; align-items: stretch; width: 100%; gap: 8px; }
@@ -941,13 +955,15 @@ html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
     margin: 0;
   }
   .mp-status-row,
+  .mp-stage,
   .mp-stage .mp-screen,
-  .mp-standings-card {
-    width: min(100%, var(--screen-max));
-    max-width: var(--screen-max);
-    margin-left: auto;
-    margin-right: auto;
-    align-self: center;
+  .mp-standings-card,
+  .mp-under-board {
+    width: 100%;
+    max-width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    align-self: stretch;
     box-sizing: border-box;
   }
   .mp-status-row { margin-top: 2px; margin-bottom: 10px; }
@@ -955,9 +971,6 @@ html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
   html[data-theme='arcade'] .mp-stage .cabinet { display: none; }
   .mp-standings-card {
     order: 2;
-    /* Same width as the board (both capped by --screen-max and centered).
-       The live pill sits 10px above the board. The column gap is 8px, so
-       2px more matches that. */
     margin-top: 2px;
   }
   .mp-under-board { display: contents; }
@@ -968,7 +981,8 @@ html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
     align-items: center;
     gap: 10px;
     order: 4;
-    width: min(100%, 520px);
+    width: 100%;
+    max-width: 100%;
     margin: 4px auto 0;
   }
   #mp-leave { align-self: center; }
@@ -996,8 +1010,7 @@ html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
   .mp-share__feedback:not([data-kind]) { display: none; }
   .mp-room__meta,
   .mp-roster { margin: 0; }
-  .mp-page-focus { display: inline-flex; }
 }
-@media (min-width: 901px) {
-  .mp-page-focus { display: none; }
+@media (max-width: 900px) and (pointer: coarse) {
+  .mp-page-focus { display: inline-flex; }
 }
