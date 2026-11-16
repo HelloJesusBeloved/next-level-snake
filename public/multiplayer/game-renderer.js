@@ -3,7 +3,7 @@
 // local clock (decisive.js) and steps everyone else from confirmed cells
 // one tick behind (playback.js). A packet never relocates the local snake.
 // Both tick one whole square at a time, the same way single-player does.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-32';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-33';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
@@ -495,7 +495,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-32', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-33', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -1010,14 +1010,39 @@ export class MultiplayerGameRenderer {
     ctx.lineCap = 'round';
     if (blocks) {
       const gap = themeId === 'vintage' ? Math.max(1, Math.round(cell * 0.12)) : 0;
+      const dpr = this.view?.dpr || 1;
+      const snap = (value) => Math.round(value * dpr) / dpr;
       ctx.beginPath();
-      for (let i = 0; i < points.length; i += 1) {
-        const seg = points[i];
+      if (gap === 0) {
+        // Classic shares the single-player silhouette. Sizing every cell to
+        // round(cell) leaves a background line wherever the next cell starts
+        // one pixel further than that width, which only happens at some board
+        // sizes. One rect per horizontal run, edges snapped to the same device
+        // pixel, so a straight snake has no internal seam.
+        const ordered = points.slice().sort((a, b) => a.y - b.y || a.x - b.x);
+        for (let b = 0; b < ordered.length;) {
+          const first = ordered[b];
+          let endX = first.x;
+          b += 1;
+          while (b < ordered.length && ordered[b].y === first.y && ordered[b].x === endX + 1) {
+            endX = ordered[b].x;
+            b += 1;
+          }
+          const left = snap(ox + first.x * cell);
+          const right = snap(ox + (endX + 1) * cell);
+          const top = snap(oy + first.y * cell);
+          const bottom = snap(oy + (first.y + 1) * cell);
+          ctx.rect(left, top, Math.max(1 / dpr, right - left), Math.max(1 / dpr, bottom - top));
+        }
+      } else {
         const inset = Math.round(gap / 2);
-        const left = Math.round(ox + seg.x * cell) + inset;
-        const top = Math.round(oy + seg.y * cell) + inset;
-        const size = Math.max(1, Math.round(cell) - gap);
-        ctx.rect(left, top, size, size);
+        for (let i = 0; i < points.length; i += 1) {
+          const seg = points[i];
+          const left = Math.round(ox + seg.x * cell) + inset;
+          const top = Math.round(oy + seg.y * cell) + inset;
+          const size = Math.max(1, Math.round(cell) - gap);
+          ctx.rect(left, top, size, size);
+        }
       }
       ctx.fillStyle = color;
       ctx.fill();

@@ -55,10 +55,21 @@ test('a TCP burst updates received controls instantly but submits one newest fra
     assert.equal(s.renderer.paintSnapshot.t, 5);
     assert.equal(s.contexts, 1, 'context requested once for its entire lifetime');
     assert.equal(s.attributes.alpha, false);
-    // Cell rectangles use integers only; no between-cell coordinates invented.
+    // Two paints of one straight snake. Classic fills the run as a single
+    // silhouette whose far edge is the next cell, so a fractional cell size
+    // cannot leave a background line between squares.
     const rects = s.calls.filter(c => c.name === 'rect');
-    assert.ok(rects.length >= 3);
-    for (const c of rects) assert.ok(c.args.every(Number.isInteger));
+    assert.equal(rects.length, 2);
+    const cell = Math.min(316 / 24, 237 / 18);
+    const snap = (value) => Math.round(value);
+    rects.forEach((c, index) => {
+      assert.ok(c.args.every(Number.isInteger));
+      const [left, , width] = c.args;
+      // Tick 1 is cells 4,3,2. Tick 5 is cells 8,7,6. Both sit on row 0.
+      const start = index === 0 ? 2 : 6;
+      assert.equal(left, snap(start * cell));
+      assert.equal(left + width, snap((start + 3) * cell));
+    });
   } finally { s.close(); }
 });
 
