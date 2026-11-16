@@ -3,7 +3,7 @@
 // local clock (decisive.js) and steps everyone else from confirmed cells
 // one tick behind (playback.js). A packet never relocates the local snake.
 // Both tick one whole square at a time, the same way single-player does.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-29';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-30';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
@@ -484,7 +484,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-29', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-30', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,
@@ -1112,9 +1112,11 @@ export class MultiplayerGameRenderer {
     const smooth = this.smoothPlayers();
     const ownId = this.ownParticipantId == null ? null : Number(this.ownParticipantId);
 
-    // Pellets come from the confirmed tick. This player's own pellet follows the
-    // local bite: the eaten cell stays hidden until the server's cell changes.
-    // Nothing here invents a remote pellet or keeps one the confirmed tick ate.
+    // Pellets for other snakes come from the same confirmed tick as the snake
+    // being watched. The live frame has already removed a pellet the moment
+    // that player ate it, which is one tick before the buffered snake arrives,
+    // so the dot would vanish in front of a head that has not reached it.
+    // This player's own pellet still follows the local bite.
     const pelletColor = (owner) => {
       for (let p = 0; p < snapshot.p.length; p++) {
         if (snapshot.p[p].i === owner && HEX.test(snapshot.p[p].c)) return snapshot.p[p].c;
@@ -1145,27 +1147,37 @@ export class MultiplayerGameRenderer {
     };
     const paintPellets = () => {
       ctx.globalAlpha = 1;
-      const foodFrame = this.paintSnapshot || snapshot;
-      const pellets = Array.isArray(foodFrame.f) ? foodFrame.f : [];
-      for (let f = 0; f < pellets.length; f++) {
-        const food = pellets[f];
-        if (!food || !Number.isInteger(food.c)) continue;
+      const liveFrame = this.paintSnapshot || snapshot;
+      const live = Array.isArray(liveFrame.f) ? liveFrame.f : [];
+      const simulated = smooth && Array.isArray(smooth.food) ? smooth.food : null;
+      const drawFood = (food) => {
+        if (!food || !Number.isInteger(food.c)) return;
         const owner = Number(food.o);
-        // Own pellet follows the local bite. After the head lands on it the cell
-        // stays hidden until the server's cell changes, so the eaten pellet is
-        // not drawn twice and the respawn is not drawn early. Everyone else's
-        // pellet is the cell on the confirmed tick being painted.
         if (owner === ownId && this.local?.enabled && this.local.seeded) {
           const localFood = this.local.food;
           if (Number.isInteger(localFood)) {
             drawPellet(localFood, pelletColor(food.o));
-            continue;
+            return;
           }
           // Local bite hid this cell. Keep it hidden only while the server still
           // says that same cell. A respawn is a different cell and must be drawn.
-          if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) continue;
+          if (this.local.ignoredFood != null && food.c === this.local.ignoredFood) return;
         }
         drawPellet(food.c, pelletColor(food.o));
+      };
+      if (!simulated) {
+        for (let f = 0; f < live.length; f++) drawFood(live[f]);
+        return;
+      }
+      for (let f = 0; f < simulated.length; f++) {
+        const food = simulated[f];
+        if (!food || (ownId != null && Number(food.o) === ownId)) continue;
+        drawFood(food);
+      }
+      for (let f = 0; f < live.length; f++) {
+        const food = live[f];
+        if (!food || ownId == null || Number(food.o) !== ownId) continue;
+        drawFood(food);
       }
     };
 

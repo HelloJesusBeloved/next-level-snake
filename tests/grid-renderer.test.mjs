@@ -510,6 +510,36 @@ test('a remote pellet stays with the snake you can see, and leaves when that sna
   h.close();
 });
 
+test('a remote pellet stays until the snake on screen eats it, not when the server does', () => {
+  const h = setup({ enabled: false });
+  const r = responsiveRenderer(h);
+  const pellet = { c: 102, o: 2 };
+  r.accept(boardFrame(0, { remote: [100, 99, 98], extra: { f: [pellet] } }));
+  r.accept(boardFrame(1, { remote: [101, 100, 99], extra: { f: [pellet] } }));
+  r.accept(boardFrame(2, { remote: [102, 101, 100], extra: { f: [] } }));
+  h.at(105); h.refresh(105);
+  assert.equal(r.snapshot.f.length, 0, 'the server has already removed the pellet');
+  assert.equal(r.lastPlaybackSample.tick, 1, 'the snake on screen is still the previous tick');
+  assert.deepEqual(r.lastPlaybackSample.food, [pellet]);
+  const cols = 24;
+  const cell = Math.min(316 / cols, 237 / 18);
+  const pad = Math.max(1, cell * 0.1);
+  const foodX = (102 % cols) * cell + pad;
+  const foodY = (Math.floor(102 / cols)) * cell + pad;
+  const pelletRects = (calls) => calls.filter((call) => call.name === 'rect' &&
+    Math.abs(call.args[0] - foodX) < 0.01 && Math.abs(call.args[1] - foodY) < 0.01);
+  assert.ok(pelletRects(h.calls).length > 0, 'the pellet stays in front of the snake that has not reached it');
+  h.calls.length = 0;
+  r.accept(boardFrame(3, { remote: [103, 102, 101], extra: { f: [] } }));
+  h.at(320); h.refresh(320);
+  assert.equal(r.lastPlaybackSample.tick, 2);
+  assert.deepEqual(r.lastPlaybackSample.food, []);
+  h.calls.length = 0;
+  r.present(r.paintSnapshot, 320);
+  assert.equal(pelletRects(h.calls).length, 0, 'once that visible snake eats, the pellet is gone');
+  h.close();
+});
+
 test('a frozen own snake does not stop the loop that ticks everyone else', () => {
   const h = setup({ enabled: false });
   const r = responsiveRenderer(h);
