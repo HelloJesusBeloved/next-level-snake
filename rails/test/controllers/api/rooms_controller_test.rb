@@ -64,27 +64,25 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Grace", payload.dig(:member, :display_name)
   end
 
-  test "the invitation URL renders a name page, not the lobby" do
+  test "the invitation URL is the lobby without a way to create a room" do
     code = post_json(browser, "/api/rooms", display_name: "Ada").dig(:room, :code)
 
     get "/join/#{code[0, 3]}-#{code[3, 3]}"
     assert_response :success
-    assert_includes response.body, "join-root"
-    assert_includes response.body, 'id="join-name"'
-    assert_includes response.body, ">Join</button>"
-    assert_includes response.body, code
-    assert_not_includes response.body, "multiplayer-root"
-
-    get "/multiplayer/#{code}"
-    assert_response :success
     assert_includes response.body, "multiplayer-root"
+    assert_includes response.body, "mp-themes"
+    assert_includes response.body, "multiplayer-title"
+    assert_includes response.body, "Join with Code"
+    assert_includes response.body, %(value="#{code}")
+    assert_not_includes response.body, 'id="mp-create"'
   end
 
-  test "an unknown invitation explains itself and does not offer join" do
+  test "an unknown invitation still opens that same join screen" do
     get "/join/000000"
     assert_response :success
-    assert_includes response.body, "That code did not work"
-    assert_not_includes response.body, 'id="join-form"'
+    assert_includes response.body, "mp-themes"
+    assert_includes response.body, 'value="000000"'
+    assert_not_includes response.body, 'id="mp-create"'
   end
 
   test "previewing a code before joining shows the room without joining it" do

@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-34';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-35';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-34';
+import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-35';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
-import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-34';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-34';
+import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-35';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-35';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -212,6 +212,7 @@ export function mountLobby(root) {
   let subscription = null;
   let cableCode = null;
   let matchSubscription = null;
+  let drawnInvite = '';
   let matchSubscriptionId = null;
   let heartbeatTimer = null;
   let matchHeartbeatTimer = null;
@@ -504,6 +505,7 @@ export function mountLobby(root) {
 
   function render() {
     const inRoom = !!state.room;
+    if (!inRoom) clearQr();
     if (el.entry) el.entry.hidden = inRoom;
     if (el.room) el.room.hidden = !inRoom;
     renderViewer();
@@ -639,10 +641,13 @@ export function mountLobby(root) {
     if (el.stop) el.stop.hidden = !amHost || room.state !== 'in_match';
     if (el.hostNote) el.hostNote.hidden = !amHost;
     syncGodPause(state.gameSnapshot);
-    state.invite = room.invite_url || '';
+    const nextInvite = room.invite_url || '';
+    const inviteChanged = nextInvite !== state.invite;
+    state.invite = nextInvite;
     if (el.inviteUrl) el.inviteUrl.textContent = state.invite;
     // Web Share is progressive enhancement; Copy Link is always present.
     if (el.shareBtn) el.shareBtn.hidden = !(state.invite && typeof navigator.share === 'function');
+    if (inviteChanged) syncQr();
     connectMatchCable(state.match);
   }
 
@@ -1898,11 +1903,41 @@ export function mountLobby(root) {
           }
         }
       }
+      drawnInvite = url;
       return true;
     } catch (err) {
       shareFeedback('Could not draw the QR code — the link is still copyable.', 'error');
       return false;
     }
+  }
+
+  // The canvas is the last room's picture until something paints over it.
+  // Leaving a room, or switching codes, must not keep showing that picture.
+  function blankQrCanvas() {
+    if (!el.qrCanvas) return;
+    el.qrCanvas.width = 0;
+    el.qrCanvas.height = 0;
+  }
+
+  function clearQr() {
+    drawnInvite = '';
+    blankQrCanvas();
+    if (el.qrBox) el.qrBox.hidden = true;
+    if (el.qrToggle) {
+      el.qrToggle.setAttribute('aria-expanded', 'false');
+      el.qrToggle.textContent = 'Show QR';
+    }
+    shareFeedback('', 'info');
+  }
+
+  function syncQr() {
+    if (!state.invite || !el.qrBox || el.qrBox.hidden) {
+      drawnInvite = '';
+      blankQrCanvas();
+      return;
+    }
+    if (drawnInvite === state.invite) return;
+    if (!renderQr()) clearQr();
   }
 
   function toggleQr() {

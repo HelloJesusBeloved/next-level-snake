@@ -123,8 +123,12 @@ test('a guest creates a room, wears the crown, and a friend joins by link', asyn
   const friendContext = await browser.newContext();
   const friend = await friendContext.newPage();
   await friend.goto(`/join/${code}`);
-  await friend.fill('#join-name', 'Grace');
-  await friend.click('#join-go');
+  await expect(friend.locator('#mp-themes')).toBeVisible();
+  await expect(friend.locator('#multiplayer-title')).toBeVisible();
+  await expect(friend.locator('#mp-create')).toHaveCount(0);
+  await expect(friend.locator('#mp-code')).toHaveValue(code);
+  await friend.fill('#mp-name', 'Grace');
+  await friend.click('#mp-join');
   await expect(friend).toHaveURL(new RegExp(`/multiplayer/${code}$`));
   await expect(friend.locator('#mp-room')).toBeVisible();
   await expect(friend.locator('#mp-roster .mp-player')).toHaveCount(2);
@@ -227,19 +231,17 @@ test('joining a second room asks before leaving the first', async ({ page, reque
   await expect(page.locator('#mp-room')).toBeVisible();
   const mine = (await page.locator('#mp-room-code').textContent()).trim();
 
-  // Opening somebody else's invitation while seated asks on Join, not before.
+  // Opening somebody else's invitation while seated must ask first.
   await page.goto(`/join/${room.code}`);
-  await expect(page.locator('#join-form')).toBeVisible();
-  page.once('dialog', async (dialog) => {
-    expect(dialog.message()).toContain(mine);
-    await dialog.dismiss();
-  });
-  await page.click('#join-go');
-  await expect(page).toHaveURL(new RegExp(`/join/${room.code}$`));
+  await expect(page.locator('#mp-confirm')).toBeVisible();
+  await expect(page.locator('#mp-confirm-body')).toContainText(mine);
+  await page.click('#mp-confirm-cancel');
+  await expect(page.locator('#mp-confirm')).toBeHidden();
+  await expect(page.locator('#mp-room-code')).toHaveText(mine);
+  await expect(page).toHaveURL(new RegExp(`/multiplayer/${mine}$`));
 
-  page.once('dialog', (dialog) => dialog.accept());
-  await page.click('#join-go');
-  await expect(page).toHaveURL(new RegExp(`/multiplayer/${room.code}$`));
+  await page.goto(`/join/${room.code}`);
+  await page.click('#mp-confirm-ok');
   await expect(page.locator('#mp-room-code')).toHaveText(room.code);
   await expect(page.locator('#mp-roster .mp-player')).toHaveCount(2);
 });
@@ -351,6 +353,28 @@ test('sharing panel shows the invite URL, encodes a scannable QR, and shares/cop
     return found ? found.data : null;
   });
   expect(decoded).toBe(invite);
+
+  // Disband, then open another room, with the QR left up. The next time it
+  // is shown it has to be the new link — not the room that just closed.
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.click('#mp-disband');
+  await expect(page.locator('#mp-entry')).toBeVisible();
+  await expect(page.locator('#mp-qr')).toBeHidden();
+  await page.click('#mp-create');
+  await expect(page.locator('#mp-room')).toBeVisible();
+  const nextCode = (await page.locator('#mp-room-code').textContent()).trim();
+  const nextInvite = (await page.locator('#mp-invite-url').textContent()).trim();
+  expect(nextCode).not.toBe(roomCode);
+  expect(nextInvite).toBe(`${origin}/join/${nextCode}`);
+  await expect(page.locator('#mp-qr')).toBeHidden();
+  await page.locator('#mp-qr-toggle').click();
+  const decodedNext = await page.evaluate(() => {
+    const canvas = document.getElementById('mp-qr-canvas');
+    const frame = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+    const found = window.jsQR(frame.data, canvas.width, canvas.height);
+    return found ? found.data : null;
+  });
+  expect(decodedNext).toBe(nextInvite);
 });
 
 test('copy failure is reported visibly with the link to copy by hand', async ({ page, request }) => {
@@ -404,8 +428,8 @@ test.describe('QR scanner', () => {
     await page.waitForURL(`**/join/${room.code}`);
     expect(context.pages().length).toBe(1);
 
-    await page.fill('#join-name', 'Grace');
-    await page.click('#join-go');
+    await page.fill('#mp-name', 'Grace');
+    await page.click('#mp-join');
     await expect(page).toHaveURL(new RegExp(`/multiplayer/${room.code}$`));
     await expect(page.locator('#mp-roster .mp-player')).toHaveCount(2);
     await expect(page.locator('#mp-roster')).toContainText('Grace');

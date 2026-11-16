@@ -1017,10 +1017,3 @@ html[data-theme='arcade'] .mp-screen { padding-bottom: var(--cabinet-bottom); }
 @media (max-width: 720px) {
   #multiplayer-root.band { padding: 16px 16px 32px; }
 }
-
-/* Invitation link: one card, a name, a join button. */
-.join-sheet {
-  max-width: 420px;
-  margin: 28px auto 0;
-}
-#join-root .mp-room__code { margin-bottom: 4px; }

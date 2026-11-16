@@ -11,11 +11,11 @@ class SnakeController < ApplicationController
     @invitation_code = params[:code].to_s.strip.upcase.delete("-").presence
   end
 
-  # Invitation link. Not the lobby: a name and a join button, then the
-  # lobby once the server has seated them.
+  # Invitation link. Same screen as the lobby — themes, title, name, join —
+  # without "Create room", and with this code already in the join field.
   def invitation
-    @invitation_code = params[:code].to_s.strip.upcase.delete("-")
-    @room = Room.find_by_invitation_code(@invitation_code)
-    @joinable = @room&.joinable? && !@room.full?
+    @invitation_code = params[:code].to_s.strip.upcase.delete("-").presence
+    @invite_only = true
+    render :multiplayer
   end
 end

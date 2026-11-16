@@ -2,7 +2,7 @@
 <% content_for :head do %>
   <%# Lobby styling lives beside the lobby module, not in the single-player
       stylesheet, so the two pages stay independent. %>
-  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-34">
+  <link rel="stylesheet" href="/multiplayer/lobby.css?v=step11-responsive-35">
 <% end %>
 
 <div class="page-texture" aria-hidden="true"></div>
@@ -111,6 +111,7 @@
       </div>
     </article>
 
+    <% unless @invite_only %>
     <article class="mp-card">
       <h2 class="mp-card__title">Start a room</h2>
       <p class="mp-card__hint">You become the host <span class="mp-crown" role="img" aria-label="Host"><svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 18h18v2.5H3V18Zm1.2-2.2 2.1-8.1 4.2 4.4L12 4.5l1.5 7.6 4.2-4.4 2.1 8.1H4.2Z"/></svg></span> and get an invitation code to share. No size to pick — rooms expand as friends pile in.</p>
@@ -118,6 +119,7 @@
         <button class="btn btn--primary" id="mp-create" type="button">Create room</button>
       </div>
     </article>
+    <% end %>
 
     <article class="mp-card">
       <h2 class="mp-card__title">Join a room</h2>
@@ -437,5 +439,5 @@
       offline — nothing here phones home. %>
   <script src="/multiplayer/vendor/qrcode.min.js?v=2026-10-23.1"></script>
   <script src="/multiplayer/vendor/jsqr.min.js?v=2026-10-23.1"></script>
-  <script type="module" src="/multiplayer/page.js?v=step11-responsive-34"></script>
+  <script type="module" src="/multiplayer/page.js?v=step11-responsive-35"></script>
 <% end %>
