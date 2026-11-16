@@ -338,11 +338,14 @@ module Simulation
       eliminated = {}
       targets.each do |player_id, cell|
         snake = player!(player_id)
-        # One missed report is two cells along a straight line. The tail
-        # would have vacated both by the time the head arrived. Judging the
-        # final cell against today's body kills a snake that is exactly as
-        # tall as the board: the cell in front of its head is still its body.
-        eliminated[player_id] = :self_collision if cells_blocking_reported_arrival(snake, cell).include?(cell)
+        # The head is allowed to enter the cell the tail is leaving, and to
+        # keep doing that for the whole chase. A late report is several of
+        # those steps at once. Judging only the final cell against today's
+        # tail kills a snake that has been following itself — a full column,
+        # or one dropped report as it turns the corner.
+        path = reported_path(snake, cell)
+        hit = path ? path_hits_self?(snake, path) : snake.surviving_cells.include?(cell)
+        eliminated[player_id] = :self_collision if hit
       end
 
       if rules.solid_opponents?
@@ -612,43 +615,78 @@ module Simulation
     # A reported cell that skipped a straight run (a dropped report) still lands
     # on the cell the browser is on. The cells in between are filled and the
     # tail is popped once per skipped step, so the body does not keep a hole
-    # plus a stale segment. A turn during the gap is not a straight line: the
-    # head still jumps, because inventing the corner would be a guess.
+    # plus a stale segment. One corner is recoverable from the direction of
+    # the last step. Anything else is still a jump: inventing the rest of the
+    # path would be a guess.
     def advance_reported!(snake, cell, growth_added:)
-      gap = straight_intermediates(snake.head, cell)
-      if gap && !gap.empty?
+      path = reported_path(snake, cell)
+      if path && path.length > 1
         pending = snake.grow - growth_added
         snake.grow = pending.positive? ? pending : 0
-        gap.each { |step| snake.advance!(step) }
+        path[0...-1].each { |step| snake.advance!(step) }
         snake.grow += growth_added
       end
       snake.advance!(cell)
     end
 
-    # Cells that still block the cell a browser reported, after every tail
-    # pop a straight run of that length would have taken. A one-cell step
-    # matches Snake#surviving_cells. A skipped straight step frees one more
-    # tail cell, so following your own head around a full column lives.
-    def cells_blocking_reported_arrival(snake, cell)
-      gap = straight_intermediates(snake.head, cell)
-      steps = gap.nil? ? 1 : gap.length + 1
-      pops = [steps - snake.grow, 0].max
-      return snake.body.dup if pops <= 0
+    # Cells the browser entered to reach `cell`, not including where it
+    # already was. Empty-gap included: a one-cell step is just `[cell]`.
+    # Nil when the jump is not a straight run and not one corner.
+    def reported_path(snake, cell)
+      straight = straight_intermediates(snake.head, cell, direction: snake.direction)
+      return straight + [cell] if straight
 
-      snake.body[0...-pops]
+      corner = corner_intermediate(snake.head, cell, snake.direction)
+      return corner + [cell] if corner
+
+      nil
+    end
+
+    # Walk the same steps the browser took. The tail vacates on each one
+    # unless the snake is still growing, so a cell that is only "occupied"
+    # because we have not popped yet is not a hit.
+    def path_hits_self?(snake, path)
+      body = snake.body.map { |x, y| [x, y] }
+      grow = snake.grow
+      path.each do |cell|
+        blocking = grow.positive? ? body : body[0...-1]
+        return true if blocking.any? { |part| part[0] == cell[0] && part[1] == cell[1] }
+
+        body.unshift([cell[0], cell[1]])
+        if grow.positive?
+          grow -= 1
+        else
+          body.pop
+        end
+      end
+      false
+    end
+
+    # The cell immediately before `to` along `direction`, when that cell is
+    # one step from `from`. That is one dropped report with a turn in it.
+    # A longer diagonal is not a corner and stays nil.
+    def corner_intermediate(from, to, direction)
+      return nil unless direction
+
+      back = wrap(to[0] - direction.dx, to[1] - direction.dy)
+      return nil if back == from
+
+      dx, dy = step_delta(from, back)
+      return nil unless dx.abs + dy.abs == 1
+
+      [back]
     end
 
     # Cells strictly between two points on one row or one column, along the
-    # short way around the board. Empty when the points are already one step
-    # apart. Nil when the jump is diagonal or too long to be one dropped run.
-    def straight_intermediates(from, to)
-      dx, dy = step_delta(from, to)
+    # way the snake is facing when both ways around the board are equal.
+    # Empty when the points are already one step apart. Nil when the jump is
+    # not a straight line.
+    def straight_intermediates(from, to, direction: nil)
+      dx, dy = step_delta(from, to, direction: direction)
       return [] if dx.abs + dy.abs <= 1
       return nil unless dx.zero? || dy.zero?
 
       distance = dx.abs + dy.abs
-      return nil if distance > 8
-
       sx = dx <=> 0
       sy = dy <=> 0
       x, y = from
@@ -665,12 +703,15 @@ module Simulation
 
     # Shortest one-cell delta on the torus, each component in -columns/2..columns/2.
     # [0, 0] is the same cell. Anything whose absolute components sum to 1 is a
-    # legal orthogonal step, including a wrap.
-    def step_delta(from, to)
+    # legal orthogonal step, including a wrap. An exact half-board tie follows
+    # the snake's direction so a column chase is not filled backwards.
+    def step_delta(from, to, direction: nil)
       dx = (to[0] - from[0]) % @columns
       dy = (to[1] - from[1]) % @rows
       dx -= @columns if dx * 2 > @columns
       dy -= @rows if dy * 2 > @rows
+      dx = -dx if direction && dx != 0 && dx * 2 == @columns && direction.dx.negative?
+      dy = -dy if direction && dy != 0 && dy * 2 == @rows && direction.dy.negative?
       [dx, dy]
     end
 

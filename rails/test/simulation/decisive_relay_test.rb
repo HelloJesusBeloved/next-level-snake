@@ -148,6 +148,77 @@ class DecisiveRelayTest < Minitest::Test
     refute snake.alive?
   end
 
+  def test_following_your_tail_for_several_laps_lives
+    world, = responsive_world
+    snake = world.snakes.first
+    body = (0...world.rows).map { |y| [5, y] }
+    place(world, snake, body: body, direction: "up", score: 15)
+    snake.food = nil
+    (world.rows * 3).times do |index|
+      assert_equal :queued, step_into(world, snake, "up", index + 1)[0]
+      result = world.step!
+      assert_nil result.eliminated[snake.id], "died on step #{index}"
+      assert snake.alive?
+    end
+    assert_equal world.rows, snake.length
+    assert_equal snake.length, snake.body.uniq.length
+  end
+
+  def test_a_full_height_column_survives_a_half_board_skip_in_the_direction_it_faces
+    world, = responsive_world
+    snake = world.snakes.first
+    body = (0...world.rows).map { |y| [5, y] }
+    place(world, snake, body: body, direction: "up", score: 15)
+    snake.food = nil
+    # Nine steps up from y=0 on an 18-row board. Both ways are the same
+    # length. Filling the wrong way overlaps the column and the next lap dies.
+    target = [5, world.rows / 2]
+    world.enqueue_pose!(player_id: snake.id, cell: target,
+                        direction: Simulation::Direction.parse("up"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal target, snake.head
+    assert_equal world.rows, snake.length
+    assert_equal snake.length, snake.body.uniq.length
+    # The cell just behind the head is one step further up, not back down the column.
+    assert_equal [5, target[1] + 1], snake.body[1]
+  end
+
+  def test_a_dropped_report_on_the_corner_of_a_tail_chase_lives
+    world, = responsive_world
+    snake = world.snakes.first
+    # The loop is full, so every step the head enters the cell the tail is
+    # leaving. One missed report turns the corner: tail, then the cell after it.
+    body = [[0, 6], [0, 5], [0, 4], [1, 4], [2, 4], [3, 4], [4, 4], [5, 4],
+            [5, 5], [5, 6], [5, 7], [4, 7], [3, 7], [2, 7], [1, 7], [0, 7]]
+    place(world, snake, body: body, direction: "down", grow: 0)
+    snake.food = nil
+    world.enqueue_pose!(player_id: snake.id, cell: [1, 7],
+                        direction: Simulation::Direction.parse("right"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal [1, 7], snake.head
+    assert_equal body.length, snake.length
+    assert_equal snake.length, snake.body.uniq.length
+    assert_includes snake.body, [0, 7]
+  end
+
+  def test_a_corner_into_the_neck_still_dies
+    world, = responsive_world
+    snake = world.snakes.first
+    place(world, snake, body: [[5, 5], [4, 5], [4, 6], [4, 7]], direction: "right", grow: 0)
+    world.enqueue_pose!(player_id: snake.id, cell: [4, 6],
+                        direction: Simulation::Direction.parse("down"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_equal :self_collision, result.eliminated[snake.id]
+    refute snake.alive?
+  end
+
   def test_a_second_report_of_the_cell_just_entered_does_not_kill
     world, = responsive_world
     snake = world.snakes.first

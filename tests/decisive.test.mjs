@@ -146,6 +146,20 @@ test('food from the snapshot grows once and a catching-up score does not double'
   assert.equal(local.eaten, 1);
 });
 
+test('following your own tail for several laps does not kill a full-height snake', () => {
+  const now = { t: 0 };
+  const local = snake(now);
+  const column = Array.from({ length: ROWS }, (_, y) => y * COLS + 5);
+  local.observe(frame(column, { player: { d: 'up', sc: 15, gr: 0 } }));
+  for (let lap = 0; lap < ROWS * 3; lap += 1) {
+    now.t += TICK;
+    local.advance(now.t);
+    assert.equal(local.dead, false, `died on step ${lap}`);
+  }
+  assert.equal(local.body.length, ROWS);
+  assert.equal(new Set(local.body).size, ROWS);
+});
+
 test('self-collision stops the local snake and still reports the cell', () => {
   const now = { t: 0 };
   const local = snake(now);
