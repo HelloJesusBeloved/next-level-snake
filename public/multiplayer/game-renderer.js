@@ -3,7 +3,7 @@
 // local clock (decisive.js) and steps everyone else from confirmed cells
 // one tick behind (playback.js). A packet never relocates the local snake.
 // Both tick one whole square at a time, the same way single-player does.
-import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-28';
+import { createPlayBudget, text, hudKey } from './play-budget.js?v=step11-responsive-29';
 import { GridCadence, MovementTimings, FrameGate } from './grid-cadence.js?v=step10-mobile4';
 import { DecisiveSnake } from './decisive.js?v=step11-responsive-25';
 import { RemotePlayback } from './playback.js?v=step11-responsive-18';
@@ -484,7 +484,7 @@ export class MultiplayerGameRenderer {
 
   movementDiagnostics() {
     return {
-      ...this.timings.summary(), release: 'step11-responsive-28', cadenceEnabled: this.cadence.enabled,
+      ...this.timings.summary(), release: 'step11-responsive-29', cadenceEnabled: this.cadence.enabled,
       maxHoldMs: this.cadence.maxWait, phaseMs: Math.round(this.cadence.phase),
       queued: this.cadence.queue.length, coalesced: this.cadence.coalesced,
       displayWatchdog: this.frameGate.fallbacks,

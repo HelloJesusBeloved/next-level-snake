@@ -736,15 +736,16 @@
 .mp-movement-diagnostics label { display: flex; gap: 7px; align-items: center; padding-top: 8px; }
 
 /* Desktop: standings stay on top of the side column. The score list scrolls
-   so a long brawl cannot shove the options off the row. The stage is beside
-   that stack. Mobile uses flex order. */
+   so a long brawl cannot shove the options off the row. The stage takes the
+   rest of the width and grows up to the viewport, so a split desktop window
+   does not leave a postage-stamp board. */
 .mp-play {
   display: grid;
-  grid-template-columns: minmax(240px, 320px) minmax(0, 1fr);
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
   grid-template-areas:
     "standings stage"
     "options stage";
-  gap: 18px 28px;
+  gap: 14px 16px;
   align-items: start;
 }
 .mp-standings-card { grid-area: standings; min-width: 0; }
@@ -765,7 +766,7 @@
   align-items: center;
   gap: 10px;
   width: min(100%, 520px);
-  margin: 14px auto 0;
+  margin: 10px auto 0;
 }
 /* Desktop: the wrapper is not a box, so Start / Leave / Disband / Stop / Restart
    share one centered row. Mobile turns it back into a row of host buttons. */
@@ -893,6 +894,34 @@ html.mp-page-focused dialog [role="button"] {
   color: var(--green);
 }
 .mp-board-overlay:not(.is-visible) { pointer-events: none; }
+/* The single-player sheet reserves 82–96px under every theme once the window
+   is under 1100px, so toggling Arcade does not jump the page. In a room that
+   padding is empty space between the board and Leave / Start unless the
+   arcade deck is actually drawn. */
+.mp-screen { --cabinet-bottom: 0px; }
+html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 96px; }
+@media (max-width: 720px) {
+  html[data-theme='arcade'] .mp-screen { --cabinet-bottom: 82px; }
+}
+@media (min-width: 901px) {
+  /* Largest 24×18 board that still fits the stage column and the viewport.
+     The single-player --screen-max cap is wider than this column on a short
+     window and would letterbox the board. */
+  .mp-stage .mp-screen {
+    width: min(100%, calc((100dvh - 168px) * 24 / 18));
+    max-width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+  }
+  html[data-theme='arcade'] .mp-stage .mp-screen {
+    width: min(100%, calc((100dvh - 250px) * 24 / 18));
+  }
+  .mp-under-board {
+    width: min(100%, calc((100dvh - 168px) * 24 / 18));
+    max-width: 100%;
+    margin-top: 8px;
+  }
+}
 #mp-panel-over { width: min(460px, 100%); }
 #mp-over-ranks { margin: 10px 0 14px; text-align: left; }
 #mp-over-ranks .mp-results-table { font-size: 12px; }

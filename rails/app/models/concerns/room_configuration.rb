@@ -24,17 +24,19 @@ module RoomConfiguration
     if available.size <= RoomPalette::SPARE_OPTIONS
       raise Room::NotJoinable, "Room color capacity reached. Wait for this Brawl to finish or join another room."
     end
-    available.include?(membership.color_slot) ? membership.color_slot : available.first
+    if available.include?(membership.color_slot)
+      membership.color_slot
+    else
+      RoomPalette.farthest_slot(taken, available)
+    end
   end
 
   def palette_payload
     seated = room_memberships.active.pluck(:id, :display_name, :color_slot)
     reserved = reserved_color_slots
-    # Grow the offered palette in hue-first blocks as seats/options are used.
-    needed = [12, reserved.size + RoomPalette::SPARE_OPTIONS, reserved.max.to_i + 1].max
-    count = [(needed / 12.0).ceil * 12, RoomPalette::CAPACITY].min
+    slots = RoomPalette.offer_slots(reserved)
     { capacity: RoomPalette::CAPACITY, spare: RoomPalette::SPARE_OPTIONS,
-      options: (0...count).map do |slot|
+      options: slots.map do |slot|
         owner = seated.find { |member| member[2] == slot }
         RoomPalette.color(slot).merge(taken_by: owner&.first, player: owner&.second,
                                      locked: reserved.include?(slot) && owner.nil?)
