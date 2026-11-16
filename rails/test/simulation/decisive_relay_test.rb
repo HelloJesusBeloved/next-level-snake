@@ -186,6 +186,28 @@ class DecisiveRelayTest < Minitest::Test
     assert_equal [5, target[1] + 1], snake.body[1]
   end
 
+  def test_a_stall_longer_than_half_the_board_keeps_the_facing_direction
+    world, = responsive_world
+    snake = world.snakes.first
+    body = (0...world.rows).map { |y| [5, y] }
+    place(world, snake, body: body, direction: "up", score: 15)
+    snake.food = nil
+    # Twelve steps up from y=0. The short way is six steps down, through the
+    # column. That is the crash a lagged straight snake was charged with.
+    steps = 12
+    target = [5, (0 - steps) % world.rows]
+    world.enqueue_pose!(player_id: snake.id, cell: target,
+                        direction: Simulation::Direction.parse("up"),
+                        tick: world.tick, seq: 1)
+    result = world.step!
+    assert_nil result.eliminated[snake.id]
+    assert snake.alive?
+    assert_equal target, snake.head
+    assert_equal world.rows, snake.length
+    assert_equal snake.length, snake.body.uniq.length
+    assert_equal [5, (target[1] + 1) % world.rows], snake.body[1]
+  end
+
   def test_a_dropped_report_on_the_corner_of_a_tail_chase_lives
     world, = responsive_world
     snake = world.snakes.first

@@ -633,6 +633,13 @@ module Simulation
     # already was. Empty-gap included: a one-cell step is just `[cell]`.
     # Nil when the jump is not a straight run and not one corner.
     def reported_path(snake, cell)
+      # A stalled browser keeps going straight and then reports the cell it is
+      # on now. That gap is often longer than half the board. The short way
+      # around the torus is then backwards, through the neck, and a snake that
+      # never turned is eliminated for crashing.
+      facing = facing_intermediates(snake.head, cell, snake.direction)
+      return facing + [cell] if facing
+
       straight = straight_intermediates(snake.head, cell, direction: snake.direction)
       return straight + [cell] if straight
 
@@ -660,6 +667,27 @@ module Simulation
         end
       end
       false
+    end
+
+    # Cells strictly between `from` and `to` walking only in `direction`,
+    # including the long way around the board. Nil when `to` is not on that
+    # ray. This is the path a straight snake actually took while its reports
+    # were stuck, which is not always the shorter way around.
+    def facing_intermediates(from, to, direction)
+      return nil unless direction
+      return nil unless direction.dx.abs + direction.dy.abs == 1
+
+      x, y = from
+      cells = []
+      span = direction.dx != 0 ? @columns : @rows
+      (span - 1).times do
+        x = (x + direction.dx) % @columns
+        y = (y + direction.dy) % @rows
+        return cells if [x, y] == to
+
+        cells << [x, y]
+      end
+      nil
     end
 
     # The cell immediately before `to` along `direction`, when that cell is
