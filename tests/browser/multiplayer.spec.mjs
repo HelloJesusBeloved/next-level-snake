@@ -72,7 +72,7 @@ test('the lobby is real, but no gameplay is faked', async ({ page }) => {
   const apiPaths = new Set();
   page.on('request', (request) => {
     const { pathname } = new URL(request.url());
-    if (pathname.startsWith('/api/')) apiPaths.add(pathname.replace(/\/[A-Z0-9]{12}(?=\/|$)/, '/:code'));
+    if (pathname.startsWith('/api/')) apiPaths.add(pathname.replace(/\/[0-9]{6}(?=\/|$)/, '/:code'));
   });
   page.on('websocket', (socket) => sockets.push(socket.url()));
 
@@ -106,7 +106,7 @@ test('a guest creates a room, wears the crown, and a friend joins by link', asyn
 
   await expect(page.locator('#mp-room')).toBeVisible();
   const code = (await page.locator('#mp-room-code').textContent()).trim();
-  expect(code).toMatch(/^[A-Z0-9]{12}$/);
+  expect(code).toMatch(/^[0-9]{6}$/);
   await expect(page).toHaveURL(new RegExp(`/multiplayer/${code}$`));
   await expect(page.locator('#mp-roster .mp-player')).toHaveCount(1);
   await expect(page.locator('#mp-roster .mp-crown')).toHaveCount(1);
@@ -122,9 +122,10 @@ test('a guest creates a room, wears the crown, and a friend joins by link', asyn
   // A second browser opens the invitation link and joins as a guest.
   const friendContext = await browser.newContext();
   const friend = await friendContext.newPage();
-  await friend.goto(`/multiplayer/${code}`);
-  await friend.fill('#mp-name', 'Grace');
-  await friend.click('#mp-join');
+  await friend.goto(`/join/${code}`);
+  await friend.fill('#join-name', 'Grace');
+  await friend.click('#join-go');
+  await expect(friend).toHaveURL(new RegExp(`/multiplayer/${code}$`));
   await expect(friend.locator('#mp-room')).toBeVisible();
   await expect(friend.locator('#mp-roster .mp-player')).toHaveCount(2);
   await expect(friend.locator('#mp-start')).toBeHidden();  // not the host
@@ -226,17 +227,19 @@ test('joining a second room asks before leaving the first', async ({ page, reque
   await expect(page.locator('#mp-room')).toBeVisible();
   const mine = (await page.locator('#mp-room-code').textContent()).trim();
 
-  // Opening somebody else's invitation while seated must ask first.
-  await page.goto(`/multiplayer/${room.code}`);
-  await expect(page.locator('#mp-confirm')).toBeVisible();
-  await expect(page.locator('#mp-confirm-body')).toContainText(mine);
-  await page.click('#mp-confirm-cancel');
-  await expect(page.locator('#mp-confirm')).toBeHidden();
-  await expect(page.locator('#mp-room-code')).toHaveText(mine);
-  await expect(page).toHaveURL(new RegExp(`/multiplayer/${mine}$`));
+  // Opening somebody else's invitation while seated asks on Join, not before.
+  await page.goto(`/join/${room.code}`);
+  await expect(page.locator('#join-form')).toBeVisible();
+  page.once('dialog', async (dialog) => {
+    expect(dialog.message()).toContain(mine);
+    await dialog.dismiss();
+  });
+  await page.click('#join-go');
+  await expect(page).toHaveURL(new RegExp(`/join/${room.code}$`));
 
-  await page.goto(`/multiplayer/${room.code}`);
-  await page.click('#mp-confirm-ok');
+  page.once('dialog', (dialog) => dialog.accept());
+  await page.click('#join-go');
+  await expect(page).toHaveURL(new RegExp(`/multiplayer/${room.code}$`));
   await expect(page.locator('#mp-room-code')).toHaveText(room.code);
   await expect(page.locator('#mp-roster .mp-player')).toHaveCount(2);
 });
@@ -321,8 +324,8 @@ test('sharing panel shows the invite URL, encodes a scannable QR, and shares/cop
   const invite = await page.locator('#mp-invite-url').textContent();
   const origin = new URL(page.url()).origin;
   const roomCode = (await page.locator('#mp-room-code').textContent()).trim();
-  expect(roomCode).toMatch(/^[A-Z0-9]{12}$/);
-  expect(invite).toBe(`${origin}/multiplayer/${roomCode}`);
+  expect(roomCode).toMatch(/^[0-9]{6}$/);
+  expect(invite).toBe(`${origin}/join/${roomCode}`);
 
   // Share Room appears (navigator.share stubbed in) and shares the URL.
   const shareBtn = page.locator('#mp-share-room');
@@ -363,7 +366,7 @@ test('copy failure is reported visibly with the link to copy by hand', async ({ 
   });
   await page.locator('#mp-copy-link').click();
   await expect(page.locator('#mp-share-feedback')).toContainText('Automatic copy failed');
-  await expect(page.locator('#mp-share-feedback')).toContainText('/multiplayer/');
+  await expect(page.locator('#mp-share-feedback')).toContainText('/join/');
 });
 
 test('without Web Share the Share Room button stays hidden while Copy Link remains', async ({ page, request }) => {
@@ -386,7 +389,7 @@ test.describe('QR scanner', () => {
     const room = await createRoomVia(request, 'Ada');
     // addInitScript must be registered BEFORE goto — it applies to documents
     // created afterwards, so ordering here decides whether the stub exists.
-    const target = new URL(`/multiplayer/${room.code}`, test.info().project.use.baseURL).href;
+    const target = new URL(`/join/${room.code}`, test.info().project.use.baseURL).href;
     await page.addInitScript((url) => {
       // Native-BarcodeDetector path: report the invitation on the first frame.
       window.BarcodeDetector = class {
@@ -398,13 +401,12 @@ test.describe('QR scanner', () => {
     await page.locator('#mp-scan-open').click();
     await expect(page.locator('#mp-scan')).toBeVisible();
     // Same tab means the page itself navigated — never a popup/tab window.open.
-    await page.waitForURL(`**/multiplayer/${room.code}`);
+    await page.waitForURL(`**/join/${room.code}`);
     expect(context.pages().length).toBe(1);
 
-    // The invitation route is the normal join flow: name + Join with Code.
-    // The room already seats its API-created host, so Grace makes two.
-    await page.fill('#mp-name', 'Grace');
-    await page.click('#mp-join');
+    await page.fill('#join-name', 'Grace');
+    await page.click('#join-go');
+    await expect(page).toHaveURL(new RegExp(`/multiplayer/${room.code}$`));
     await expect(page.locator('#mp-roster .mp-player')).toHaveCount(2);
     await expect(page.locator('#mp-roster')).toContainText('Grace');
     await expect(page.locator('#mp-roster')).toContainText('Ada');
@@ -442,7 +444,7 @@ test.describe('QR scanner', () => {
 
   test('the jsQR fallback decodes a real QR frame locally', async ({ page, context, request }) => {
     const room = await createRoomVia(request, 'Ada');
-    const target = new URL(`/multiplayer/${room.code}`, test.info().project.use.baseURL).href;
+    const target = new URL(`/join/${room.code}`, test.info().project.use.baseURL).href;
     // addInitScript before goto: it only applies to documents created after.
     await page.addInitScript((url) => {
       // No native detector: force the vendored jsQR fallback, and feed the
@@ -478,7 +480,7 @@ test.describe('QR scanner', () => {
     // No visibility/status assertion: with a real QR in frame the decode and
     // the same-tab navigation can complete before the first poll. waitForURL
     // passes either way (immediately if the navigation already landed).
-    await page.waitForURL(`**/multiplayer/${room.code}`);
+    await page.waitForURL(`**/join/${room.code}`);
     expect(context.pages().length).toBe(1);
   });
 

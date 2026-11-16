@@ -22,11 +22,10 @@
 # lobby, and it cannot resume, impersonate, or claim an existing member.
 # Identity is proven separately — the account session cookie for users,
 # the GuestSession token cookie for guests — and neither of those secrets
-# ever appears in an invitation link. Codes are 12 characters drawn by
-# SecureRandom from an alphabet with no look-alikes (0/O, 1/I/L), are
-# stored and compared upper-case, and tolerate hyphens/spaces when typed.
-# A host who leaks a code can rotate it with #regenerate_invitation_code!
-# without disturbing anyone already seated.
+# ever appears in an invitation link. Codes are six digits from SecureRandom,
+# stored as typed after spaces and hyphens are stripped, so 123-456 and
+# 123456 are the same room. A host who leaks a code can rotate it with
+# #regenerate_invitation_code! without disturbing anyone already seated.
 #
 # The host is whichever active membership has role "host" (at most one,
 # enforced by a partial unique index) rather than a users row, because a
@@ -48,9 +47,8 @@ class Room < ApplicationRecord
   MIN_PLAYERS_TO_START = 2
   NAME_MAX_LENGTH = 60
 
-  INVITATION_CODE_LENGTH = 12
-  # 31 symbols, no 0/O/1/I/L look-alikes: 31**12 ≈ 8×10^17 possibilities.
-  INVITATION_CODE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789".freeze
+  INVITATION_CODE_LENGTH = 6
+  INVITATION_CODE_ALPHABET = "0123456789".freeze
 
   class InvalidTransition < StandardError; end
   class NotJoinable < StandardError; end

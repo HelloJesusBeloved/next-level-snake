@@ -13,13 +13,13 @@
 
 import { createConsumer, ConnectionMonitor } from './actioncable.esm.js';
 import { mountConfiguration } from './configuration.js?v=step11-responsive-18';
-import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-33';
+import { MultiplayerGameRenderer } from './game-renderer.js?v=step11-responsive-34';
 import { SnapshotChunks } from './snapshot-chunks.js?v=step10-mobile4';
-import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-33';
+import { createPageFocus, shouldRevealBoard, matchViewInset } from './page-focus.js?v=step11-responsive-34';
 import { responsivePredictionEnabled } from './prediction.js?v=step11-responsive-18';
 import { SwipeSteering } from './swipe-steering.js?v=step10-mobile4';
-import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-33';
-import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-33';
+import { createPlayBudget, text } from './play-budget.js?v=step11-responsive-34';
+import { newlyEliminated, buildResultsTable, showEliminationOverlay, hideEliminationOverlay } from './game-ui.js?v=step11-responsive-34';
 
 // Action Cable's ConnectionMonitor already reconnects with exponential
 // backoff and jitter: each attempt waits
@@ -2081,7 +2081,7 @@ export function mountLobby(root) {
 
     const path = url.pathname.replace(/\/+$/, '');
     if (path === '/multiplayer') return origin === window.location.origin ? path : origin + path;
-    if (/^\/multiplayer\/[A-Za-z0-9-]{4,24}$/.test(path)) {
+    if (/^\/(?:multiplayer|join)\/[A-Za-z0-9-]{4,24}$/.test(path)) {
       return origin === window.location.origin ? path : origin + path;
     }
     return null;

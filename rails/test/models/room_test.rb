@@ -13,13 +13,13 @@ class RoomTest < ActiveSupport::TestCase
     assert_equal room.host_membership.user, room.room_memberships.first.user
   end
 
-  test "invitation codes are long, unambiguous, unique and unpredictable in shape" do
+  test "invitation codes are six digits, unique and not a sequence" do
     rooms = Array.new(10) { make_room_with_guest_host }
     codes = rooms.map(&:invitation_code)
 
     assert_equal codes.uniq, codes
     codes.each do |code|
-      assert_match(/\A[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{12}\z/, code)
+      assert_match(/\A\d{6}\z/, code)
     end
     # Not derived from ids or sequence: consecutive rooms, unrelated codes.
     assert_not_equal codes.first, codes.second

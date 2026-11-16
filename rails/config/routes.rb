@@ -1,14 +1,16 @@
 Rails.application.routes.draw do
-  # Invitation codes are drawn from Room::INVITATION_CODE_ALPHABET; hyphens and
-  # lower case are accepted because people retype and paste them by hand
-  # (Room.find_by_invitation_code normalizes before looking anything up).
+  # Invitation codes are six digits. Hyphens are accepted because people
+  # retype 123-456 (Room.find_by_invitation_code strips them).
   ROOM_CODE = /[A-Za-z0-9\-]{4,24}/
 
   root "snake#index"
   get "play", to: "snake#index"
   get "multiplayer", to: "snake#multiplayer", as: :multiplayer
-  # Invitation URL: the page opens straight onto the room's join prompt.
+  # The room itself. An invitation link does not land here — it lands on
+  # the name page below, and that page sends a joined player here.
   get "multiplayer/:code", to: "snake#multiplayer", as: :multiplayer_room,
+      constraints: { code: ROOM_CODE }
+  get "join/:code", to: "snake#invitation", as: :invitation,
       constraints: { code: ROOM_CODE }
   get "profile", to: "profile#show"
   get "profile/:username", to: "profile#show", as: :user_profile

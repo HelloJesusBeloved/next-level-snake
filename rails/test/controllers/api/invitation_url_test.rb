@@ -24,7 +24,7 @@ class InvitationUrlTest < ActionDispatch::IntegrationTest
     Room.config.public_origin = nil
     payload = create_room(open_session)
 
-    assert_equal "http://www.example.com/multiplayer/#{payload.dig(:room, :code)}",
+    assert_equal "http://www.example.com/join/#{payload.dig(:room, :code)}",
                  payload.dig(:room, :invite_url)
     assert_equal "http://www.example.com", payload.dig(:config, :origin)
   end
@@ -35,7 +35,7 @@ class InvitationUrlTest < ActionDispatch::IntegrationTest
     payload = create_room(session)
     code = payload.dig(:room, :code)
 
-    assert_equal "https://play.example.com/multiplayer/#{code}",
+    assert_equal "https://play.example.com/join/#{code}",
                  payload.dig(:room, :invite_url),
                  "share links and QR codes must carry the public origin"
     assert_equal "https://play.example.com", payload.dig(:config, :origin),
@@ -83,8 +83,8 @@ class InvitationUrlTest < ActionDispatch::IntegrationTest
     payload = create_room(open_session)
     code = payload.dig(:room, :code)
 
-    assert_match(/\A[A-Z0-9]{12}\z/, code)
-    assert payload.dig(:room, :invite_url).end_with?("/multiplayer/#{code}")
+    assert_match(/\A\d{6}\z/, code)
+    assert payload.dig(:room, :invite_url).end_with?("/join/#{code}")
     assert_equal Room.find_by_invitation_code(code).invitation_code, code
   end
 end

@@ -667,7 +667,7 @@ module Api
     end
 
     def invite_url_for(room)
-      "#{public_origin}/multiplayer/#{room.invitation_code}"
+      "#{public_origin}/join/#{room.invitation_code}"
     end
 
     # A member whose room vanished under them (host disbanded it, or it

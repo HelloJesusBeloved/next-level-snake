@@ -11,8 +11,8 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     payload = post_json(host, "/api/rooms", display_name: "Ada")
 
     assert_equal 201, status(host)
-    assert_match(/\A[A-Z0-9]{12}\z/, payload.dig(:room, :code))
-    assert_equal payload.dig(:room, :code), payload.dig(:room, :invite_url).split("/multiplayer/").last
+    assert_match(/\A\d{6}\z/, payload.dig(:room, :code))
+    assert_equal payload.dig(:room, :code), payload.dig(:room, :invite_url).split("/join/").last
     assert_equal "lobby", payload.dig(:room, :state)
     assert_equal "brawl", payload.dig(:room, :mode)
     assert_equal "Ada", host_name(payload), "the creator wears the crown"
@@ -64,13 +64,27 @@ class Api::RoomsControllerTest < ActionDispatch::IntegrationTest
     assert_equal "Grace", payload.dig(:member, :display_name)
   end
 
-  test "the invitation URL path renders the lobby page for the code" do
+  test "the invitation URL renders a name page, not the lobby" do
     code = post_json(browser, "/api/rooms", display_name: "Ada").dig(:room, :code)
+
+    get "/join/#{code[0, 3]}-#{code[3, 3]}"
+    assert_response :success
+    assert_includes response.body, "join-root"
+    assert_includes response.body, 'id="join-name"'
+    assert_includes response.body, ">Join</button>"
+    assert_includes response.body, code
+    assert_not_includes response.body, "multiplayer-root"
 
     get "/multiplayer/#{code}"
     assert_response :success
     assert_includes response.body, "multiplayer-root"
-    assert_includes response.body, code
+  end
+
+  test "an unknown invitation explains itself and does not offer join" do
+    get "/join/000000"
+    assert_response :success
+    assert_includes response.body, "That code did not work"
+    assert_not_includes response.body, 'id="join-form"'
   end
 
   test "previewing a code before joining shows the room without joining it" do
